@@ -1820,17 +1820,24 @@ export class IsobmffMuxer extends Muxer {
 
 			// We know how many chunks there are, but computing the chunk positions requires an iterative approach:
 			// In order to know where the first chunk should go, we first need to know the size of the moov box. But we
-			// cannot write a proper moov box without first knowing all chunk positions. So, we generate a tentative
-			// moov box with placeholder values (0) for the chunk offsets to be able to compute its size. If it then
-			// turns out that appending all chunks exceeds 4 GiB, we need to repeat this process, now with the co64 box
-			// being used in the moov box instead, which will make it larger. After that, we definitely know the final
-			// size of the moov box and can compute the proper chunk positions.
+			// cannot write a proper moov box without first knowing all chunk positions, since tracks with chunks past
+			// 4 GiB need the larger co64 box, and a large mdat needs a larger header. So, we measure the boxes, place
+			// the chunks after them, and repeat until the measured sizes stop changing. This converges eventually:
+			// boxes only ever switch to their larger variants, which pushes the chunks further back, so they can never
+			// switch back.
 
-			for (let i = 0; i < 2; i++) {
-				const movieBox = moov(this);
-				const movieBoxSize = this.boxWriter.measureBox(movieBox);
-				mdatSize = this.boxWriter.measureBox(this.mdat);
-				let currentChunkPos = this.writer.getPos() + movieBoxSize + mdatSize;
+			let previousHeaderSize: number | null = null;
+			while (true) {
+				const movieBoxSize = this.boxWriter.measureBox(moov(this));
+				const mdatHeaderSize = this.boxWriter.measureBox(this.mdat);
+				const headerSize = movieBoxSize + mdatHeaderSize;
+				if (headerSize === previousHeaderSize) {
+					break;
+				}
+				previousHeaderSize = headerSize;
+
+				mdatSize = mdatHeaderSize;
+				let currentChunkPos = this.writer.getPos() + headerSize;
 
 				for (const chunk of this.finalizedChunks) {
 					chunk.offset = currentChunkPos;
@@ -1841,8 +1848,9 @@ export class IsobmffMuxer extends Muxer {
 					}
 				}
 
-				if (currentChunkPos < 2 ** 32) break;
-				if (mdatSize >= 2 ** 32) this.mdat.largeSize = true;
+				if (mdatSize >= 2 ** 32) {
+					this.mdat.largeSize = true;
+				}
 			}
 
 			if (this.formatOptions.onMoov) {

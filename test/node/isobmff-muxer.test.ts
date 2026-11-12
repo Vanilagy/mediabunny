@@ -1017,6 +1017,24 @@ test('CMAF segment over 2 GiB', async () => {
 	await expect(output.finalize()).rejects.toThrow('CMAF segments must be smaller than 2 GiB');
 });
 
+test('CMAF segment over 20.7 hours', async () => {
+	const output = new Output({
+		format: new CmafOutputFormat(),
+		target: new NullTarget(),
+		initTarget: new NullTarget(),
+	});
+
+	const source = new EncodedVideoPacketSource('vp8');
+	output.addVideoTrack(source);
+	await output.start();
+
+	await source.add(new EncodedPacket(new Uint8Array(16), 'key', 0, 1), vp8Meta);
+	await source.add(new EncodedPacket(new Uint8Array(16), 'key', 75_000, 1), vp8Meta);
+
+	// sidx can't express this duration at our timescale
+	await expect(output.finalize()).rejects.toThrow('CMAF segments must be shorter than 20.712612 hours.');
+});
+
 test('Traf data more than 2 GiB past its moof', async () => {
 	const output = new Output({
 		format: new Mp4OutputFormat({

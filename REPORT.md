@@ -1209,9 +1209,13 @@ Specific real-world files we couldn't produce:
 
 Huge files or allocations:
 
-- The co64/stco choice can flip after the last measurement (> 4 GiB in-memory MP4 with an unlucky offset).
-- Matroska 4-byte master sizes overflow above 256 MiB.
-- sidx subsegment durations wrap after ~20.7 h at 57600 Hz.
+✅ The co64/stco choice can flip after the last measurement (> 4 GiB in-memory MP4 with an unlucky offset).
+  Fix: the in-memory layout is remeasured until the moov and mdat header sizes stop changing, instead of twice.
+✅ Matroska 4-byte master sizes overflow above 256 MiB.
+  Fix: master elements without a set size width are measured before writing and get exactly the width they need
+  (only Segment and Cluster still reserve one, Cluster now 6 bytes). `writeVarInt` throws instead of overflowing.
+✅ sidx subsegment durations wrap after ~20.7 h at 57600 Hz.
+  Fix: `sidx` throws for such CMAF segments, like the existing 2 GiB size check.
 - A 1 h gap with `timestampBase: 'unix'` allocates ~1.4 GB of silence at once.
 
 Other platforms, hardware or filesystems:

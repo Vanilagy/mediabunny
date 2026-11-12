@@ -427,3 +427,74 @@ test('onSegmentHeader validation message', () => {
 	expect(() => new MkvOutputFormat({ onSegmentHeader: 5 as never }))
 		.toThrow('options.onSegmentHeader, when provided, must be a function.');
 });
+
+test('Attached image larger than 256 MiB', async () => {
+	const output = new Output({
+		format: new MkvOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const imageData = new Uint8Array(2 ** 28);
+	output.setMetadataTags({
+		images: [{
+			data: imageData,
+			mimeType: 'image/png',
+			kind: 'coverFront',
+		}],
+	});
+
+	const source = new EncodedVideoPacketSource('vp8');
+	output.addVideoTrack(source);
+	await output.start();
+	await source.add(new EncodedPacket(new Uint8Array(16), 'key', 0, 1 / 30), {
+		decoderConfig: {
+			codec: 'vp8',
+			codedWidth: 1280,
+			codedHeight: 720,
+		},
+	});
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const tags = await input.getMetadataTags();
+	expect(tags.images?.[0]?.data.byteLength).toBe(2 ** 28);
+	expect(await input.getPrimaryVideoTrack()).not.toBeNull();
+});
+
+test('Packets larger than 256 MiB', async () => {
+	const output = new Output({
+		format: new MkvOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const source = new EncodedVideoPacketSource('vp8');
+	output.addVideoTrack(source);
+	await output.start();
+
+	const data = new Uint8Array(2 ** 28);
+	await source.add(new EncodedPacket(data, 'key', 0, 1 / 30), {
+		decoderConfig: {
+			codec: 'vp8',
+			codedWidth: 1280,
+			codedHeight: 720,
+		},
+	});
+	await source.add(new EncodedPacket(data, 'key', 1 / 30, 1 / 30));
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryVideoTrack();
+	assert(track);
+
+	const sizes: number[] = [];
+	for await (const packet of new EncodedPacketSink(track).packets()) {
+		sizes.push(packet.data.byteLength);
+	}
+	expect(sizes).toEqual([2 ** 28, 2 ** 28]);
+});

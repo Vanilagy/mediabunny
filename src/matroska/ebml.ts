@@ -353,6 +353,10 @@ export class EBMLWriter {
 	}
 
 	writeVarInt(value: number, width = measureVarInt(value)) {
+		if (value >= 2 ** (7 * width) - 1) {
+			throw new Error(`EBML variable-size integer ${value} doesn't fit into ${width} bytes.`);
+		}
+
 		let pos = 0;
 
 		switch (width) {
@@ -420,26 +424,34 @@ export class EBMLWriter {
 			this.writeUnsignedInt(data.id); // ID field
 
 			if (Array.isArray(data.data)) {
-				const sizePos = this.writer.getPos();
-				const sizeSize = data.size === -1 ? 1 : (data.size ?? 4);
-
-				if (data.size === -1) {
-					// Write the reserved all-one-bits marker for unknown/unbounded size.
-					this.writeByte(0xff);
+				if (data.size === undefined) {
+					// The contents are known, so the size field can be exactly as wide as it needs to be
+					this.writeVarInt(measureEBML(data.data));
+					this.dataOffsets.set(data, this.writer.getPos());
+					this.writeEBML(data.data);
 				} else {
-					this.writer.seek(this.writer.getPos() + sizeSize);
-				}
+					// Elements with streamed contents reserve a size field of the given width and fill it in after
+					const sizePos = this.writer.getPos();
+					const sizeSize = data.size === -1 ? 1 : data.size;
 
-				const startPos = this.writer.getPos();
-				this.dataOffsets.set(data, startPos);
-				this.writeEBML(data.data);
+					if (data.size === -1) {
+						// Write the reserved all-one-bits marker for unknown/unbounded size.
+						this.writeByte(0xff);
+					} else {
+						this.writer.seek(this.writer.getPos() + sizeSize);
+					}
 
-				if (data.size !== -1) {
-					const size = this.writer.getPos() - startPos;
-					const endPos = this.writer.getPos();
-					this.writer.seek(sizePos);
-					this.writeVarInt(size, sizeSize);
-					this.writer.seek(endPos);
+					const startPos = this.writer.getPos();
+					this.dataOffsets.set(data, startPos);
+					this.writeEBML(data.data);
+
+					if (data.size !== -1) {
+						const size = this.writer.getPos() - startPos;
+						const endPos = this.writer.getPos();
+						this.writer.seek(sizePos);
+						this.writeVarInt(size, sizeSize);
+						this.writer.seek(endPos);
+					}
 				}
 			} else if (typeof data.data === 'number') {
 				const size = data.size ?? measureUnsignedInt(data.data);
@@ -475,6 +487,55 @@ export class EBMLWriter {
 		}
 	}
 }
+
+/** Returns the number of bytes writeEBML would write for the given data. */
+const measureEBML = (data: EBML | null): number => {
+	if (data === null) {
+		return 0;
+	} else if (data instanceof Uint8Array) {
+		return data.byteLength;
+	} else if (Array.isArray(data)) {
+		return data.reduce((sum, elem) => sum + measureEBML(elem), 0);
+	}
+
+	let contentSize: number;
+	let sizeSize: number;
+
+	if (Array.isArray(data.data)) {
+		contentSize = measureEBML(data.data);
+		sizeSize = data.size === undefined
+			? measureVarInt(contentSize)
+			: data.size === -1 ? 1 : data.size;
+	} else if (typeof data.data === 'number') {
+		contentSize = data.size ?? measureUnsignedInt(data.data);
+		sizeSize = measureVarInt(contentSize);
+	} else if (typeof data.data === 'bigint') {
+		contentSize = data.size ?? measureUnsignedBigInt(data.data);
+		sizeSize = measureVarInt(contentSize);
+	} else if (typeof data.data === 'string') {
+		contentSize = data.data.length;
+		sizeSize = measureVarInt(contentSize);
+	} else if (data.data instanceof Uint8Array) {
+		contentSize = data.data.byteLength;
+		sizeSize = data.size ?? measureVarInt(contentSize);
+	} else if (data.data instanceof EBMLFloat32) {
+		contentSize = 4;
+		sizeSize = 1;
+	} else if (data.data instanceof EBMLFloat64) {
+		contentSize = 8;
+		sizeSize = 1;
+	} else if (data.data instanceof EBMLSignedInt) {
+		contentSize = data.size ?? measureSignedInt(data.data.value);
+		sizeSize = measureVarInt(contentSize);
+	} else {
+		assert(data.data instanceof EBMLUnicodeString);
+
+		contentSize = textEncoder.encode(data.data.value).length;
+		sizeSize = measureVarInt(contentSize);
+	}
+
+	return measureUnsignedInt(data.id) + sizeSize + contentSize;
+};
 
 export const EBML_DATE_EPOCH = Date.UTC(2001, 0, 1); // In milliseconds since the Unix epoch
 export const MAX_VAR_INT_SIZE = 8;

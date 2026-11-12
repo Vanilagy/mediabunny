@@ -365,6 +365,11 @@ export const sidx = (muxer: IsobmffMuxer, referencedSize: number) => {
 		duration = 0;
 	}
 
+	const durationInTimescale = intoTimescale(duration, GLOBAL_TIMESCALE);
+	if (durationInTimescale >= 2 ** 32) {
+		throw new Error('CMAF segments must be shorter than 20.712612 hours.');
+	}
+
 	return fullBox('sidx', 1, 0, [
 		u32(1), // Reference ID
 		u32(GLOBAL_TIMESCALE), // Timescale
@@ -373,7 +378,7 @@ export const sidx = (muxer: IsobmffMuxer, referencedSize: number) => {
 		u16(0), // Reserved
 		u16(1), // Reference count
 		u32(referencedSize), // Reference type (0) + referenced size
-		u32(intoTimescale(duration, GLOBAL_TIMESCALE)), // Subsegment duration
+		u32(durationInTimescale), // Subsegment duration
 		u32(0), // Starts with SAP + SAP type + SAP delta time (no information provided)
 	]);
 };

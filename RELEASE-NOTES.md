@@ -29,7 +29,8 @@
 - Fixed fragmented MP4 muxer marking key frames in the middle of a fragment as non-key frames
 - Fixed fragmented MP4 muxer sometimes writing the `moov` box before all tracks' start offsets were known, leading to missing edit lists and A/V desync
 - Fixed fragmented MP4 `mdat` boxes of 4 GiB and larger being written with the wrong size
-- ISOBMFF muxer now throws for fragments whose track data begins 2 GiB or more after the `moof` box, and for CMAF segments of 2 GiB or more, instead of silently writing broken offsets
+- Fixed rare corrupt chunk offsets in MP4 files over 4 GiB written with `fastStart: 'in-memory'`
+- ISOBMFF muxer now throws for fragments whose track data begins 2 GiB or more after the `moof` box, and for CMAF segments of 2 GiB or more or longer than about 20.7 hours, instead of silently writing broken offsets and durations
 - Fixed `onMoof` reporting incorrectly shifted fragment start timestamps
 - Fixed `fastStart: 'in-memory'` not working with `AppendOnlyStreamTarget`
 - Fixed `fastStart: 'reserve'` including the trailing `free` box in the data passed to `onMoov`
@@ -64,6 +65,7 @@
 - Fixed EBML lacing with a single frame throwing
 - Fixed EBML unknown sizes of 2 to 7 bytes not being recognized
 - Fixed Matroska muxer writing a negative segment duration when all timestamps are negative
+- Fixed Matroska muxer writing corrupt files when an element such as an attachment or a frame was 256 MiB or larger
 - Fixed Matroska muxer writing `BlockDuration` on the last block in decode order instead of presentation order, giving the last frame a duration of 0 with B-frames
 - Matroska muxer now writes `MaxBlockAdditionID` for tracks with block additions (video with alpha, WebVTT)
 - WebVTT in WebM output is now written the way the WebM spec defines it (`D_WEBVTT/SUBTITLES`)

@@ -86,7 +86,7 @@ import { VERSIONED_NAME } from '../version';
 const MIN_CLUSTER_TIMESTAMP_MS = -(2 ** 15);
 const MAX_CLUSTER_TIMESTAMP_MS = 2 ** 15 - 1;
 const SEGMENT_SIZE_BYTES = 6;
-const CLUSTER_SIZE_BYTES = 5;
+const CLUSTER_SIZE_BYTES = 6;
 
 type InternalMediaChunk = {
 	data: Uint8Array;
