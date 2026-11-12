@@ -69,7 +69,6 @@ export class Mp3Demuxer extends Demuxer {
 	xingData: {
 		isVbr: boolean;
 		frameCount: number | null;
-		fileSize: number | null;
 	} | null = null;
 
 	trackBackings: Mp3AudioTrackBacking[] = [];
@@ -183,10 +182,10 @@ export class Mp3Demuxer extends Demuxer {
 				}
 
 				if (!this.xingData) {
-					let xingDataSlice = this.reader.requestSlice(result.startPos + xingOffset + 4, 12);
+					let xingDataSlice = this.reader.requestSlice(result.startPos + xingOffset + 4, 8);
 					if (isThenable(xingDataSlice)) xingDataSlice = await xingDataSlice;
 					if (xingDataSlice) {
-						const xingData = readBytes(xingDataSlice, 12);
+						const xingData = readBytes(xingDataSlice, 8);
 						const view = toDataView(xingData);
 						const flags = view.getUint32(0, false);
 
@@ -195,9 +194,6 @@ export class Mp3Demuxer extends Demuxer {
 							isVbr: word === XING,
 							frameCount: (flags & XingFlags.FrameCount)
 								? view.getUint32(4, false)
-								: null,
-							fileSize: (flags & XingFlags.FileSize)
-								? view.getUint32(8, false)
 								: null,
 						};
 
@@ -242,14 +238,12 @@ export class Mp3Demuxer extends Demuxer {
 				}
 
 				if (!this.xingData) {
-					vbriSlice.skip(4); // Delay and quality
-					const fileSize = readU32Be(vbriSlice);
+					vbriSlice.skip(8); // Delay, quality and byte count
 					const frameCount = readU32Be(vbriSlice);
 
 					this.xingData = {
 						isVbr: true,
 						frameCount,
-						fileSize,
 					};
 				}
 

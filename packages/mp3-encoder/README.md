@@ -161,6 +161,6 @@ The build artifacts included in this repo, which are also the ones bundled into 
 - Emscripten 4.0.21 (`d6f42310010ddec0753a69bab01a4b33aae255b7`)
 - `src/lame-bridge.c` of this package
 
-SHA-256 of the WASM binary inlined in `build/lame.js`: `a680e507e9d91f1a4dcd6f846b9b94ff1fec7e19ff44e803358c218ddbe446a6`
+SHA-256 of the WASM binary inlined in `build/lame.js`: `8cdb32adfc0fbf02bf530e1510c26d8f461d00ab763b76aa04e9df8db8563f6f`
 
 LAME is licensed under the LGPL v2 or later; its license files are in [`licenses/lame`](./licenses/lame). To use a modified LAME, rebuild using the steps above.

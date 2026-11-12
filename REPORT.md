@@ -1126,14 +1126,19 @@ The code is wrong, but no current caller or realistic input hits it.
   after queued adds), not through `source._closed`, which the source sets ahead of them. Same in all five muxers.
 ✅ ProRes extension: aspect_ratio_information 2/3 are display aspect ratios per RDD 36 Table 3 but are treated as
   pixel ratios (Apple and FFmpeg always write 0).
-- MP3: the Xing `fileSize` is read at a fixed offset, but the field is never used.
-- ISOBMFF: AC-3/DTS tracks declared via metadata without a priming packet would hit a bare assert, but
+  Fix: fixed in turbores 1.2.5, which the extension now depends on.
+✅ MP3: the Xing `fileSize` is read at a fixed offset, but the field is never used.
+  Fix: removed the field (Xing and VBRI).
+✅ ISOBMFF: AC-3/DTS tracks declared via metadata without a priming packet would hit a bare assert, but
   `getAudioTrackData` throws earlier with a clear message.
-- Media sinks: ColorAlphaMerger drops a merged frame without closing it after a worker error, but Chrome only
+✅ Media sinks: ColorAlphaMerger drops a merged frame without closing it after a worker error, but Chrome only
   fires the error event for synchronous throws, and the worker's handler can't throw.
-- FLAC encoder extension: the `copyWithin` pattern fixed in the AAC/AC-3 encoders is linear here (single call).
-- MP3 encoder extension: the bridge ignores `lame_init_params`'s return code; only an allocation failure could
+  Fix: a merged frame arriving for a request that's no longer pending is closed.
+✅ FLAC encoder extension: the `copyWithin` pattern fixed in the AAC/AC-3 encoders is linear here (single call).
+✅ MP3 encoder extension: the bridge ignores `lame_init_params`'s return code; only an allocation failure could
   make it fail.
+  Fix: `init_lame` returns NULL when `lame_init` or `lame_init_params` fails, and the worker throws. WASM rebuilt
+  (HEAD bridge reproduced the old hash), README hash updated.
 - HLS: EXT-X-MEDIA TYPE would be written as `SUBTITLE` instead of `SUBTITLES` (subtitles are disabled in HLS
   output).
 - Extension worker clients: a rejected `createWorker()` is never reset (Node never fails it; browser CSP failures

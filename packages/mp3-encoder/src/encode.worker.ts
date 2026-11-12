@@ -57,11 +57,17 @@ const init = async (numberOfChannels: number, sampleRate: number, bitrate: numbe
 	closeLame = module.cwrap('close_lame', null, ['number']);
 
 	lamePtr = initLame(numberOfChannels, sampleRate, bitrate);
+	if (lamePtr === 0) {
+		throw new Error('Failed to initialize the MP3 encoder.');
+	}
 };
 
 const reset = () => {
 	closeLame(lamePtr);
 	lamePtr = initLame(storedNumberOfChannels, storedSampleRate, storedBitrate);
+	if (lamePtr === 0) {
+		throw new Error('Failed to initialize the MP3 encoder.');
+	}
 };
 
 const encode = (audioData: ArrayBuffer, numberOfFrames: number) => {

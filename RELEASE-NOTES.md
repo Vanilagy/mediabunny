@@ -336,9 +336,11 @@
 - `@mediabunny/flac-encoder`: Fixed float audio being truncated instead of rounded to 24 bits
 - `@mediabunny/mp3-encoder`: Fixed packet timestamps drifting for large start timestamps
 - `@mediabunny/mp3-encoder`: Fixed encoder errors producing garbage output instead of throwing
+- `@mediabunny/mp3-encoder`: Fixed failures to initialize the encoder going unnoticed
 - `@mediabunny/prores`: Fixed the pixel aspect ratio and color space set by the container being ignored
 - `@mediabunny/prores`: Fixed corrupted alpha in Safari for frames whose coded height exceeds their visible height
 - `@mediabunny/prores`: Fixed flushing resolving before the last frames were emitted
+- `@mediabunny/prores`: Fixed 4:3 and 16:9 aspect ratios in the frame header being treated as pixel aspect ratios
 - `@mediabunny/server`: 4-channel AAC can now be encoded as ADTS
 - `@mediabunny/server`: Fixed wrong decoded audio timestamps for some time bases
 - `@mediabunny/server`: Fixed a crash for planar audio with more than 8 channels

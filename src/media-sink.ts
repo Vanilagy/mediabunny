@@ -1607,6 +1607,10 @@ export class ColorAlphaMerger {
 					const data = event.data;
 					const pending = this.pendingRequests.get(data.id);
 					if (!pending) {
+						if ('frame' in data) {
+							data.frame.close(); // So it's still closed
+						}
+
 						return;
 					}
 					this.pendingRequests.delete(data.id);
