@@ -1116,12 +1116,15 @@ The code is wrong, but no current caller or realistic input hits it.
 ✅ DTS encoder `flush()` leaves the encoder unusable: Mediabunny never encodes after a flush.
   Fix: FFmpeg's DTS encoder has no delay, so the bridge's `flush_encoder` (which signaled end of stream and discarded
   whatever came out) is removed; the silence padding in `flush()` stays. WASM rebuilt, README hash updated.
-- Output: `Promise.all` in start/finalize lets other sources keep running after one fails (every case was harmless).
-- Output: `start()` still starts sources if cancel arrives during `muxer.start()`.
-- Conversion: pumps call `source.close()` while canceled (the force-close always won).
-- Conversion: `0 * Infinity` in the packet count estimate for a live track whose first packets span zero time.
-- Ogg muxer: BOS race when a track's first `add()` isn't awaited.
-- ProRes extension: aspect_ratio_information 2/3 are display aspect ratios per RDD 36 Table 3 but are treated as
+✅ Output: `Promise.all` in start/finalize lets other sources keep running after one fails (every case was harmless).
+✅ Output: `start()` still starts sources if cancel arrives during `muxer.start()`.
+  Fix: `cancel()` waits for an ongoing `start()` to complete before doing anything, so it cleanly comes after it.
+✅ Conversion: pumps call `source.close()` while canceled (the force-close always won).
+✅ Conversion: `0 * Infinity` in the packet count estimate for a live track whose first packets span zero time.
+✅ Ogg muxer: BOS race when a track's first `add()` isn't awaited.
+  Fix: muxers know a track is closed only through their own `onTrackClose` (`closedTracks`, run under their mutex
+  after queued adds), not through `source._closed`, which the source sets ahead of them. Same in all five muxers.
+✅ ProRes extension: aspect_ratio_information 2/3 are display aspect ratios per RDD 36 Table 3 but are treated as
   pixel ratios (Apple and FFmpeg always write 0).
 - MP3: the Xing `fileSize` is read at a fixed offset, but the field is never used.
 - ISOBMFF: AC-3/DTS tracks declared via metadata without a priming packet would hit a bare assert, but

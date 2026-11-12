@@ -232,6 +232,7 @@
 - `MediaStreamAudioTrackSource` and `MediaStreamVideoTrackSource` now count queued samples toward the encoder's load, so they drop samples sooner under backpressure instead of queuing them up without limit
 - Invalid adds to `VideoSampleSource`, `CanvasSource`, `AudioSampleSource` and `AudioBufferSource` now throw synchronously, like for the packet sources
 - Fixed media sources accepting data added while they were still closing
+- Fixed rare race conditions related to closing tracks
 - Fixed some media source race conditions
 - Fixed `MediaStreamVideoTrackSource` failing for frames arriving while it shuts down; they're now dropped, like for audio
 - Fixed `MediaSource.close()` failures becoming unhandled rejections and making `finalize()` hang

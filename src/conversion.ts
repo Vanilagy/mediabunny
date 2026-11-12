@@ -1820,7 +1820,7 @@ export class Conversion {
 					await this._checkpoint(pump, modifiedPacket.timestamp);
 				}
 
-				source.close();
+				source.close(); // No-op if a cancel already force-closed it
 				this._closeTrack(outputTrackId);
 			});
 		} else {
@@ -1992,7 +1992,7 @@ export class Conversion {
 					}
 				}
 
-				source.close();
+				source.close(); // No-op if a cancel already force-closed it
 				this._closeTrack(outputTrackId);
 			});
 		}
@@ -2274,7 +2274,7 @@ export class Conversion {
 					await this._checkpoint(pump, modifiedPacket.timestamp);
 				}
 
-				source.close();
+				source.close(); // No-op if a cancel already force-closed it
 				this._closeTrack(outputTrackId);
 			});
 		} else {
@@ -2455,7 +2455,7 @@ export class Conversion {
 					);
 				}
 
-				source.close();
+				source.close(); // No-op if a cancel already force-closed it
 				this._closeTrack(outputTrackId);
 			});
 		}

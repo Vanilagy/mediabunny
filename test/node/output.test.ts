@@ -1,4 +1,4 @@
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 import { Output } from '../../src/output.js';
 import { CmafOutputFormat, HlsOutputFormat, MkvOutputFormat } from '../../src/output-format.js';
 import { BufferTarget, PathedTarget, StreamTarget, StreamTargetChunk } from '../../src/target.js';
@@ -129,32 +129,45 @@ test('initTarget callback not returning a Target', async () => {
 });
 
 test('Cancel while the root target is being obtained', async () => {
-	await testCancelWhileTargetIsObtained(getTarget => new Output({
+	await testWhileTargetIsObtained('cancel', getTarget => new Output({
 		format: new MkvOutputFormat(),
 		target: new PathedTarget('root.mkv', getTarget),
 	}));
 });
 
 test('Cancel while the init target is being obtained', async () => {
-	await testCancelWhileTargetIsObtained(getTarget => new Output({
+	await testWhileTargetIsObtained('cancel', getTarget => new Output({
 		format: new CmafOutputFormat(),
 		target: new StreamTarget(new WritableStream()),
 		initTarget: getTarget,
 	}));
 });
 
-const testCancelWhileTargetIsObtained = async (
+test('Finalize while the root target is being obtained', async () => {
+	await testWhileTargetIsObtained('finalize', getTarget => new Output({
+		format: new MkvOutputFormat(),
+		target: new PathedTarget('root.mkv', getTarget),
+	}));
+});
+
+const testWhileTargetIsObtained = async (
+	action: 'cancel' | 'finalize',
 	createOutput: (getTarget: () => Promise<StreamTarget>) => Output,
 ) => {
 	let onTargetRequested!: (resolveTarget: (target: StreamTarget) => void) => void;
 	const targetRequested = new Promise<(target: StreamTarget) => void>(resolve => onTargetRequested = resolve);
 
 	const output = createOutput(() => new Promise(resolve => onTargetRequested(resolve)));
-	output.addVideoTrack(new EncodedVideoPacketSource('avc'));
+	const source = new EncodedVideoPacketSource('avc');
+	let stateWhenSourceStarted: Output['state'] | null = null;
+	vi.spyOn(source, '_start').mockImplementation(async () => {
+		stateWhenSourceStarted = output.state;
+	});
+	output.addVideoTrack(source);
 
 	const startPromise = output.start();
 	const resolveTarget = await targetRequested;
-	const cancelPromise = output.cancel();
+	const actionPromise = action === 'cancel' ? output.cancel() : output.finalize();
 
 	let writableClosed = false;
 	resolveTarget(new StreamTarget(new WritableStream({
@@ -164,8 +177,9 @@ const testCancelWhileTargetIsObtained = async (
 	})));
 
 	await startPromise;
-	await cancelPromise;
+	await actionPromise;
 	expect(writableClosed).toBe(true);
+	expect(stateWhenSourceStarted).toBe('started'); // The action waited for the start to complete
 };
 
 test('MIME type when canceled before all tracks are known', async () => {

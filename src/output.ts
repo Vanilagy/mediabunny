@@ -938,7 +938,7 @@ export class Output<
 			);
 		}
 
-		if (this.state === 'canceled') {
+		if (this._cancelPromise || this.state === 'canceled') {
 			throw new Error('Output has been canceled.');
 		}
 
@@ -991,25 +991,24 @@ export class Output<
 	 * @returns A promise that resolves once all internal resources have been released.
 	 */
 	async cancel() {
-		if (this.state === 'canceled') {
+		if (this._cancelPromise || this.state === 'canceled') {
 			return this._cancelPromise ?? undefined;
-		} else if (this.state === 'finalizing') {
-			// Don't wanna warn here since that shows a warning when finalization fails and then cancel is called.
-			// Finalizing releases all resources too, so wait for that.
-			assert(this._finalizePromise);
-			return this._finalizePromise.catch(() => {});
 		} else if (this.state === 'finalized') {
 			Logging._warn('Output has already been finalized.');
 			return;
+		} else if (this._finalizePromise) {
+			// Don't wanna warn here since that shows a warning when finalization fails and then cancel is called.
+			// Finalizing releases all resources too, so wait for that.
+			return this._finalizePromise.catch(() => {});
 		}
 
 		return this._cancelPromise = (async () => {
-			this.state = 'canceled';
-			this._canceled.resolve();
-
 			const release = await this._mutex.acquire();
 
 			try {
+				this.state = 'canceled';
+				this._canceled.resolve();
+
 				// Force close. Errors don't matter anymore at this point, we just want everything released.
 				const promises = this.tracks.map(x => x.source._flushOrWaitForOngoingClose(true).catch(() => {}));
 				await Promise.all(promises);
@@ -1031,7 +1030,7 @@ export class Output<
 		if (this.state === 'pending') {
 			throw new Error('Cannot finalize before starting.');
 		}
-		if (this.state === 'canceled') {
+		if (this._cancelPromise || this.state === 'canceled') {
 			throw new Error('Cannot finalize after canceling.');
 		}
 		if (this._finalizePromise) {
@@ -1040,11 +1039,11 @@ export class Output<
 		}
 
 		return this._finalizePromise = (async () => {
-			this.state = 'finalizing';
-
 			const release = await this._mutex.acquire();
 
 			try {
+				this.state = 'finalizing';
+
 				const promises = this.tracks.map(x => x.source._flushOrWaitForOngoingClose(false));
 				await Promise.all(promises);
 

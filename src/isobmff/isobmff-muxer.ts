@@ -107,7 +107,6 @@ export type IsobmffTrackData = {
 		firstChunk: number;
 		samplesPerChunk: number;
 	}[];
-	closed: boolean;
 
 	// 0 means unknown
 	avgBitrate: number;
@@ -240,6 +239,7 @@ export class IsobmffMuxer extends Muxer {
 	private ftypSize: number | null = null;
 
 	trackDatas: IsobmffTrackData[] = [];
+	private closedTracks = new Set<OutputTrack>();
 	private allTracksKnown = promiseWithResolvers();
 
 	creationTime!: number;
@@ -407,7 +407,7 @@ export class IsobmffMuxer extends Muxer {
 
 	private allTracksAreKnown() {
 		for (const track of this.output.tracks) {
-			if (!track.source._closed && !this.trackDatas.some(x => x.track === track)) {
+			if (!this.closedTracks.has(track) && !this.trackDatas.some(x => x.track === track)) {
 				return false; // We haven't seen a sample from this open track yet
 			}
 		}
@@ -542,7 +542,6 @@ export class IsobmffMuxer extends Muxer {
 			finalizedChunks: [],
 			currentChunk: null,
 			compactlyCodedChunkTable: [],
-			closed: false,
 			avgBitrate: track.source._nominalBitrate ?? track.metadata.averageBitrate ?? 0,
 			maxBitrate: track.source._nominalBitrate ?? track.metadata.bitrate ?? 0,
 		};
@@ -664,7 +663,6 @@ export class IsobmffMuxer extends Muxer {
 			finalizedChunks: [],
 			currentChunk: null,
 			compactlyCodedChunkTable: [],
-			closed: false,
 			avgBitrate: track.source._nominalBitrate ?? track.metadata.averageBitrate ?? 0,
 			maxBitrate: track.source._nominalBitrate ?? track.metadata.bitrate ?? 0,
 		};
@@ -709,7 +707,6 @@ export class IsobmffMuxer extends Muxer {
 			finalizedChunks: [],
 			currentChunk: null,
 			compactlyCodedChunkTable: [],
-			closed: false,
 			avgBitrate: track.source._nominalBitrate ?? track.metadata.averageBitrate ?? 0,
 			maxBitrate: track.source._nominalBitrate ?? track.metadata.bitrate ?? 0,
 
@@ -1264,12 +1261,12 @@ export class IsobmffMuxer extends Muxer {
 						return firstQueuedSample.type === 'key';
 					}
 
-					return otherTrackData.closed;
+					return this.closedTracks.has(otherTrackData.track);
 				});
 
 				// The first fragment comes with the moov box, whose edit lists need the start offset of every track
 				const startOffsetsKnown = this.wroteFragmentedHeader
-					|| this.trackDatas.every(x => x.startTimestampOffset !== null || x.closed);
+					|| this.trackDatas.every(x => x.startTimestampOffset !== null || this.closedTracks.has(x.track));
 
 				if (
 					currentChunkDuration >= this.minimumFragmentDuration
@@ -1379,7 +1376,7 @@ export class IsobmffMuxer extends Muxer {
 			let minTimestamp = Infinity;
 
 			for (const trackData of this.trackDatas) {
-				if (!isFinalCall && trackData.sampleQueue.length === 0 && !trackData.closed) {
+				if (!isFinalCall && trackData.sampleQueue.length === 0 && !this.closedTracks.has(trackData.track)) {
 					break outer;
 				}
 
@@ -1618,10 +1615,10 @@ export class IsobmffMuxer extends Muxer {
 		const release = await this.mutex.acquire();
 
 		try {
+			this.closedTracks.add(track);
+
 			const trackData = this.trackDatas.find(x => x.track === track);
 			if (trackData) {
-				trackData.closed = true;
-
 				if (trackData.type === 'subtitle' && track.source._codec === 'webvtt') {
 					await this.processWebVTTCues(trackData, Infinity);
 				}
@@ -1692,7 +1689,7 @@ export class IsobmffMuxer extends Muxer {
 		this.ensureOneEnabledTrack();
 
 		for (const trackData of this.trackDatas) {
-			trackData.closed = true;
+			this.closedTracks.add(trackData.track);
 
 			if (trackData.type === 'subtitle' && trackData.track.source._codec === 'webvtt') {
 				await this.processWebVTTCues(trackData, Infinity);

@@ -55,7 +55,6 @@ type OggTrackData = {
 	currentPageSize: number;
 	currentPageStartsWithFreshPacket: boolean;
 	currentPageStartTimestampInSamples: number;
-	closed: boolean;
 };
 
 type Packet = {
@@ -72,6 +71,7 @@ export class OggMuxer extends Muxer {
 	private writer!: Writer;
 
 	private trackDatas: OggTrackData[] = [];
+	private closedTracks = new Set<OutputTrack>();
 	private bosPagesWritten = false;
 	private allTracksKnown = promiseWithResolvers();
 	private warnedAboutTooNegativeTimestamp = false;
@@ -166,7 +166,6 @@ export class OggMuxer extends Muxer {
 			currentPageSize: 27,
 			currentPageStartsWithFreshPacket: true,
 			currentPageStartTimestampInSamples: 0,
-			closed: false,
 		};
 
 		this.queueHeaderPackets(newTrackData, meta);
@@ -441,7 +440,7 @@ export class OggMuxer extends Muxer {
 
 	allTracksAreKnown() {
 		for (const track of this.output.tracks) {
-			if (!track.source._closed && !this.trackDatas.some(x => x.track === track)) {
+			if (!this.closedTracks.has(track) && !this.trackDatas.some(x => x.track === track)) {
 				return false; // We haven't seen a sample from this open track yet
 			}
 		}
@@ -480,7 +479,7 @@ export class OggMuxer extends Muxer {
 				if (
 					!isFinalCall
 					&& trackData.packetQueue.length <= 1 // Limit is 1, not 0, for correct EOS flag logic
-					&& !trackData.closed
+					&& !this.closedTracks.has(trackData.track)
 				) {
 					break outer;
 				}
@@ -652,10 +651,10 @@ export class OggMuxer extends Muxer {
 		const release = await this.mutex.acquire();
 
 		try {
+			this.closedTracks.add(track);
+
 			const trackData = this.trackDatas.find(x => x.track === track);
 			if (trackData) {
-				trackData.closed = true;
-
 				if (trackData.leadingPackets.length > 0) {
 					// No packet ever ended at or after zero, so none of them can be represented
 					trackData.leadingPackets.length = 0;
@@ -680,7 +679,7 @@ export class OggMuxer extends Muxer {
 		this.allTracksKnown.resolve();
 
 		for (const trackData of this.trackDatas) {
-			trackData.closed = true;
+			this.closedTracks.add(trackData.track);
 
 			if (trackData.leadingPackets.length > 0) {
 				// No packet ever ended at or after zero, so none of them can be represented

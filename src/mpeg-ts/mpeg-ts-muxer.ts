@@ -65,7 +65,6 @@ type MpegTsTrackData = {
 	adtsHeader: Uint8Array | null;
 	adtsHeaderBitstream: Bitstream | null;
 	firstPacketWritten: boolean;
-	closed: boolean;
 };
 
 type QueuedPacket = {
@@ -81,6 +80,7 @@ export class MpegTsMuxer extends Muxer {
 	private writer!: Writer;
 
 	private trackDatas: MpegTsTrackData[] = [];
+	private closedTracks = new Set<OutputTrack>();
 	private tablesWritten = false;
 	private continuityCounters = new Map<number, number>();
 	private packetBuffer = new Uint8Array(TS_PACKET_SIZE);
@@ -149,7 +149,6 @@ export class MpegTsMuxer extends Muxer {
 			adtsHeader: null,
 			adtsHeaderBitstream: null,
 			firstPacketWritten: false,
-			closed: false,
 		};
 
 		this.trackDatas.push(newTrackData);
@@ -224,7 +223,6 @@ export class MpegTsMuxer extends Muxer {
 			adtsHeader: null,
 			adtsHeaderBitstream: null,
 			firstPacketWritten: false,
-			closed: false,
 		};
 
 		this.trackDatas.push(newTrackData);
@@ -479,7 +477,7 @@ export class MpegTsMuxer extends Muxer {
 
 	private allTracksAreKnown() {
 		for (const track of this.output.tracks) {
-			if (!track.source._closed && !this.trackDatas.some(x => x.track === track)) {
+			if (!this.closedTracks.has(track) && !this.trackDatas.some(x => x.track === track)) {
 				return false;
 			}
 		}
@@ -550,7 +548,7 @@ export class MpegTsMuxer extends Muxer {
 				if (
 					!isFinalCall
 					&& trackData.packetQueue.length === 0
-					&& !trackData.closed
+					&& !this.closedTracks.has(trackData.track)
 				) {
 					break outer;
 				}
@@ -767,9 +765,10 @@ export class MpegTsMuxer extends Muxer {
 		const release = await this.mutex.acquire();
 
 		try {
+			this.closedTracks.add(track);
+
 			const trackData = this.trackDatas.find(x => x.track === track);
 			if (trackData) {
-				trackData.closed = true;
 				await this.flushTimestampQueue(trackData, false);
 			}
 
@@ -789,7 +788,7 @@ export class MpegTsMuxer extends Muxer {
 		this.allTracksKnown.resolve();
 
 		for (const trackData of this.trackDatas) {
-			trackData.closed = true;
+			this.closedTracks.add(trackData.track);
 			await this.flushTimestampQueue(trackData, false);
 		}
 

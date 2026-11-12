@@ -107,7 +107,6 @@ type MatroskaTrackData = {
 	chunkQueue: InternalMediaChunk[];
 	lastWrittenMsTimestamp: number | null;
 	codecPrivate: AllowSharedBufferSource | null;
-	closed: boolean;
 } & ({
 	track: OutputVideoTrack;
 	type: 'video';
@@ -160,6 +159,7 @@ export class MatroskaMuxer extends Muxer {
 	private format: WebMOutputFormat | MkvOutputFormat;
 
 	private trackDatas: MatroskaTrackData[] = [];
+	private closedTracks = new Set<OutputTrack>();
 	private allTracksKnown = promiseWithResolvers();
 
 	private segment: EBMLElement | null = null;
@@ -824,7 +824,7 @@ export class MatroskaMuxer extends Muxer {
 
 	private allTracksAreKnown() {
 		for (const track of this.output.tracks) {
-			if (!track.source._closed && !this.trackDatas.some(x => x.track === track)) {
+			if (!this.closedTracks.has(track) && !this.trackDatas.some(x => x.track === track)) {
 				return false; // We haven't seen a sample from this open track yet
 			}
 		}
@@ -892,7 +892,6 @@ export class MatroskaMuxer extends Muxer {
 			chunkQueue: [],
 			lastWrittenMsTimestamp: null,
 			codecPrivate: meta.decoderConfig.description ?? null,
-			closed: false,
 		};
 
 		if (track.source._codec === 'vp9') {
@@ -997,7 +996,6 @@ export class MatroskaMuxer extends Muxer {
 			chunkQueue: [],
 			lastWrittenMsTimestamp: null,
 			codecPrivate: decoderConfig.description ?? null,
-			closed: false,
 		};
 
 		this.trackDatas.push(newTrackData);
@@ -1030,7 +1028,6 @@ export class MatroskaMuxer extends Muxer {
 			chunkQueue: [],
 			lastWrittenMsTimestamp: null,
 			codecPrivate: textEncoder.encode(meta.config.description),
-			closed: false,
 		};
 
 		this.trackDatas.push(newTrackData);
@@ -1188,7 +1185,7 @@ export class MatroskaMuxer extends Muxer {
 			let minTimestamp = Infinity;
 
 			for (const trackData of this.trackDatas) {
-				if (!isFinalCall && trackData.chunkQueue.length === 0 && !trackData.closed) {
+				if (!isFinalCall && trackData.chunkQueue.length === 0 && !this.closedTracks.has(trackData.track)) {
 					break outer;
 				}
 
@@ -1251,7 +1248,7 @@ export class MatroskaMuxer extends Muxer {
 				return firstQueuedSample.type === 'key';
 			}
 
-			return otherTrackData.closed;
+			return this.closedTracks.has(otherTrackData.track);
 		});
 
 		let shouldCreateNewCluster = false;
@@ -1456,10 +1453,7 @@ export class MatroskaMuxer extends Muxer {
 		const release = await this.mutex.acquire();
 
 		try {
-			const trackData = this.trackDatas.find(x => x.track === track);
-			if (trackData) {
-				trackData.closed = true;
-			}
+			this.closedTracks.add(track);
 
 			if (this.allTracksAreKnown()) {
 				this.allTracksKnown.resolve();
@@ -1480,7 +1474,7 @@ export class MatroskaMuxer extends Muxer {
 			this.allTracksKnown.resolve();
 
 			for (const trackData of this.trackDatas) {
-				trackData.closed = true;
+				this.closedTracks.add(trackData.track);
 			}
 
 			if (!this.segment) {

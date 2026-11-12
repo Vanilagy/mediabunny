@@ -289,8 +289,7 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 			this._reader = new Reader(this._rootSource);
 			this._emit('source', { source: this._rootSource, request: null, isRoot: true });
 
-			// The format whose data starts earliest wins, so that a format tolerating leading junk (like MP3) can't
-			// claim a file another format explains from its first byte. Ties go to the earlier format in the list.
+			// The format whose data starts earliest wins
 			let bestFormat: InputFormat | null = null;
 			let bestMatchPosition = Infinity;
 			for (const format of this._formats) {

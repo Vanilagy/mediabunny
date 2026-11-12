@@ -614,6 +614,39 @@ test('EOS page of a track ending early', async () => {
 	expectTimeOrdered(pages.map(page => (page.granulePosition - OPUS_PRE_SKIP) / 48000));
 });
 
+test('Closing a track whose first add is still pending', async () => {
+	const pages: RecordedPage[] = [];
+	const output = new Output({
+		format: new OggOutputFormat({ onPage: recordPage(pages) }),
+		target: new NullTarget(),
+	});
+
+	const sourceA = new EncodedAudioPacketSource('opus');
+	const sourceB = new EncodedAudioPacketSource('opus');
+	output.addAudioTrack(sourceA);
+	output.addAudioTrack(sourceB);
+	await output.start();
+
+	// Holding the muxer lets everything queue up behind it, with A closing before its first add ran
+	const release = await output._muxer.mutex.acquire();
+	const addPromises = [
+		sourceB.add(createOpusPacket(0), { decoderConfig: OPUS_DECODER_CONFIG }),
+		sourceA.add(createOpusPacket(0), { decoderConfig: OPUS_DECODER_CONFIG }),
+	];
+	sourceA.close();
+	await new Promise(resolve => setTimeout(resolve));
+	release();
+
+	await Promise.all(addPromises);
+	sourceB.close();
+	await output.finalize();
+
+	// All BOS pages must come before any other page
+	const bosFlags = pages.map(page => page.headerType & 2);
+	expect(bosFlags.filter(x => x)).toHaveLength(2);
+	expect(bosFlags.lastIndexOf(2)).toBeLessThan(bosFlags.indexOf(0));
+});
+
 const recordPage = (pages: RecordedPage[]) => (data: Uint8Array, position: number, source: MediaSource) => {
 	pages.push({
 		source,

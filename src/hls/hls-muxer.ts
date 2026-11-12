@@ -64,8 +64,6 @@ type HlsTrackData = {
 	track: OutputTrack;
 	packets: EncodedPacket[];
 	playlist: Playlist;
-	// We must store it on the TrackData, reading it directly from the track leads to async race conditions!
-	closed: boolean;
 	info: {
 		type: 'video';
 		decoderConfig: VideoDecoderConfig;
@@ -145,6 +143,7 @@ export class HlsMuxer extends Muxer {
 
 	targetSegmentDuration: number;
 	trackDatas: HlsTrackData[] = [];
+	closedTracks = new Set<OutputTrack>();
 	singleFilePerPlaylist: boolean;
 	isLive: boolean;
 	maxLiveSegmentCount: number;
@@ -589,7 +588,7 @@ export class HlsMuxer extends Muxer {
 
 	private allTracksAreKnown(playlist: Playlist) {
 		for (const track of playlist.tracks) {
-			if (!track.source._closed && !this.trackDatas.some(x => x.track === track)) {
+			if (!this.closedTracks.has(track) && !this.trackDatas.some(x => x.track === track)) {
 				return false; // We haven't seen a sample from this open track yet
 			}
 		}
@@ -598,17 +597,14 @@ export class HlsMuxer extends Muxer {
 	}
 
 	override async onTrackClose(track: OutputTrack) {
-		const trackData = this.trackDatas.find(x => x.track === track);
-		if (trackData) {
-			trackData.closed = true;
-		}
-
 		const playlist = this.playlists.find(x => x.tracks.includes(track));
 		assert(playlist); // If there isn't one then the assignment algo failed innit
 
 		const release = await playlist.mutex.acquire();
 
 		try {
+			this.closedTracks.add(track);
+
 			// Another track of the playlist may have closed alongside this one and already finished the playlist,
 			// hence this check
 			if (!playlist.done) {
@@ -637,7 +633,6 @@ export class HlsMuxer extends Muxer {
 			track,
 			packets: [],
 			playlist: playlists[0]!,
-			closed: false,
 			info: {
 				type: 'video',
 				decoderConfig: meta.decoderConfig,
@@ -667,7 +662,6 @@ export class HlsMuxer extends Muxer {
 			track,
 			packets: [],
 			playlist: playlists[0]!,
-			closed: false,
 			info: {
 				type: 'audio',
 				decoderConfig: meta.decoderConfig,
@@ -758,11 +752,12 @@ export class HlsMuxer extends Muxer {
 		}
 
 		const trackDatas = this.trackDatas.filter(x => playlist.tracks.includes(x.track));
+		const allClosed = trackDatas.every(x => this.closedTracks.has(x.track));
 
 		if (playlist.currentSegmentStartTimestamp === null) {
 			// All tracks are known but we never received any data. Tracks that declared themselves up front are known
 			// before their first packet, so we can only call it a day once they're actually closed.
-			if (trackDatas.every(x => x.closed)) {
+			if (allClosed) {
 				await this.onPlaylistDone(playlist);
 			}
 
@@ -771,6 +766,8 @@ export class HlsMuxer extends Muxer {
 
 		const videoTrack = trackDatas.find(x => x.info.type === 'video') as HlsVideoTrackData | undefined;
 		const audioTrack = trackDatas.find(x => x.info.type === 'audio') as HlsAudioTrackData | undefined;
+		const videoTrackIsClosed = !!videoTrack && this.closedTracks.has(videoTrack.track);
+		const audioTrackIsClosed = !!audioTrack && this.closedTracks.has(audioTrack.track);
 
 		// RFC 8216: "The EXT-X-I-FRAMES-ONLY tag indicates that each Media Segment in the Playlist describes a
 		// single I-frame"
@@ -796,7 +793,7 @@ export class HlsMuxer extends Muxer {
 			let videoEndIndex = 0;
 			let audioEndIndex = 0;
 
-			if (videoTrack && (!videoTrack.closed || videoTrack.packets.length > 0)) {
+			if (videoTrack && (!videoTrackIsClosed || videoTrack.packets.length > 0)) {
 				// A video track is active (and maybe an audio track too)
 				const allBelow = videoTrack.packets.every(x => x.timestamp < currentSegmentEndTimestamp);
 
@@ -804,7 +801,7 @@ export class HlsMuxer extends Muxer {
 				let bestKeyPacketIndex: number | null = null;
 
 				if (allBelow && !isKeyPacketsOnly) {
-					if (!videoTrack.closed) {
+					if (!videoTrackIsClosed) {
 						// Not enough data yet
 						return;
 					}
@@ -837,7 +834,7 @@ export class HlsMuxer extends Muxer {
 						if (index !== -1) {
 							audioEndIndex = index;
 						} else {
-							if (audioTrack.closed) {
+							if (audioTrackIsClosed) {
 								audioEndIndex = audioTrack.packets.length;
 							} else {
 								return;
@@ -845,7 +842,7 @@ export class HlsMuxer extends Muxer {
 						}
 					}
 				} else {
-					if (!videoTrack.closed) {
+					if (!videoTrackIsClosed) {
 						return;
 					}
 
@@ -862,7 +859,7 @@ export class HlsMuxer extends Muxer {
 							if (index !== -1) {
 								audioEndIndex = index;
 							} else {
-								if (audioTrack.closed) {
+								if (audioTrackIsClosed) {
 									audioEndIndex = audioTrack.packets.length;
 								} else {
 									return;
@@ -874,7 +871,7 @@ export class HlsMuxer extends Muxer {
 							if (index !== -1) {
 								audioEndIndex = index;
 							} else {
-								if (audioTrack.closed) {
+								if (audioTrackIsClosed) {
 									audioEndIndex = audioTrack.packets.length;
 								} else {
 									return;
@@ -883,13 +880,13 @@ export class HlsMuxer extends Muxer {
 						}
 					}
 				}
-			} else if (audioTrack && (!audioTrack.closed || audioTrack.packets.length > 0)) {
+			} else if (audioTrack && (!audioTrackIsClosed || audioTrack.packets.length > 0)) {
 				// There's only an audio track active
 
 				const allBelow = audioTrack.packets.every(x => x.timestamp < currentSegmentEndTimestamp);
 
 				if (allBelow) {
-					if (audioTrack.closed) {
+					if (audioTrackIsClosed) {
 						// We can write all packets since they're all below
 						audioEndIndex = audioTrack.packets.length;
 					} else {
@@ -905,7 +902,6 @@ export class HlsMuxer extends Muxer {
 
 			if (videoEndIndex === 0 && audioEndIndex === 0) {
 				// No more segments to write - if all tracks are closed, this playlist is done
-				const allClosed = trackDatas.every(x => x.closed);
 				if (allClosed) {
 					await this.onPlaylistDone(playlist);
 				}
@@ -1778,8 +1774,8 @@ export class HlsMuxer extends Muxer {
 		const releases = await Promise.all(this.playlists.map(p => p.mutex.acquire()));
 		releases.forEach(release => release());
 
-		for (const trackData of this.trackDatas) {
-			trackData.closed = true;
+		for (const track of this.output.tracks) {
+			this.closedTracks.add(track);
 		}
 
 		await Promise.all(this.playlists.map(playlist => (
