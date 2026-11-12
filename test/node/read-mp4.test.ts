@@ -720,6 +720,57 @@ const moovSamplesThenFragment = (withTfdt: boolean) => {
 	);
 };
 
+test('Fragments with omitted tfhd offsets and an ignored track first', async () => {
+	const moov = box('moov',
+		mvhd(),
+		box('trak',
+			fullBox('tkhd', 0, 1, zeros(8), u32(2), zeros(68)),
+			box('mdia',
+				mdhd(1000),
+				fullBox('hdlr', 0, 0, zeros(4), ascii('tmcd'), zeros(13)),
+				box('minf', box('stbl', fullBox('stsd', 0, 0, u32(0)))),
+			),
+		),
+		trak('vide', mdhd(1000), fullBox('stsd', 0, 0, u32(1), videoSampleEntry('avc1'))),
+		box('mvex',
+			fullBox('trex', 0, 0, u32(1), u32(1), u32(40), u32(4), u32(0)),
+			fullBox('trex', 0, 0, u32(2), u32(1), u32(40), u32(4), u32(0)),
+		),
+	);
+	const moof = (dataOffset: number) => box('moof',
+		box('traf',
+			fullBox('tfhd', 0, 0, u32(2)),
+			fullBox('trun', 0, 0x000001, u32(2), u32(dataOffset)),
+		),
+		box('traf',
+			fullBox('tfhd', 0, 0, u32(1)),
+			fullBox('tfdt', 0, 0, u32(0)),
+			fullBox('trun', 0, 0x000001, u32(3), u32(0)),
+		),
+	);
+
+	const ftyp = box('ftyp', ascii('isom'), u32(0), ascii('isom'));
+	using input = new Input({
+		source: new BufferSource(concat(
+			ftyp,
+			moov,
+			moof(moof(0).length + 8),
+			box('mdat', sampleData(0xff), sampleData(0xff), sampleData(0), sampleData(1), sampleData(2)),
+		)),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryVideoTrack();
+	assert(track);
+
+	const packets: EncodedPacket[] = [];
+	for await (const packet of new EncodedPacketSink(track).packets()) {
+		packets.push(packet);
+	}
+
+	expect(packets.map(x => [...x.data])).toEqual([sampleData(0), sampleData(1), sampleData(2)]);
+});
+
 const sampleData = (value: number) => [value, value, value, value];
 
 const videoSampleEntry = (name: string, ...children: Bytes[]) => box(

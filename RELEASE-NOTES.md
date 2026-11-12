@@ -21,6 +21,7 @@
 - Fixed concurrent reads of the same ISOBMFF fragment returning a partially processed fragment, which could surface undecrypted data
 - Fixed all-ones `mdhd` durations not being treated as unknown
 - Fixed `saio` offsets in fragments being resolved relative to the `moof` box instead of the base data offset
+- Fixed wrong sample data in fragmented MP4 files without base data offsets when an unsupported track comes before
 - Fixed track-level `©nam` names including their length and language prefix
 - Fixed `pssh` boxes differing only in their key IDs being deduplicated
 - Fixed fragmented MP4 muxer marking key frames in the middle of a fragment as non-key frames

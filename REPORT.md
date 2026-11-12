@@ -1054,12 +1054,14 @@ The current behavior is arguably intended, or fixing it means picking between va
 
 ### 2. Reproduced, left unfixed because the fix is invasive
 
-- FLAC files concatenated with `ffmpeg -f concat -c copy` stop at the first join (10 of 20 packets). The strict
+✅ FLAC files concatenated with `ffmpeg -f concat -c copy` stop at the first join (10 of 20 packets). The strict
   frame-number check (#194) prevents false syncs; relaxing it needs CRC-16-based acceptance.
-- FFmpeg's m2ts mode declares AAC as stream_type 0x06 without a descriptor, so the AAC track disappears. Needs
+✅ FFmpeg's m2ts mode declares AAC as stream_type 0x06 without a descriptor, so the AAC track disappears. Needs
   payload probing for private streams.
-- ISOBMFF fragments with `omit_tfhd_offset` and a non-A/V track first read video from the moof start. Needs
+✅ ISOBMFF fragments with `omit_tfhd_offset` and a non-A/V track first read video from the moof start. Needs
   sizing the ignored track's truns.
+  Fix: the per-traf state moved from the track onto the demuxer, so every traf gets one and every trun is read,
+  advancing the implicit base data offset; only tracks we care about store samples.
 - MP3 detection only tries the first sync candidate (~25% of mid-frame cuts undetected, measured before the
   reserved-header fix). Detection and demuxer both need a shared validated-first-frame search.
 - Frameless decoder chunks other than hidden VP8/VP9 frames still shift every later timestamp in that decode

@@ -413,6 +413,7 @@ export class FlacDemuxer extends Demuxer {
 
 				// Ensure the frameOrSampleNum is consecutive.
 				// https://github.com/Vanilagy/mediabunny/issues/194
+				// Concatenated files that restart their numbering therefore end at the join, which is intended.
 
 				if (this.blockingBit === 0) {
 					// Case A: If the stream is fixed block size, this is the frame number, which increments by 1
