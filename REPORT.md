@@ -1139,11 +1139,14 @@ The code is wrong, but no current caller or realistic input hits it.
   make it fail.
   Fix: `init_lame` returns NULL when `lame_init` or `lame_init_params` fails, and the worker throws. WASM rebuilt
   (HEAD bridge reproduced the old hash), README hash updated.
-- HLS: EXT-X-MEDIA TYPE would be written as `SUBTITLE` instead of `SUBTITLES` (subtitles are disabled in HLS
+✅ HLS: EXT-X-MEDIA TYPE would be written as `SUBTITLE` instead of `SUBTITLES` (subtitles are disabled in HLS
   output).
-- Extension worker clients: a rejected `createWorker()` is never reset (Node never fails it; browser CSP failures
+✅ Extension worker clients: a rejected `createWorker()` is never reset (Node never fails it; browser CSP failures
   arrive as error events).
-- Extension worker clients: `close()` after a failed init sends ctx 0 (reads zeros, no effect).
+  Fix: the AC-3, DTS and TrueHD worker clients reset `workerPromise` when `createWorker()` rejects, so the next use
+  retries, and `unrefWorker` treats a failed worker promise as no worker.
+✅ Extension worker clients: `close()` after a failed init sends ctx 0 (reads zeros, no effect).
+  Fix: the AC-3, DTS and TrueHD coders only send the close command when they have a context.
 - Server: the keyframe flag is wiped by node-av's `Packet.data` setter (no software decoder reads it).
 - E-AC-3 at high bitrates uses 3-block frames, muxed as 768-sample MP4 samples (FFmpeg decodes them fine).
 - The Chromium Annex B SPS fixup patches only the first SPS (3 B-frame TS files tested, no frames lost).

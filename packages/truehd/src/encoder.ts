@@ -20,7 +20,7 @@ import { TRUEHD_CHANNEL_COUNTS, TRUEHD_MAJOR_SYNC_WORD, TRUEHD_SAMPLE_RATES } fr
 const MAJOR_SYNC_INTERVAL = 16; // In access units, as used by FFmpeg's encoder
 
 class TrueHdEncoder extends CustomAudioEncoder {
-	private ctx = 0;
+	private ctx: number | null = null;
 	private encoderFrameSize = 0;
 	private sampleRate = 0;
 	private numberOfChannels = 0;
@@ -108,6 +108,8 @@ class TrueHdEncoder extends CustomAudioEncoder {
 	}
 
 	async flush() {
+		assert(this.ctx !== null);
+
 		// The encoder writes no major sync at all for streams shorter than one major sync interval, leaving them
 		// undecodable, so pad these with silence
 		if (Math.ceil(this.receivedFrames / this.encoderFrameSize) < MAJOR_SYNC_INTERVAL) {
@@ -133,11 +135,15 @@ class TrueHdEncoder extends CustomAudioEncoder {
 
 	close() {
 		// Close shouldn't throw
-		sendCommand({ type: 'close-encoder', data: { ctx: this.ctx } }).catch(() => {});
+		if (this.ctx !== null) {
+			sendCommand({ type: 'close-encoder', data: { ctx: this.ctx } }).catch(() => {});
+		}
+
 		void unrefWorker();
 	}
 
 	private async encodePendingFrames(frameCount: number) {
+		assert(this.ctx !== null);
 		assert(this.nextSampleTimestampInSamples !== null);
 
 		const channels = this.numberOfChannels;

@@ -18,7 +18,7 @@ import { assert } from './shared';
 import { AC3_SAMPLE_RATES } from '../../../shared/ac3-misc';
 
 class Ac3Encoder extends CustomAudioEncoder {
-	private ctx = 0;
+	private ctx: number | null = null;
 	private encoderFrameSize = 0;
 	private sampleRate = 0;
 	private numberOfChannels = 0;
@@ -124,6 +124,8 @@ class Ac3Encoder extends CustomAudioEncoder {
 	}
 
 	async flush() {
+		assert(this.ctx !== null);
+
 		await this.inFlightEncode;
 
 		if (this.nextSampleTimestampInSamples !== null) {
@@ -150,11 +152,15 @@ class Ac3Encoder extends CustomAudioEncoder {
 
 	close() {
 		// Close shouldn't throw
-		sendCommand({ type: 'close-encoder', data: { ctx: this.ctx } }).catch(() => {});
+		if (this.ctx !== null) {
+			sendCommand({ type: 'close-encoder', data: { ctx: this.ctx } }).catch(() => {});
+		}
+
 		void unrefWorker();
 	}
 
 	private async encodeOneFrame(startFrame: number) {
+		assert(this.ctx !== null);
 		assert(this.nextSampleTimestampInSamples !== null);
 
 		const channels = this.numberOfChannels;

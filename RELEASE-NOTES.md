@@ -306,6 +306,7 @@
 - Fixed WebVTT text starting with a byte order mark failing to parse
 - `@mediabunny/server`: Decoding and encoding now use multiple threads where the codec supports it, making them faster
 - `@mediabunny/aac-encoder`, `@mediabunny/flac-encoder`, `@mediabunny/mp3-encoder`, `@mediabunny/ac3`, `@mediabunny/dts`, `@mediabunny/truehd`: Slightly faster encoding and decoding
+- `@mediabunny/ac3`, `@mediabunny/dts`, `@mediabunny/truehd`: Fixed a failure to create the codec worker breaking the extension for good instead of being retriable
 - `@mediabunny/ac3`: Fixed E-AC-3 with several syncframes per packet failing to decode
 - `@mediabunny/ac3`: Fixed the last decoded audio being dropped when flushing
 - `@mediabunny/ac3`: Fixed wrong decoded timestamps when the stream's sample rate differs from the track's

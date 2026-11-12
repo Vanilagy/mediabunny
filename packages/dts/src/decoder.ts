@@ -14,9 +14,10 @@ import {
 	registerDecoder,
 } from 'mediabunny';
 import { sendCommand, refWorker, unrefWorker } from './worker-client';
+import { assert } from './shared';
 
 class DtsDecoder extends CustomAudioDecoder {
-	private ctx = 0;
+	private ctx: number | null = null;
 	private inFlightDecode: Promise<void> | null = null;
 
 	static override supports(codec: AudioCodec): boolean {
@@ -34,6 +35,8 @@ class DtsDecoder extends CustomAudioDecoder {
 	}
 
 	async decode(packet: EncodedPacket) {
+		assert(this.ctx !== null);
+
 		const encodedData = packet.data.slice().buffer;
 		const timestamp = Math.round(packet.timestamp * this.config.sampleRate);
 
@@ -59,6 +62,8 @@ class DtsDecoder extends CustomAudioDecoder {
 	}
 
 	async flush() {
+		assert(this.ctx !== null);
+
 		await this.inFlightDecode;
 		this.inFlightDecode = null;
 
@@ -67,7 +72,10 @@ class DtsDecoder extends CustomAudioDecoder {
 
 	async close() {
 		// Close shouldn't throw
-		sendCommand({ type: 'close-decoder', data: { ctx: this.ctx } }).catch(() => {});
+		if (this.ctx !== null) {
+			sendCommand({ type: 'close-decoder', data: { ctx: this.ctx } }).catch(() => {});
+		}
+
 		await unrefWorker();
 	}
 }

@@ -21,7 +21,7 @@ import { clampDtsBitrate, DTS_CHANNEL_COUNTS, DTS_SAMPLE_RATES } from '../../../
 const CODEC_DELAY = 512;
 
 class DtsEncoder extends CustomAudioEncoder {
-	private ctx = 0;
+	private ctx: number | null = null;
 	private encoderFrameSize = 0;
 	private sampleRate = 0;
 	private numberOfChannels = 0;
@@ -136,11 +136,15 @@ class DtsEncoder extends CustomAudioEncoder {
 
 	close() {
 		// Close shouldn't throw
-		sendCommand({ type: 'close-encoder', data: { ctx: this.ctx } }).catch(() => {});
+		if (this.ctx !== null) {
+			sendCommand({ type: 'close-encoder', data: { ctx: this.ctx } }).catch(() => {});
+		}
+
 		void unrefWorker();
 	}
 
 	private async encodeOneFrame(startFrame: number) {
+		assert(this.ctx !== null);
 		assert(this.nextSampleTimestampInSamples !== null);
 
 		const channels = this.numberOfChannels;

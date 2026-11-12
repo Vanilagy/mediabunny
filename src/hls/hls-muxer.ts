@@ -1662,6 +1662,7 @@ export class HlsMuxer extends Muxer {
 				lastGroupId = decl.groupId;
 				groupIdTrackCount++;
 
+				// Once subtitle tracks are supported, this logic is wrong (they need TYPE=SUBTITLES)
 				masterPlaylistText += `#EXT-X-MEDIA:TYPE=${type.toUpperCase()},GROUP-ID="${decl.groupId}"`;
 
 				if (name !== null && /[\n\r"]/.test(name)) {

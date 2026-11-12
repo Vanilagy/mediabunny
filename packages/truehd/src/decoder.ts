@@ -17,7 +17,7 @@ import { sendCommand, refWorker, unrefWorker } from './worker-client';
 import { assert, BATCH_SAMPLE_COUNT } from './shared';
 
 class TrueHdDecoder extends CustomAudioDecoder {
-	private ctx = 0;
+	private ctx: number | null = null;
 	private samplesPerAccessUnit = 0;
 	private queuedPackets: EncodedPacket[] = [];
 	private nextTimestamp: number | null = null;
@@ -49,6 +49,8 @@ class TrueHdDecoder extends CustomAudioDecoder {
 	}
 
 	async flush() {
+		assert(this.ctx !== null);
+
 		if (this.queuedPackets.length > 0) {
 			await this.decodeQueuedPackets();
 		}
@@ -61,11 +63,16 @@ class TrueHdDecoder extends CustomAudioDecoder {
 
 	async close() {
 		// Close shouldn't throw
-		sendCommand({ type: 'close-decoder', data: { ctx: this.ctx } }).catch(() => {});
+		if (this.ctx !== null) {
+			sendCommand({ type: 'close-decoder', data: { ctx: this.ctx } }).catch(() => {});
+		}
+
 		await unrefWorker();
 	}
 
 	private async decodeQueuedPackets() {
+		assert(this.ctx !== null);
+
 		const packets = this.queuedPackets.map(packet => ({
 			encodedData: packet.data.slice().buffer,
 			timestamp: Math.round(packet.timestamp * this.config.sampleRate),
