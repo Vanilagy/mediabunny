@@ -35,9 +35,11 @@
 - Fixed `onMoof` reporting incorrectly shifted fragment start timestamps
 - Fixed `fastStart: 'in-memory'` not working with `AppendOnlyStreamTarget`
 - Fixed `fastStart: 'reserve'` including the trailing `free` box in the data passed to `onMoov`
+- Reduced peak memory use when finalizing MP4 files with `fastStart: 'in-memory'` into a `StreamTarget`
 - Fixed WebVTT cues with zero duration hanging the ISOBMFF muxer
 - Fixed touching WebVTT cues producing zero-length samples in ISOBMFF
 - Fixed the WebVTT `ctim` box being written in seconds instead of milliseconds
+- Fixed fragmented MP4 output failing to finalize with a short WebVTT or E-AC-3 track
 - Fixed disc number being written under the `disc` key instead of `disk`
 - Fixed PCM with more than 16 bits per sample in MP4 being written with a QuickTime-only sound description, making it unplayable in AVFoundation
 - AC-3 and E-AC-3 in MOV are now wrapped in a `wave` box, fixing E-AC-3 playback in AVFoundation
@@ -60,6 +62,7 @@
 - Fixed Matroska projection yaw, pitch and roll being applied as 2D flips and rotation to 360-degree video
 - Fixed the Matroska projection pose being misread when its elements come before `ProjectionType`
 - Fixed laced Matroska frames getting timestamps off the tick grid, which could make `getPacket(packet.timestamp)` return the previous packet
+- Fixed Matroska files with a `DocTypeVersion` above 4 (such as mkvmerge's v5 output) being rejected
 - Fixed Matroska packet durations derived from `DefaultDuration` not being whole ticks
 - Fixed empty Matroska elements not taking their default values (an empty `TimestampScale` threw, an empty `FlagDefault` read as 0)
 - Fixed an empty Matroska `FileUID` throwing
@@ -110,6 +113,7 @@
 - Fixed Ogg seeking using the granule position of the page a packet starts on instead of the one it ends on
 - Fixed Ogg packet lookups returning the wrong packet in files with a broken page chain
 - Fixed seeking to the last Vorbis packet ahead of an empty final packet (as written by VLC) giving it the wrong duration
+- Fixed truncated Ogg files reporting a duration of 0 and failing to find their last packet
 - Fixed the Ogg MIME type reading `codecs=""` for streams without known codecs
 - FLAC muxer now supports total sample counts of 2^32 and above
 - FLAC muxer now throws for PICTURE and Vorbis comment blocks larger than 16 MiB instead of writing broken block lengths
@@ -118,12 +122,14 @@
 - Fixed FLAC frame sample numbers of 2^31 and above being misread
 - Fixed concurrent `getFirstPacket()` calls on FLAC files corrupting the packet index
 - Fixed FLAC `getPacket()` sometimes returning the previous packet due to floating point error
+- Fixed MP3, ADTS and FLAC `getPacket()` at a packet's end timestamp sometimes returning that packet instead of the next one
 - Fixed broken FLAC PICTURE blocks for MIME types or descriptions with non-ASCII characters
 - Fixed single-frame FLAC output having a minimum block size of 0, which FFmpeg rejects
 - Fixed missing validation for `FlacOutputFormatOptions.onFrame`
 - Fixed reading WAVE files whose header overstates the data size from unsized sources, such as FFmpeg's pipe output
 - Fixed WAVE files with a placeholder data size reporting a huge duration from metadata
 - Fixed unfinalized WAVE files, whose sizes are still 0, failing to load
+- Fixed WAVE files over 4 GiB with placeholder sizes (as written by FFmpeg) being cut off at 4 GiB
 - Fixed chunks following the data chunk in RF64 files, such as metadata, not being read
 - Fixed WAVE `getPacket()` returning the previous packet when given a packet's exact timestamp
 - Fixed RIFF INFO years being read in local time instead of UTC
@@ -167,9 +173,11 @@
 - Fixed HLS master playlists with only I-frame variants failing to load
 - Fixed directly loaded HLS I-frame playlists not reporting their tracks as having only key packets
 - Fixed several cases of relative URLs in HLS playlists being resolved incorrectly, such as protocol-relative URLs, `data:` URIs and URLs with query strings
+- Fixed relative HLS paths starting with `../` losing that part when resolved
 - Improved HLS query parameter parsing
 - Fixed sparse fMP4 HLS segments with large timestamps being shifted by a timestamp wrap
 - Fixed HLS packet lookups before the first segment's playlist time returning null
+- Fixed HLS packet lookups at a packet's exact timestamp sometimes returning the previous packet
 - Fixed `EXT-X-MAP` tags discarding the duration or byte range of the following segment
 - Fixed live HLS playlists getting a wrong timeline when the window slid past all known segments between playlist reloads
 - Fixed new segments of live HLS playlists losing their init data after a playlist reload
@@ -182,6 +190,7 @@
 - Fixed HLS output with `fastStart: 'reserve'` MP4 segments failing
 - Fixed HLS output failing for paired tracks that no single segment format can hold together; they're now split into separate renditions
 - Fixed HLS I-frame tracks being grouped as video renditions
+- Fixed HLS MP3 segments each starting with a Xing frame, which players decoded as an extra frame of silence
 - HLS I-frame playlists now hold one I-frame per segment, as the spec requires
 - HLS variants now list the codecs of every rendition in their groups in `CODECS`, as the spec requires
 - Fixed HLS playlists failing to load when a variant lists several codecs of the same type, such as for a group of renditions with different codecs
@@ -230,6 +239,7 @@
 - Fixed `Output.getMimeType()` never settling after the output was canceled
 - Fixed unhandled promise rejections from `Output.target` with a failing async `PathedTarget` callback and from closing discarded targets
 - Fixed `FilePathTarget` leaking its file handle after a write failure
+- Fixed a stack overflow when a chunked `StreamTarget` with a small `chunkSize` received a large write
 - Fixed `AppendOnlyStreamTarget` never emitting `finalized`
 - Fixed format callbacks such as `onMoof` sometimes receiving wrong data
 - Fixed missing validation for the result of `OutputOptions.initTarget`
@@ -246,12 +256,15 @@
 - Fixed custom encoders never being closed after a failed call
 - Fixed encoders being created while canceling or closing and never being closed
 - Fixed muxer errors for packets emitted during the final encoder flush being lost
+- Fixed `Output.finalize()` succeeding without a track whose encoder failed to initialize
 - Fixed errors thrown while handling encoder output being swallowed
 - Fixed adding audio to an encoder that had failed throwing a misleading error
 - Fixed the first video frame sometimes not being encoded as a key frame when its timestamp is negative
 - Fixed `sizeChangeBehavior` set to `'fill'`, `'contain'` or `'cover'` not applying to frames of the original size
 - Fixed `VideoTransformOptions.alpha` being ignored
 - Fixed missing validation for `VideoTransformOptions.alpha`
+- Fixed encoding video with alpha losing the source's color space
+- Fixed `CanvasSource` and `MediaStreamVideoTrackSource` leaking a video frame per frame when `transform.frameRate` is set
 - Fixed an audio `process` function returning its input sample closing the caller's sample
 - Fixed empty audio samples making the encoder throw
 - Fixed a `MediaStreamVideoTrackSource` paused before its first frame throwing repeatedly
@@ -289,6 +302,8 @@
 - Fixed AV1 hidden key frames being determined as key packets
 - Fixed avcC records of some AVC profiles (like 4:4:4 from x264) losing their extension fields
 - Fixed hvcC records putting prefix and suffix SEI into one array
+- HEVC is now encoded with `hvc1` codec strings by default instead of `hev1`
+- HEVC codec strings read from ISOBMFF files now start with `hvc1` or `hev1` depending on the file's sample entry, instead of always `hev1`
 - Fixed missing color info for ProRes frames with a minimal frame header
 - Fixed ProRes video with an unknown color matrix being treated as RGB
 - Fixed 7.1 E-AC-3 being reported as 7 channels
@@ -361,6 +376,7 @@
 - `@mediabunny/prores`: Fixed flushing resolving before the last frames were emitted
 - `@mediabunny/prores`: Fixed 4:3 and 16:9 aspect ratios in the frame header being treated as pixel aspect ratios
 - `@mediabunny/server`: 4-channel AAC can now be encoded as ADTS
+- `@mediabunny/server`: Fixed `require('@mediabunny/server')` throwing
 - `@mediabunny/server`: Fixed wrong decoded audio timestamps for some time bases
 - `@mediabunny/server`: Fixed a crash for planar audio with more than 8 channels
 - `@mediabunny/server`: Fixed `VideoSample.transform()` emptying the source frame, dropping encode options and the color matrix and range, and leaking memory when copying failed
@@ -379,3 +395,6 @@
 - `@mediabunny/server`: Fixed encoded DTS being 512 samples late
 - `@mediabunny/server`: Fixed low quality settings being unsupported for DTS; such bitrates now encode at the lowest bitrate DTS allows
 - `@mediabunny/server`: Fixed AC-3, E-AC-3 and DTS encoding losing the end of the audio
+- `@mediabunny/server`: Fixed FLAC encoding reducing 24-bit and floating-point audio to 16 bits
+- `@mediabunny/server`: Fixed FLAC and TrueHD encoding adding silence to the end of the audio
+- `@mediabunny/server`: Fixed the video decoder ignoring the color space from the decoder config

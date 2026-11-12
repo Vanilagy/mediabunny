@@ -329,7 +329,7 @@ export const buildVideoCodecString = (
 
 		const constraintFlags = 'B0'; // Progressive source flag
 
-		return 'hev1.'
+		return 'hvc1.' // Prefer this over 'hev1'. It makes a stronger promise which some players like Apple's want
 			+ `${profilePrefix}${profileIdc}.`
 			+ `${compatibilityFlags}.`
 			+ `${levelInfo.tier}${levelInfo.level}.`
@@ -448,6 +448,7 @@ export const extractVideoCodecString = (trackInfo: {
 	colorSpace: VideoColorSpaceInit | null;
 	avcType: 1 | 3 | null;
 	avcCodecInfo: AvcDecoderConfigurationRecord | null;
+	hevcType: 'hev1' | 'hvc1' | null;
 	hevcCodecInfo: HevcDecoderConfigurationRecord | null;
 	vp9CodecInfo: Vp9CodecInfo | null;
 	av1CodecInfo: Av1CodecInfo | null;
@@ -483,6 +484,8 @@ export const extractVideoCodecString = (trackInfo: {
 
 		return `avc${trackInfo.avcType}.${bytesToHexString(codecDescription.subarray(1, 4))}`;
 	} else if (codec === 'hevc') {
+		assert(trackInfo.hevcType !== null);
+
 		let generalProfileSpace: number;
 		let generalProfileIdc: number;
 		let compatibilityFlags: number;
@@ -517,7 +520,7 @@ export const extractVideoCodecString = (trackInfo: {
 			}
 		}
 
-		let codecString = 'hev1.';
+		let codecString = `${trackInfo.hevcType}.`;
 
 		codecString += ['', 'A', 'B', 'C'][generalProfileSpace]! + generalProfileIdc;
 		codecString += '.';

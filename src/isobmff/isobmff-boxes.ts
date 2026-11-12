@@ -2101,6 +2101,7 @@ const dataStringBoxLong = (value: string) => {
 const videoCodecToBoxName = (codec: VideoCodec, fullCodecString: string) => {
 	switch (codec) {
 		case 'avc': return fullCodecString.startsWith('avc3') ? 'avc3' : 'avc1';
+		// Always hvc1, even for hev1 codec strings, since Apple's players refuse to play hev1
 		case 'hevc': return 'hvc1';
 		case 'vp8': return 'vp08';
 		case 'vp9': return 'vp09';

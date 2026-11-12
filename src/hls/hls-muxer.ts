@@ -1062,7 +1062,12 @@ export class HlsMuxer extends Muxer {
 				} else {
 					// Create the output for this segment
 					output = new Output({
-						format: playlist.segmentFormat,
+						// TEMP HACK: MP3 makes little sense with the Xing header, because many players interpret it
+						// as mid-stream silence. But it's enabled by defaulting, and changing that would be breaking.
+						// So, it's a hardcoded special case for now. In the future, we should deprecate arbitrary
+						// segment formats for HLS and switch to special HLS-specific segment formats which can carry
+						// their own logic.
+						format: playlist.segmentFormat._withoutXingHeader(),
 						target: new PathedTarget(
 							fullSegmentPath,
 							async (request: TargetRequest) => {

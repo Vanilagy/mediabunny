@@ -699,6 +699,7 @@ export class MpegTsDemuxer extends Demuxer {
 									colorSpace: elementaryStream.info.colorSpace,
 									avcType: 1,
 									avcCodecInfo: elementaryStream.info.avcCodecInfo,
+									hevcType: 'hev1',
 									hevcCodecInfo: elementaryStream.info.hevcCodecInfo,
 									vp9CodecInfo: null,
 									av1CodecInfo: null,

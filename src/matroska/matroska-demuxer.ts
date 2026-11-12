@@ -2902,6 +2902,7 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 				avcCodecInfo: this.internalTrack.info.codec === 'avc' && firstPacket
 					? extractAvcDecoderConfigurationRecord(firstPacket.data)
 					: null,
+				hevcType: 'hev1' as const, // Matroska doesn't promise that parameter sets stay out of the blocks
 				hevcCodecInfo: this.internalTrack.info.codec === 'hevc' && firstPacket
 					? extractHevcDecoderConfigurationRecord(firstPacket.data)
 					: null,

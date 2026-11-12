@@ -272,12 +272,6 @@ export class MatroskaInputFormat extends InputFormat {
 			}
 
 			switch (id) {
-				case EBMLId.EBMLVersion: {
-					const ebmlVersion = readUnsignedInt(dataSlice, size);
-					if (ebmlVersion !== 1) {
-						return false;
-					}
-				}; break;
 				case EBMLId.EBMLReadVersion: {
 					const ebmlReadVersion = readUnsignedInt(dataSlice, size);
 					if (ebmlReadVersion !== 1) {
@@ -290,9 +284,9 @@ export class MatroskaInputFormat extends InputFormat {
 						return false;
 					}
 				}; break;
-				case EBMLId.DocTypeVersion: {
-					const docTypeVersion = readUnsignedInt(dataSlice, size);
-					if (docTypeVersion > 4) { // Support up to Matroska v4
+				case EBMLId.DocTypeReadVersion: {
+					const docTypeReadVersion = readUnsignedInt(dataSlice, size);
+					if (docTypeReadVersion > 4) { // Support up to Matroska v4
 						return false;
 					}
 				}; break;

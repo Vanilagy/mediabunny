@@ -75,7 +75,7 @@ export class WaveDemuxer extends Demuxer {
 			// A RIFF size of 0 means the file was probably never finalized
 			let sizesUnfinalized = !isRf64 && outerChunkSize === 0;
 
-			let totalFileSize = isRf64 || sizesUnfinalized
+			let totalFileSize = isRf64 || sizesUnfinalized || outerChunkSize === 0xffffffff
 				? this.reader.fileSize
 				: Math.min(outerChunkSize + 8, this.reader.fileSize ?? Infinity);
 			const format = readAscii(slice, 4);
@@ -105,14 +105,16 @@ export class WaveDemuxer extends Demuxer {
 					await this.parseFmtChunk(startPos, chunkSize, littleEndian);
 				} else if (chunkId === 'data') {
 					dataChunkSize ??= chunkSize;
-					if (sizesUnfinalized && dataChunkSize === 0) {
+					if (
+						(sizesUnfinalized && dataChunkSize === 0)
+						|| (!isRf64 && dataChunkSize === 0xffffffff)
+					) {
 						// The data goes until the end of the file
 						dataChunkSize = Number.MAX_SAFE_INTEGER;
 						chunkSize = dataChunkSize;
 					}
 
-					this.dataSizeIsPlaceholder = dataChunkSize === Number.MAX_SAFE_INTEGER
-						|| (!isRf64 && dataChunkSize === 0xffffffff);
+					this.dataSizeIsPlaceholder = dataChunkSize === Number.MAX_SAFE_INTEGER;
 					if (isRf64) {
 						// The chunk's own size field is only a placeholder, so make sure to skip over the actual data
 						chunkSize = dataChunkSize;

@@ -268,6 +268,7 @@ test('AV1 level for a wide picture', () => {
 		colorSpace: null,
 		avcType: null,
 		avcCodecInfo: null,
+		hevcType: null,
 		hevcCodecInfo: null,
 		vp9CodecInfo: null,
 		av1CodecInfo: null,
@@ -285,6 +286,7 @@ test('VP9 codec info with level 0', () => {
 		colorSpace: null,
 		avcType: null,
 		avcCodecInfo: null,
+		hevcType: null,
 		hevcCodecInfo: null,
 		vp9CodecInfo: {
 			profile: 0,

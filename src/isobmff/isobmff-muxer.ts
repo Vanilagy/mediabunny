@@ -1648,17 +1648,17 @@ export class IsobmffMuxer extends Muxer {
 		const release = await this.mutex.acquire();
 
 		try {
+			const trackData = this.trackDatas.find(x => x.track === track);
+			if (trackData?.type === 'subtitle' && track.source._codec === 'webvtt') {
+				await this.processWebVTTCues(trackData, Infinity);
+			}
+			if (trackData?.type === 'audio' && trackData.info.pendingEac3Packets.length > 0) {
+				await this.writePendingEac3Packets(trackData);
+			}
+
 			this.closedTracks.add(track);
 
-			const trackData = this.trackDatas.find(x => x.track === track);
 			if (trackData) {
-				if (trackData.type === 'subtitle' && track.source._codec === 'webvtt') {
-					await this.processWebVTTCues(trackData, Infinity);
-				}
-				if (trackData.type === 'audio' && trackData.info.pendingEac3Packets.length > 0) {
-					await this.writePendingEac3Packets(trackData);
-				}
-
 				this.processTimestamps(trackData);
 			}
 
@@ -1745,8 +1745,6 @@ export class IsobmffMuxer extends Muxer {
 		this.ensureOneEnabledTrack();
 
 		for (const trackData of this.trackDatas) {
-			this.closedTracks.add(trackData.track);
-
 			if (trackData.type === 'subtitle' && trackData.track.source._codec === 'webvtt') {
 				await this.processWebVTTCues(trackData, Infinity);
 			}
@@ -1754,6 +1752,7 @@ export class IsobmffMuxer extends Muxer {
 				await this.writePendingEac3Packets(trackData);
 			}
 
+			this.closedTracks.add(trackData.track);
 			this.processTimestamps(trackData);
 		}
 
@@ -1880,6 +1879,8 @@ export class IsobmffMuxer extends Muxer {
 					this.writer.write(sample.data);
 					sample.data = null;
 				}
+
+				await this.writer.flush(); // Flush now so that the target doesn't buffer excessively
 			}
 
 			if (this.formatOptions.onMdat) {

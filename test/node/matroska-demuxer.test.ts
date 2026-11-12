@@ -12,8 +12,10 @@ import {
 	EncodedVideoPacketSource,
 	FilePathSource,
 	Input,
+	MATROSKA,
 	MkvOutputFormat,
 	Output,
+	UnsupportedInputFormatError,
 } from '../../src/index.js';
 import { EBMLId } from '../../src/matroska/ebml.js';
 import { assert } from '../../src/misc.js';
@@ -593,17 +595,34 @@ const createVideoFile = async (appendOnly: boolean) => {
 	return new Uint8Array(output.target.buffer!);
 };
 
+test('Header versions', async () => {
+	const segment = element(EBMLId.Segment, info(), tracks(videoTrack(1)), cluster(0, simpleBlock(1, 0, 0x80)));
+
+	// Only the read versions say whether a reader can handle the file, like when mkvmerge writes v5 elements
+	using input = new Input({
+		source: new BufferSource(concat(ebmlHeader(2, 5, 2), segment)),
+		formats: ALL_FORMATS,
+	});
+	expect(await input.getFormat()).toBe(MATROSKA);
+
+	using unreadableInput = new Input({
+		source: new BufferSource(concat(ebmlHeader(1, 5, 5), segment)),
+		formats: ALL_FORMATS,
+	});
+	await expect(unreadableInput.getFormat()).rejects.toThrow(UnsupportedInputFormatError);
+});
+
 type Bytes = Uint8Array | number[];
 
 const matroska = (...segmentChildren: Bytes[]) => concat(ebmlHeader(), element(EBMLId.Segment, ...segmentChildren));
 
-const ebmlHeader = () => element(
+const ebmlHeader = (ebmlVersion = 1, docTypeVersion = 4, docTypeReadVersion = 2) => element(
 	EBMLId.EBML,
-	uintElement(EBMLId.EBMLVersion, 1),
+	uintElement(EBMLId.EBMLVersion, ebmlVersion),
 	uintElement(EBMLId.EBMLReadVersion, 1),
 	element(EBMLId.DocType, ascii('matroska')),
-	uintElement(EBMLId.DocTypeVersion, 4),
-	uintElement(EBMLId.DocTypeReadVersion, 2),
+	uintElement(EBMLId.DocTypeVersion, docTypeVersion),
+	uintElement(EBMLId.DocTypeReadVersion, docTypeReadVersion),
 );
 
 const info = () => element(EBMLId.Info, uintElement(EBMLId.TimestampScale, 1e6));

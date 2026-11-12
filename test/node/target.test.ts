@@ -151,6 +151,25 @@ test('FilePathTarget write error', async () => {
 	expect(fileHandle.fd).toBe(-1);
 });
 
+test('Chunked StreamTarget with a single write spanning many chunks', async () => {
+	let bytesWritten = 0;
+	const target = new StreamTarget(new WritableStream({
+		write: (chunk) => {
+			bytesWritten += chunk.data.byteLength;
+		},
+	}), {
+		chunked: true,
+		chunkSize: 1024,
+	});
+	const writer = new Writer(target, true);
+	writer.start();
+	writer.write(new Uint8Array(1024 * 50_000));
+	await writer.flush();
+	await writer.finalize();
+
+	expect(bytesWritten).toBe(1024 * 50_000);
+});
+
 const createAdtsOutput = (target: Target) => {
 	const output = new Output({
 		format: new AdtsOutputFormat(),

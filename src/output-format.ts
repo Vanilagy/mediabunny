@@ -138,6 +138,11 @@ export abstract class OutputFormat {
 	_isFragmentedIsobmff() {
 		return false;
 	}
+
+	/** @internal */
+	_withoutXingHeader(): OutputFormat {
+		return this;
+	}
 }
 
 /**
@@ -758,6 +763,14 @@ export class Mp3OutputFormat extends OutputFormat {
 
 	get negativeTimestampSupport() {
 		return null;
+	}
+
+	/** @internal */
+	override _withoutXingHeader() {
+		return new Mp3OutputFormat({
+			...this._options,
+			xingHeader: false,
+		});
 	}
 }
 

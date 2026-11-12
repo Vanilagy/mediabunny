@@ -1697,6 +1697,26 @@ test.concurrent('Packet lookup before the first segment', async () => {
 	expect(await sink.getPacket(-0.75)).toBe(null);
 });
 
+test.concurrent('Packet lookup at packet timestamps with a media offset that is a fraction of a tick', async () => {
+	using input = createHlsInput({
+		'audio.m3u8': `#EXTM3U
+#EXT-X-TARGETDURATION:10
+#EXT-X-PROGRAM-DATE-TIME:2026-01-01T00:00:00.123Z
+#EXTINF:10,
+sample3.aac
+#EXT-X-ENDLIST
+`,
+	}, 'audio.m3u8');
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	const sink = new EncodedPacketSink(audioTrack);
+	for await (const packet of sink.packets()) {
+		expect((await sink.getPacket(packet.timestamp))?.timestamp).toBe(packet.timestamp);
+		expect((await sink.getKeyPacket(packet.timestamp))?.timestamp).toBe(packet.timestamp);
+	}
+});
+
 test.concurrent('EXTINF and EXT-X-BYTERANGE before EXT-X-MAP', async () => {
 	const files = await writeHls({
 		segmentFormat: new CmafOutputFormat(),

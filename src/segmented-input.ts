@@ -19,7 +19,7 @@ import {
 	InputVideoTrackBacking,
 } from './input-track';
 import { PacketRetrievalOptions } from './media-sink';
-import { arrayCount, assert, MaybePromise, roundToDivisor } from './misc';
+import { arrayCount, assert, MaybePromise, roundIfAlmostInteger, roundToDivisor } from './misc';
 import { EncodedPacket } from './packet';
 
 export type SegmentedInputMetadata = {
@@ -559,7 +559,7 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 				}
 			}
 
-			const offsetTimestamp = timestamp - mediaOffset;
+			const offsetTimestamp = toSegmentTimestamp(timestamp, mediaOffset, await track.getTimeResolution());
 			const packet = keyframesOnly
 				? await track._backing.getKeyPacket(offsetTimestamp, options)
 				: await track._backing.getPacket(offsetTimestamp, options);
@@ -603,7 +603,12 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 
 					if (nextPacket) {
 						const nextMediaOffset = await this.segmentedInput.getMediaOffset(nextSegment, nextInput);
-						if (nextPacket.timestamp + nextMediaOffset <= timestamp) {
+						const nextOffsetTimestamp = toSegmentTimestamp(
+							timestamp,
+							nextMediaOffset,
+							await nextTrack!.getTimeResolution(),
+						);
+						if (nextPacket.timestamp <= nextOffsetTimestamp) {
 							currentSegment = nextSegment;
 							continue;
 						}
@@ -617,6 +622,12 @@ class SegmentedInputInputTrackBacking implements InputTrackBacking {
 		return null;
 	}
 }
+
+const toSegmentTimestamp = (timestamp: number, mediaOffset: number, timeResolution: number) => {
+	// Mirrors the rounding in createAdjustedPacket
+	const tick = Math.floor(roundIfAlmostInteger(timeResolution * timestamp));
+	return (tick - Math.round(timeResolution * mediaOffset)) / timeResolution;
+};
 
 class SegmentedInputInputVideoTrackBacking
 	extends SegmentedInputInputTrackBacking

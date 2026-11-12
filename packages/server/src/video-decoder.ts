@@ -8,7 +8,13 @@
 
 import { CustomVideoDecoder, VideoCodec, EncodedPacket, VideoSample, type MaybePromise, Rational } from 'mediabunny';
 import * as NodeAv from 'node-av';
-import { CODEC_TO_CODEC_ID, getHardwareDecoderCodec } from './misc';
+import {
+	CODEC_TO_CODEC_ID,
+	getHardwareDecoderCodec,
+	mapColorPrimaries,
+	mapMatrixCoefficients,
+	mapTransferCharacteristics,
+} from './misc';
 import { assert, binarySearchLessOrEqual, simplifyRational, toUint8Array } from '../../../src/misc';
 import { AvFrameVideoSampleResource } from './video-sample';
 
@@ -168,6 +174,21 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 		NodeAv.FFmpegError.throwIfError(ret, 'Receive frame');
 
 		this.frame.sampleAspectRatio = new NodeAv.Rational(this.pixelAspectRatio.num, this.pixelAspectRatio.den);
+
+		// Any config-side color space overrides take precedence
+		const colorSpace = this.config.colorSpace;
+		if (colorSpace?.primaries) {
+			this.frame.colorPrimaries = mapColorPrimaries(colorSpace.primaries) ?? this.frame.colorPrimaries;
+		}
+		if (colorSpace?.transfer) {
+			this.frame.colorTrc = mapTransferCharacteristics(colorSpace.transfer) ?? this.frame.colorTrc;
+		}
+		if (colorSpace?.matrix) {
+			this.frame.colorSpace = mapMatrixCoefficients(colorSpace.matrix) ?? this.frame.colorSpace;
+		}
+		if (typeof colorSpace?.fullRange === 'boolean') {
+			this.frame.colorRange = colorSpace.fullRange ? NodeAv.AVCOL_RANGE_JPEG : NodeAv.AVCOL_RANGE_MPEG;
+		}
 
 		let timestamp = Number(this.frame.pts) / 1e6;
 		let duration = Number(this.frame.duration) / 1e6;

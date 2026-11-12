@@ -432,9 +432,14 @@ class VideoEncoderWrapper {
 					}
 				}
 
-				// Clone if the sample is still the user's, to avoid mutating externally-owned data
+				// Clone if the sample is still the original, to avoid mutating it
 				if (videoSample === originalSample) {
-					videoSample = videoSample.clone();
+					const clone = videoSample.clone();
+					if (shouldClose) {
+						videoSample.close();
+					}
+
+					videoSample = clone;
 					shouldClose = true;
 				}
 
@@ -844,6 +849,7 @@ class VideoEncoderWrapper {
 
 			this.encoderInitialized = true;
 		})();
+		this.ensureEncoderPromise.catch((error: unknown) => this.setError(error));
 	}
 
 	private createWebCodecsEncoders() {
@@ -993,6 +999,11 @@ class VideoEncoderWrapper {
 				avcCodecInfo: this.encodingConfig.codec === 'avc' && !meta.decoderConfig.description
 					? extractAvcDecoderConfigurationRecord(packet.data)
 					: null,
+				hevcType: encoderConfig.codec.includes('hev1.')
+					? 'hev1'
+					: encoderConfig.codec.includes('hvc1.')
+						? 'hvc1'
+						: null,
 				hevcCodecInfo: this.encodingConfig.codec === 'hevc' && !meta.decoderConfig.description
 					? extractHevcDecoderConfigurationRecord(packet.data)
 					: null,
@@ -1470,6 +1481,7 @@ const colorAlphaSplitterWorkerCode = () => {
 			codedHeight: height,
 			timestamp: sourceFrame.timestamp,
 			duration: sourceFrame.duration ?? undefined,
+			colorSpace: sourceFrame.colorSpace,
 		});
 		const alphaInit = {
 			format: alphaFormat,
@@ -2612,6 +2624,7 @@ class AudioEncoderWrapper {
 
 			this.encoderInitialized = true;
 		})();
+		this.ensureEncoderPromise.catch((error: unknown) => this.setError(error));
 	}
 
 	private initPcmEncoder() {

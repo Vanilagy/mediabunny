@@ -123,6 +123,22 @@ test('Single frame', async () => {
 	expect(await track.computePacketStats()).toMatchObject({ packetCount: 1 });
 });
 
+test('Packet lookup at packet end timestamps', async () => {
+	using input = new Input({
+		source: new BufferSource(concat(adtsFrames(100))),
+		formats: ALL_FORMATS,
+	});
+
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+	const sink = new EncodedPacketSink(track);
+
+	for (let i = 0; i < 99; i++) {
+		const packet = await sink.getPacket(1024 * i / 44100 + 1024 / 44100);
+		expect(packet!.sequenceNumber).toBe(i + 1);
+	}
+});
+
 const concat = (parts: Uint8Array[]) => {
 	const result = new Uint8Array(parts.reduce((sum, part) => sum + part.byteLength, 0));
 	let offset = 0;

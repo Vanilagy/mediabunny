@@ -820,6 +820,34 @@ test('In-memory Fast Start with an append-only target', async () => {
 	expect(timestamps).toEqual([0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]);
 });
 
+test('In-memory Fast Start writes the media data chunk by chunk', async () => {
+	const writeSizes: number[] = [];
+	const output = new Output({
+		format: new Mp4OutputFormat({ fastStart: 'in-memory' }),
+		target: new StreamTarget(new WritableStream({
+			write: (chunk) => {
+				writeSizes.push(chunk.data.byteLength);
+			},
+		})),
+	});
+
+	const source = new EncodedVideoPacketSource('vp8');
+	output.addVideoTrack(source);
+
+	await output.start();
+
+	for (let i = 0; i < 30; i++) {
+		const packet = new EncodedPacket(new Uint8Array(1000), i === 0 ? 'key' : 'delta', i / 10, 0.1);
+		await source.add(packet, vp8Meta);
+	}
+
+	await output.finalize();
+
+	// The ftyp box, then six chunks of half a second each, the first one preceded by the moov box
+	expect(writeSizes.length).toBe(7);
+	expect(writeSizes.slice(2)).toEqual(Array(5).fill(5000));
+});
+
 test('onMoov data with reserved Fast Start', async () => {
 	let moovData = null as Uint8Array | null;
 	const output = new Output({
@@ -1160,6 +1188,44 @@ test('WebVTT cue time box', async () => {
 		.map(box => new TextDecoder().decode(box));
 	expect(times).toEqual(['00:00:05.000']);
 });
+
+test('WebVTT cue alongside audio, fragmented MP4', async () => {
+	await testWebVttCueAlongsideAudio(false);
+});
+
+test('WebVTT cue alongside audio, fragmented MP4, closed tracks', async () => {
+	await testWebVttCueAlongsideAudio(true);
+});
+
+const testWebVttCueAlongsideAudio = async (closeTracks: boolean) => {
+	const output = new Output({
+		format: new Mp4OutputFormat({ fastStart: 'fragmented' }),
+		target: new BufferTarget(),
+	});
+
+	const audioSource = new EncodedAudioPacketSource('mp3');
+	const subtitleSource = new TextSubtitleSource('webvtt');
+	output.addAudioTrack(audioSource);
+	output.addSubtitleTrack(subtitleSource);
+
+	await output.start();
+
+	await subtitleSource.add('WEBVTT\n\n00:00.500 --> 00:01.500\nHello\n');
+	for (let i = 0; i < 100; i++) {
+		await audioSource.add(new EncodedPacket(new Uint8Array(100), 'key', 0.024 * i, 0.024), mp3Meta);
+	}
+
+	if (closeTracks) {
+		audioSource.close();
+		subtitleSource.close();
+	}
+
+	await output.finalize();
+
+	const payloads = findBoxes(new Uint8Array(output.target.buffer!), 'payl')
+		.map(box => new TextDecoder().decode(box));
+	expect(payloads).toEqual(['Hello']);
+};
 
 test('Failure while closing a track', async () => {
 	const output = new Output({
@@ -1691,4 +1757,39 @@ test('Opus with a demixing matrix', async () => {
 	const decoderConfig = await track.getDecoderConfig();
 	assert(decoderConfig);
 	expect([...new Uint8Array(decoderConfig.description as ArrayBuffer)]).toEqual([...description]);
+});
+
+test('HEVC codec string follows the sample entry', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '../public/video-h265.mp4')),
+		formats: ALL_FORMATS,
+	});
+	const inputTrack = await input.getPrimaryVideoTrack();
+	assert(inputTrack);
+	const decoderConfig = await inputTrack.getDecoderConfig();
+	assert(decoderConfig);
+	expect(decoderConfig.codec).toMatch(/^hev1\./);
+
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+	const source = new EncodedVideoPacketSource('hevc');
+	output.addVideoTrack(source);
+	await output.start();
+
+	const packet = await new EncodedPacketSink(inputTrack).getFirstPacket();
+	assert(packet);
+	await source.add(packet, { decoderConfig });
+	await output.finalize();
+
+	expect(findBox(new Uint8Array(output.target.buffer!), [...STSD_PATH, 'hvc1'])).not.toBeNull();
+
+	using rereadInput = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const rereadTrack = await rereadInput.getPrimaryVideoTrack();
+	assert(rereadTrack);
+	expect(await rereadTrack.getCodecParameterString()).toBe(decoderConfig.codec.replace('hev1.', 'hvc1.'));
 });

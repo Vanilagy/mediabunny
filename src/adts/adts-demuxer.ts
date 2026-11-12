@@ -30,6 +30,7 @@ import {
 	binarySearchExact,
 	binarySearchLessOrEqual,
 	isThenable,
+	roundIfAlmostInteger,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
@@ -386,10 +387,13 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 		const release = await this.demuxer.readingMutex.acquire();
 
 		try {
+			const sampleRate = this.getSampleRate();
+			const snappedTimestamp = roundIfAlmostInteger(timestamp * sampleRate) / sampleRate;
+
 			while (true) {
 				const index = binarySearchLessOrEqual(
 					this.demuxer.loadedSamples,
-					timestamp,
+					snappedTimestamp,
 					x => x.timestamp,
 				);
 				if (index === -1 && this.demuxer.loadedSamples.length > 0) {

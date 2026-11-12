@@ -371,3 +371,23 @@ const createApeTagHeaderOrFooter = (isHeader: boolean, itemsSize: number) => {
 
 	return bytes;
 };
+
+test('Packet lookup at packet end timestamps', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '..', 'public/Toothsome-Meme.VBRv2.mp3')),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+	const sink = new EncodedPacketSink(track);
+
+	const packets: EncodedPacket[] = [];
+	for await (const packet of sink.packets(undefined, undefined, { metadataOnly: true })) {
+		packets.push(packet);
+	}
+
+	for (const packet of packets.slice(0, -1)) {
+		const retrievedPacket = await sink.getPacket(packet.timestamp + packet.duration, { metadataOnly: true });
+		expect(retrievedPacket!.sequenceNumber).toBe(packet.sequenceNumber + 1);
+	}
+});

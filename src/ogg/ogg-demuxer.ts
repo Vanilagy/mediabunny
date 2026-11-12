@@ -806,8 +806,11 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 				}
 
 				// The page is valid and belongs to our bitstream; let's check its granule position to see where we
-				// need to take the bisection search.
-				if (this.granulePositionToTimestampInSamples(page.granulePosition) > timestampInSamples) {
+				// need to take the bisection search. A page cut off by the end of the file counts as too late.
+				if (
+					this.granulePositionToTimestampInSamples(page.granulePosition) > timestampInSamples
+					|| page.headerStartPos + page.totalSize > this.demuxer.reader.fileSize
+				) {
 					high = page.headerStartPos;
 				} else {
 					lowPage = page;

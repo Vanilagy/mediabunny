@@ -92,6 +92,41 @@ test('Empty packets', async () => {
 	})()).rejects.toThrow('empty packets are only allowed at the very end of a stream');
 });
 
+test('Truncated last page', async () => {
+	// Like a partial download, where the cut-off page ends in the middle of a packet, as is the norm for Vorbis
+	const pages = [
+		oggPage(2, 0, 0, [opusHead()]),
+		oggPage(0, 0, 1, [opusTags()]),
+	];
+	for (let i = 0; i < 20; i++) {
+		const segments = [opusPacket(2 * i, 100), opusPacket(2 * i + 1, 300).subarray(0, 255)];
+		if (i > 0) {
+			segments.unshift(opusPacket(2 * i - 1, 300).subarray(255));
+		}
+
+		pages.push(oggPage(i === 0 ? 0 : 1, OPUS_PACKET_DURATION * (2 * i + 1), pages.length, segments));
+	}
+	const file = concat(pages);
+
+	using input = new Input({
+		source: new BufferSource(file.subarray(0, file.length - 5)),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+	const sink = new EncodedPacketSink(track);
+
+	let lastPacket: EncodedPacket | null = null;
+	for await (const packet of sink.packets()) {
+		lastPacket = packet;
+	}
+	assert(lastPacket);
+	expect(lastPacket.data[1]).toBe(36);
+
+	expect((await sink.getPacket(Infinity))?.sequenceNumber).toBe(lastPacket.sequenceNumber);
+	expect(await track.computeDuration()).toBe(lastPacket.timestamp + lastPacket.duration);
+});
+
 const opusPacket = (index: number, size: number) => {
 	const packet = new Uint8Array(size).fill(index);
 	packet[0] = 0xf8;

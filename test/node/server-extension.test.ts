@@ -37,6 +37,7 @@ import { AvFrameVideoSampleResource } from '../../packages/server/src/video-samp
 import { AvFrameAudioSampleResource } from '../../packages/server/src/audio-sample.js';
 import { toAvFrame } from '../../packages/server/src/index.js';
 import * as NodeAv from 'node-av';
+import fs from 'node:fs';
 
 beforeAll(() => {
 	registerMediabunnyServer();
@@ -422,7 +423,7 @@ describe('Video', async () => {
 
 			if (i === 0) {
 				expect(meta.decoderConfig).toBeDefined();
-				expect(meta.decoderConfig!.codec.startsWith('hev1.')).toBe(true);
+				expect(meta.decoderConfig!.codec.startsWith('hvc1.')).toBe(true);
 				expect(meta.decoderConfig!.description).toBeDefined();
 				expect(toUint8Array(meta.decoderConfig!.description!)[0]).toBe(1); // configurationVersion
 			}
@@ -458,7 +459,7 @@ describe('Video', async () => {
 				expect(naluTypes).toContain(HevcNalUnitType.PPS_NUT);
 
 				expect(meta.decoderConfig).toBeDefined();
-				expect(meta.decoderConfig!.codec.startsWith('hev1.')).toBe(true);
+				expect(meta.decoderConfig!.codec.startsWith('hvc1.')).toBe(true);
 				expect(meta.decoderConfig!.description).toBeUndefined();
 			}
 		}, async (sample, i) => {
@@ -1355,6 +1356,27 @@ describe('Video', async () => {
 			expect(Math.abs(yuv[lumaSize + lumaSize / 4]! - 240)).toBeLessThanOrEqual(3);
 
 			for (const sample of samples.slice(1)) {
+				sample.close();
+			}
+
+			// Like with WebCodecs, each field of the decoder config's color space takes precedence over the bitstream's
+			const { primaries, transfer, matrix } = colorSpaces.find(x => x !== colorSpace)!;
+			const otherSamples = await decodePackets({
+				...decoderConfig,
+				colorSpace: {
+					primaries,
+					transfer,
+					matrix,
+				},
+			}, packets);
+			expectColorSpace(otherSamples[0]!.colorSpace, {
+				primaries,
+				transfer,
+				matrix,
+				fullRange: colorSpace.fullRange,
+			});
+
+			for (const sample of otherSamples) {
 				sample.close();
 			}
 		}
@@ -2548,9 +2570,10 @@ describe('Audio', async () => {
 	});
 
 	test('FLAC encode & decode', async () => {
-		await encodeDecodeTest('flac', {}, async (packet, meta, i) => {
+		await encodeDecodeTest('flac', {}, async (packet, meta, i, n) => {
 			expect(packet.type).toBe('key');
-			expect(packet.duration).toBe(0.096);
+			// The last frame only holds what's left of the 2 seconds
+			expect(packet.duration).toBe(i < n - 1 ? 0.096 : 0.08);
 
 			if (i === 0) {
 				expect(meta.decoderConfig).toBeDefined();
@@ -2563,10 +2586,10 @@ describe('Audio', async () => {
 					0x66, 0x4c, 0x61, 0x43,
 				]);
 			}
-		}, async (sample) => {
+		}, async (sample, i, n) => {
 			expect(sample.numberOfChannels).toBe(2);
 			expect(sample.sampleRate).toBe(48000);
-			expect(sample.duration).toBe(0.096);
+			expect(sample.duration).toBe(i < n - 1 ? 0.096 : 0.08);
 		});
 	});
 
@@ -2980,18 +3003,31 @@ describe('Audio', async () => {
 		})).toBe(false);
 	});
 
-	test('TrueHD keeps every channel intact', async () => {
-		for (const numberOfChannels of [3, 4]) {
-			const input = createNoise(48000 * numberOfChannels);
-			const decoded = await encodeAndDecodeAudio('truehd', numberOfChannels, input);
+	test('TrueHD and FLAC keep every channel intact', async () => {
+		for (const codec of ['truehd', 'flac'] as const) {
+			for (const numberOfChannels of [3, 4]) {
+				// Not a whole number of frames, so that the last frame is a short one
+				const length = 48007;
+				const input = createNoise(length * numberOfChannels);
+				const decoded = await encodeAndDecodeAudio(codec, numberOfChannels, input);
 
-			for (let channel = 0; channel < numberOfChannels; channel++) {
-				let maxError = 0;
-				for (let i = 0; i < 48000; i++) {
-					const error = Math.abs(decoded(channel, i) - input[i * numberOfChannels + channel]!);
-					maxError = Math.max(maxError, error);
+				for (let channel = 0; channel < numberOfChannels; channel++) {
+					let maxError = 0;
+					for (let i = 0; i < length; i++) {
+						const error = Math.abs(decoded(channel, i) - input[i * numberOfChannels + channel]!);
+						maxError = Math.max(maxError, error);
+					}
+					expect(maxError).toBeLessThan(1e-6);
 				}
-				expect(maxError).toBeLessThan(1e-6);
+
+				// No silence tacked onto the end
+				const { packets } = await encodeAudio(codec, {
+					codec: buildAudioCodecString(codec),
+					numberOfChannels,
+					sampleRate: 48000,
+				}, input);
+				const lastPacket = last(packets)!;
+				expect(lastPacket.timestamp + lastPacket.duration).toBeCloseTo(length / 48000, 10);
 			}
 		}
 	});
@@ -3399,4 +3435,13 @@ describe('Audio', async () => {
 		expect(await outputTrack.getNumberOfChannels()).toBe(2);
 		expect(await outputTrack.computeDuration()).toBeCloseTo(await track.computeDuration(), 1);
 	});
+});
+
+test('Bundles import @mediabunny/prores instead of inlining it', () => {
+	// The bundles are built by pre-test. Inlined, prores would require() turbores, which only has an import export.
+	for (const file of ['mediabunny-server.cjs', 'mediabunny-server.mjs']) {
+		const code = fs.readFileSync(`./packages/server/dist/bundles/${file}`, 'utf8');
+		expect(code).toMatch(/(require\(|from )"@mediabunny\/prores"/);
+		expect(code).not.toContain('turbores');
+	}
 });

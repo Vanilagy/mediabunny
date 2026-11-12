@@ -500,7 +500,9 @@ const expectSequentialPacketLookups = async (getTimestamp: (packet: EncodedPacke
 	for (const packet of packets) {
 		const timestamp = getTimestamp(packet);
 		const retrievedPacket = await sink.getPacket(timestamp, { metadataOnly: true });
-		expect(retrievedPacket?.sequenceNumber).toBe(packets.filter(x => x.timestamp <= timestamp).length - 1);
+		expect(retrievedPacket?.sequenceNumber).toBe(
+			packets.filter(x => Math.round(44100 * x.timestamp) <= Math.round(44100 * timestamp)).length - 1,
+		);
 	}
 };
 

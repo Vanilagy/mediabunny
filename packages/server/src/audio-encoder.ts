@@ -114,10 +114,13 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 
 		this.avCodec = codec;
 
-		await this.createCodecContext();
+		if (this.codec !== 'flac') {
+			// FLAC's bit depth depends on the first sample's format
+			await this.createCodecContext(null);
+		}
 	}
 
-	async createCodecContext() {
+	async createCodecContext(firstSample: AudioSample | null) {
 		assert(this.codecContext === null);
 
 		const codecContext = new NodeAv.CodecContext();
@@ -128,6 +131,15 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 		if (this.codec === 'truehd') {
 			// The first listed format is 16-bit, which would needlessly truncate what's supposed to be lossless
 			sampleFormat = NodeAv.AV_SAMPLE_FMT_S32P;
+		} else if (this.codec === 'flac') {
+			assert(firstSample);
+
+			if (firstSample.format.startsWith('u8') || firstSample.format.startsWith('s16')) {
+				sampleFormat = NodeAv.AV_SAMPLE_FMT_S16;
+			} else {
+				sampleFormat = NodeAv.AV_SAMPLE_FMT_S32;
+				codecContext.bitsPerRawSample = 24;
+			}
 		} else if (this.avCodec.sampleFormats && !this.avCodec.sampleFormats.includes(NodeAv.AV_SAMPLE_FMT_FLTP)) {
 			// Use a format that's supported
 			sampleFormat = this.avCodec.sampleFormats[0]!;
@@ -172,7 +184,7 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 
 	async encode(audioSample: AudioSample): Promise<void> {
 		if (this.codecContext === null) {
-			await this.createCodecContext();
+			await this.createCodecContext(audioSample);
 			assert(this.codecContext);
 		}
 
@@ -413,6 +425,20 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 
 			const frameSize = this.codecContext.frameSize || FRAME_SIZE_FALLBACK;
 			assert(currentOutSamples < frameSize); // Because if it's more, it would've already been retrieved
+
+			// Lossless codecs would keep silence padding as part of the audio, so they get a short last frame instead
+			if (this.codec === 'flac' || this.codec === 'truehd') {
+				assert(this.dstFrame);
+				assert(this.nextResamplerPts !== null);
+
+				const samples = await this.resampler.convert(this.dstFrame.data, frameSize, null, 0);
+				this.dstFrame.nbSamples = samples;
+				this.dstFrame.duration = BigInt(samples);
+				this.dstFrame.pts = this.nextResamplerPts;
+				await this.sendFrameAndReceivePackets(this.dstFrame);
+
+				break outer;
+			}
 
 			const inputSamplesNeeded = Math.ceil(
 				((frameSize - currentOutSamples) / this.codecContext.sampleRate) * this.resamplerInputSampleRate,

@@ -16,6 +16,7 @@ import {
 	AsyncMutex,
 	binarySearchLessOrEqual,
 	isThenable,
+	roundIfAlmostInteger,
 	textDecoder,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
@@ -681,11 +682,13 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		const release = await this.demuxer.readingMutex.acquire();
 
 		try {
+			const timestampInSamples = roundIfAlmostInteger(timestamp * this.demuxer.audioInfo.sampleRate);
+
 			while (true) {
 				const packetIndex = binarySearchLessOrEqual(
 					this.demuxer.loadedSamples,
-					timestamp,
-					x => x.blockOffset / this.demuxer.audioInfo!.sampleRate,
+					timestampInSamples,
+					x => x.blockOffset,
 				);
 				if (packetIndex === -1) {
 					if (this.demuxer.lastSampleLoaded) {
@@ -697,10 +700,7 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 				}
 
 				const packet = this.demuxer.loadedSamples[packetIndex]!;
-				const sampleEndTimestamp
-					= (packet.blockOffset + packet.blockSize) / this.demuxer.audioInfo.sampleRate;
-
-				if (sampleEndTimestamp <= timestamp) {
+				if (packet.blockOffset + packet.blockSize <= timestampInSamples) {
 					if (this.demuxer.lastSampleLoaded) {
 						return this.getPacketAtIndex(
 							this.demuxer.loadedSamples.length - 1,

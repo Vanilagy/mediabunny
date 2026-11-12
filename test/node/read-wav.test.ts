@@ -8,6 +8,7 @@ import {
 	AudioSampleSource,
 	BufferSource,
 	BufferTarget,
+	CustomSource,
 	EncodedAudioPacketSource,
 	EncodedPacket,
 	EncodedPacketSink,
@@ -98,6 +99,28 @@ test('Unsized source with overstated data size, lookups once the size is known',
 
 	expect(await track.computeDuration()).toBe(5000 / 8000);
 	expect((await sink.getPacket(1000))!.data.byteLength).toBe(2 * (5000 - 2 * 2048));
+});
+
+test('Over 4 GiB with all-ones sizes', async () => {
+	// What FFmpeg writes when it can't fall back to RF64
+	const header = pipedWav(0);
+	const dataSize = 2 ** 32 + 2 * 5000;
+
+	using input = new Input({
+		source: new CustomSource({
+			getSize: () => header.length + dataSize,
+			read: (start, end) => {
+				const bytes = new Uint8Array(end - start);
+				bytes.set(header.subarray(start, end));
+				return bytes;
+			},
+		}),
+		formats: ALL_FORMATS,
+	});
+	const track = (await input.getPrimaryAudioTrack())!;
+
+	expect(await track.getDurationFromMetadata()).toBe(dataSize / 2 / 8000);
+	expect(await track.computeDuration()).toBe(dataSize / 2 / 8000);
 });
 
 test('Unfinalized file with zero sizes', async () => {

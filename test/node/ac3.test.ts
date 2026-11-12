@@ -678,7 +678,13 @@ test('E-AC-3 dependent substreams in MPEG-TS', async () => {
 	expect(packets.map(x => x.duration)).toEqual(Array(accessUnitCount).fill(2880 / 90000));
 });
 
-const createEac3Frame = (options: { strmtyp: number; acmod: number; lfeon: number; chanmap: number | null }) => {
+const createEac3Frame = (options: {
+	strmtyp: number;
+	acmod: number;
+	lfeon: number;
+	chanmap: number | null;
+	numblkscod?: number;
+}) => {
 	const bytes = new Uint8Array(128);
 	const bitstream = new Bitstream(bytes);
 
@@ -687,7 +693,7 @@ const createEac3Frame = (options: { strmtyp: number; acmod: number; lfeon: numbe
 	bitstream.writeBits(3, 0); // substreamid
 	bitstream.writeBits(11, bytes.length / 2 - 1); // frmsiz
 	bitstream.writeBits(2, 0); // fscod
-	bitstream.writeBits(2, 3); // numblkscod
+	bitstream.writeBits(2, options.numblkscod ?? 3);
 	bitstream.writeBits(3, options.acmod);
 	bitstream.writeBits(1, options.lfeon);
 	bitstream.writeBits(5, 16); // bsid
@@ -826,6 +832,59 @@ test('E-AC-3 syncframes shorter than six blocks in MP4', async () => {
 	// Seeking lands on the right syncframe within an MP4 sample
 	const secondSyncframe = (await new EncodedPacketSink(track).getPacket(1.5 * syncframeDuration))!;
 	expect(secondSyncframe.timestamp).toBeCloseTo(syncframes[1]!.timestamp, 6);
+});
+
+test('Lone E-AC-3 syncframe shorter than six blocks alongside another track, fragmented MP4', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat({ fastStart: 'fragmented' }),
+		target: new BufferTarget(),
+	});
+
+	const eac3Source = new EncodedAudioPacketSource('eac3');
+	const mp3Source = new EncodedAudioPacketSource('mp3');
+	output.addAudioTrack(eac3Source);
+	output.addAudioTrack(mp3Source);
+	await output.start();
+
+	const eac3Frame = createEac3Frame({
+		strmtyp: 0,
+		acmod: 2,
+		lfeon: 0,
+		chanmap: null,
+		numblkscod: 2, // Three blocks
+	});
+	await eac3Source.add(new EncodedPacket(eac3Frame, 'key', 0, 0.016), {
+		decoderConfig: {
+			codec: 'ec-3',
+			numberOfChannels: 2,
+			sampleRate: 48000,
+		},
+	});
+
+	for (let i = 0; i < 100; i++) {
+		await mp3Source.add(new EncodedPacket(new Uint8Array(100), 'key', 0.024 * i, 0.024), {
+			decoderConfig: {
+				codec: 'mp3',
+				numberOfChannels: 2,
+				sampleRate: 48000,
+			},
+		});
+	}
+
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const eac3Track = (await input.getAudioTracks())[0]!;
+	expect(await eac3Track.getCodec()).toBe('eac3');
+
+	const packets: EncodedPacket[] = [];
+	for await (const packet of new EncodedPacketSink(eac3Track).packets()) {
+		packets.push(packet);
+	}
+	expect(packets.map(x => x.byteLength)).toEqual([eac3Frame.byteLength]);
 });
 
 test('AC-3 encoding with three channels', async () => {

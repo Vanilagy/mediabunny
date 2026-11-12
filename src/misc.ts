@@ -1287,8 +1287,10 @@ export const joinPaths = (basePath: FilePath, relativePath: FilePath) => {
 	const normalized: string[] = [];
 	for (const segment of segments) {
 		if (segment === '..') {
-			// Like browsers, never go above the root
-			if (normalized.length !== 1 || normalized[0] !== '') {
+			if (normalized.length === 0 || normalized[normalized.length - 1] === '..') {
+				normalized.push('..');
+			} else if (normalized.length !== 1 || normalized[0] !== '') {
+				// Like browsers, never go above the root
 				normalized.pop();
 			}
 		} else if (segment !== '.') {

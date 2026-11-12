@@ -4272,3 +4272,45 @@ test('RESOLUTION, anamorphic video', async () => {
 
 	expect(masterText).toContain(',RESOLUTION=1920x1080');
 });
+
+test('MP3 segments without a Xing frame', async () => {
+	using input = new Input({
+		source: new FilePathSource('./test/public/Toothsome-Meme.VBRv2.mp3'),
+		formats: ALL_FORMATS,
+	});
+	const inputTrack = await input.getPrimaryAudioTrack();
+	assert(inputTrack);
+	const decoderConfig = await inputTrack.getDecoderConfig();
+	assert(decoderConfig);
+
+	const segments: ArrayBuffer[] = [];
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new Mp3OutputFormat(),
+		}),
+		target: new PathedTarget('master.m3u8', (request) => {
+			const target = new BufferTarget();
+			if (request.path.startsWith('segment')) {
+				target.on('finalized', () => segments.push(target.buffer!));
+			}
+
+			return target;
+		}),
+	});
+	const source = audioSource('mp3');
+	output.addAudioTrack(source);
+
+	await output.start();
+	for await (const packet of new EncodedPacketSink(inputTrack).packets()) {
+		await source.add(packet, { decoderConfig });
+	}
+	await output.finalize();
+
+	expect(segments.length).toBeGreaterThan(1);
+
+	for (const segment of segments) {
+		const text = new TextDecoder('latin1').decode(segment);
+		expect(text.includes('Xing')).toBe(false);
+		expect(text.includes('Info')).toBe(false);
+	}
+});

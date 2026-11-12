@@ -5,6 +5,7 @@ import { BufferTarget, StreamTarget } from '../../src/target.js';
 import {
 	AudioBufferSource,
 	AudioSampleSource,
+	CanvasSource,
 	MediaStreamAudioTrackSource,
 	MediaStreamVideoTrackSource,
 	VideoSampleSource,
@@ -624,6 +625,35 @@ const readBackSamples = async (buffer: ArrayBuffer) => {
 	input.dispose();
 	return samples;
 };
+
+test('CanvasSource, transform.frameRate closes the captured frames', async () => {
+	const cloneSpy = vi.spyOn(VideoSample.prototype, 'clone');
+
+	try {
+		const output = new Output({
+			format: new Mp4OutputFormat(),
+			target: new BufferTarget(),
+		});
+		const source = new CanvasSource(makeCanvas(64, 64), {
+			codec: 'vp8',
+			quality: new Quality('medium'),
+			transform: { frameRate: 10 },
+		});
+		output.addVideoTrack(source);
+		await output.start();
+
+		for (let i = 0; i < 5; i++) {
+			await source.add(0.1 * i, 0.1);
+		}
+		await output.finalize();
+
+		const clonedSamples = cloneSpy.mock.contexts as VideoSample[];
+		expect(clonedSamples.length).toBeGreaterThan(0);
+		expect(clonedSamples.every(sample => sample._closed)).toBe(true);
+	} finally {
+		cloneSpy.mockRestore();
+	}
+});
 
 test('VideoSampleSource, fit from sizeChangeBehavior for frames of the original size', async () => {
 	const cornerPixels: number[][] = [];

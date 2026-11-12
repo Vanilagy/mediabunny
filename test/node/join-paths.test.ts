@@ -38,6 +38,10 @@ test('joinPaths', () => {
 		.toBe('https://example.com/a/other.m3u8');
 	expect(joinPaths('https://example.com/path/entry.m3u8', '../../other.m3u8'))
 		.toBe('https://example.com/other.m3u8');
+	expect(joinPaths('../entry.m3u8', 'other.m3u8')).toBe('../other.m3u8');
+	expect(joinPaths('../../path/entry.m3u8', '../other.m3u8')).toBe('../../other.m3u8');
+	expect(joinPaths('path/entry.m3u8', '../../other.m3u8')).toBe('../other.m3u8');
+	expect(joinPaths('/path/entry.m3u8', '../../other.m3u8')).toBe('/other.m3u8');
 
 	// Mixed ./ and ../
 	expect(joinPaths('path/to/entry.m3u8', './../other.m3u8')).toBe('path/other.m3u8');

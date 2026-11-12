@@ -30,6 +30,7 @@ const AAC_META = {
 };
 
 type TestEncoderBehavior = {
+	init?: () => void;
 	encode?: (encoder: TestVideoEncoder, sample: VideoSample, options: VideoEncoderEncodeOptions) => void;
 	flush?: (encoder: TestVideoEncoder) => void;
 };
@@ -42,7 +43,9 @@ class TestVideoEncoder extends CustomVideoEncoder {
 		return codec === 'vp9';
 	}
 
-	init() {}
+	init() {
+		testEncoderBehavior.init?.();
+	}
 
 	encode(sample: VideoSample, options: VideoEncoderEncodeOptions) {
 		testEncoderEvents.push('encode');
@@ -130,6 +133,20 @@ test('Custom encoder failing to encode', async () => {
 
 	await expect(output.finalize()).rejects.toThrow('Encoding failed.');
 	expect(testEncoderEvents).toEqual(['encode', 'close']);
+});
+
+test('Custom encoder failing to initialize', async () => {
+	useTestEncoder({
+		init: () => {
+			throw new Error('Initialization failed.');
+		},
+	});
+
+	const { output, source } = await startVideoOutput(new BufferTarget());
+	const addAssertion = expect(addSample(source, 0)).rejects.toThrow('Initialization failed.');
+
+	await expect(output.finalize()).rejects.toThrow('Initialization failed.');
+	await addAssertion;
 });
 
 test('Key frame request for a negative first timestamp', async () => {
@@ -304,6 +321,20 @@ test('Custom encoder close after a flush error', async () => {
 
 	await expect(output.finalize()).rejects.toThrow('Flush failed');
 	expect(events).toEqual(['encode', 'flush', 'close']);
+});
+
+test('Custom audio encoder failing to initialize', async () => {
+	useAudioEncoder(class extends TestAudioEncoder {
+		override init() {
+			throw new Error('Initialization failed.');
+		}
+	});
+
+	const { output, source } = await startAudioOutput();
+	const addAssertion = expect(source.add(makeAudioSample(0))).rejects.toThrow('Initialization failed.');
+
+	await expect(output.finalize()).rejects.toThrow('Initialization failed.');
+	await addAssertion;
 });
 
 test('Custom encoder init pending during cancel', async () => {

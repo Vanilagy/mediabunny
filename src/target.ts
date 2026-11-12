@@ -470,40 +470,45 @@ export class StreamTarget extends Target {
 
 	/** @internal */
 	_writeDataIntoChunks(data: Uint8Array, position: number) {
-		// First, find the chunk to write the data into, or create one if none exists
-		let chunkIndex = this._chunks.findIndex(x => x.start <= position && position < x.start + this._chunkSize);
-		if (chunkIndex === -1) chunkIndex = this._createChunk(position);
-		const chunk = this._chunks[chunkIndex]!;
+		while (true) {
+			// First, find the chunk to write the data into, or create one if none exists
+			let chunkIndex = this._chunks.findIndex(x => x.start <= position && position < x.start + this._chunkSize);
+			if (chunkIndex === -1) chunkIndex = this._createChunk(position);
+			const chunk = this._chunks[chunkIndex]!;
 
-		// Figure out how much to write to the chunk, and then write to the chunk
-		const relativePosition = position - chunk.start;
-		const toWrite = data.subarray(0, Math.min(this._chunkSize - relativePosition, data.byteLength));
-		chunk.data.set(toWrite, relativePosition);
+			// Figure out how much to write to the chunk, and then write to the chunk
+			const relativePosition = position - chunk.start;
+			const toWrite = data.subarray(0, Math.min(this._chunkSize - relativePosition, data.byteLength));
+			chunk.data.set(toWrite, relativePosition);
 
-		// Create a section describing the region of data that was just written to
-		const section: ChunkSection = {
-			start: relativePosition,
-			end: relativePosition + toWrite.byteLength,
-		};
-		this._insertSectionIntoChunk(chunk, section);
+			// Create a section describing the region of data that was just written to
+			const section: ChunkSection = {
+				start: relativePosition,
+				end: relativePosition + toWrite.byteLength,
+			};
+			this._insertSectionIntoChunk(chunk, section);
 
-		// Queue chunk for flushing to target if it has been fully written to
-		if (chunk.written[0]!.start === 0 && chunk.written[0]!.end === this._chunkSize) {
-			chunk.shouldFlush = true;
-		}
-
-		// Make sure we don't hold too many chunks in memory at once to keep memory usage down
-		if (this._chunks.length > MAX_CHUNKS_AT_ONCE) {
-			// Flush all but the last chunk
-			for (let i = 0; i < this._chunks.length - 1; i++) {
-				this._chunks[i]!.shouldFlush = true;
+			// Queue chunk for flushing to target if it has been fully written to
+			if (chunk.written[0]!.start === 0 && chunk.written[0]!.end === this._chunkSize) {
+				chunk.shouldFlush = true;
 			}
-			this._tryToFlushChunks();
-		}
 
-		// If the data didn't fit in one chunk, recurse with the remaining data
-		if (toWrite.byteLength < data.byteLength) {
-			this._writeDataIntoChunks(data.subarray(toWrite.byteLength), position + toWrite.byteLength);
+			// Make sure we don't hold too many chunks in memory at once to keep memory usage down
+			if (this._chunks.length > MAX_CHUNKS_AT_ONCE) {
+				// Flush all but the last chunk
+				for (let i = 0; i < this._chunks.length - 1; i++) {
+					this._chunks[i]!.shouldFlush = true;
+				}
+				this._tryToFlushChunks();
+			}
+
+			if (toWrite.byteLength === data.byteLength) {
+				break;
+			}
+
+			// The data didn't fit in one chunk, so continue with the remaining data
+			data = data.subarray(toWrite.byteLength);
+			position += toWrite.byteLength;
 		}
 	}
 
