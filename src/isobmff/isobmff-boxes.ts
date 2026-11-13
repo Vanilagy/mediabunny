@@ -649,7 +649,7 @@ export const hdlr = (
 	ascii(manufacturer), // Component manufacturer
 	u32(0), // Component flags
 	u32(0), // Component flags mask
-	isQuickTime ? [u8(name.length), ascii(name)] : ascii(name, true), // Component name, a counted string in QuickTime
+	isQuickTime ? [u8(name.length), ascii(name)] : ascii(name, true), // Component name, a Pascal string for QuickTime
 ]);
 
 /**
