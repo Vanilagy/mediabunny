@@ -35,7 +35,7 @@ export abstract class Muxer {
 	abstract finalize(): Promise<void>;
 
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
-	onTrackClose(track: OutputTrack) {}
+	async onTrackClose(track: OutputTrack) {}
 
 	private trackPacketOrderValidators = new WeakMap<OutputTrack, PacketOrderValidator>();
 
@@ -92,4 +92,17 @@ export class PacketOrderValidator {
 
 		return true;
 	}
+}
+
+export class NullMuxer extends Muxer {
+	async start() {}
+
+	async getMimeType() {
+		return 'application/x-black-hole';
+	}
+
+	async addEncodedVideoPacket() {}
+	async addEncodedAudioPacket() {}
+	async addSubtitleCue() {}
+	async finalize() {}
 }

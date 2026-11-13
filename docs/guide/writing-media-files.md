@@ -64,15 +64,15 @@ output.addAudioTrack(audioSourceEng, {
 	name: 'Developer Commentary', // Sets a user-defined track name
 	disposition: { commentary: true }, // Sets additional flags in the file
 });
-output.addAudioTrack(audioSourceGer, {
-	languageCode: 'ger',
+output.addAudioTrack(audioSourceDeu, {
+	languageCode: 'deu',
 });
 
 // This adds multiple subtitle tracks, all for different languages.
 output.addSubtitleTrack(subtitleSourceEng, { languageCode: 'eng' });
-output.addSubtitleTrack(subtitleSourceGer, { languageCode: 'ger' });
+output.addSubtitleTrack(subtitleSourceDeu, { languageCode: 'deu' });
 output.addSubtitleTrack(subtitleSourceSpa, { languageCode: 'spa' });
-output.addSubtitleTrack(subtitleSourceFre, { languageCode: 'fre' });
+output.addSubtitleTrack(subtitleSourceFra, { languageCode: 'fra' });
 output.addSubtitleTrack(subtitleSourceIta, { languageCode: 'ita' });
 ```
 

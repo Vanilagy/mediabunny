@@ -10,6 +10,14 @@ import { Quality } from '../../src/encode.js';
 import { EncodedPacketSink } from '../../src/media-sink.js';
 import { assert } from '../../src/misc.js';
 import { Conversion } from '../../src/conversion.js';
+import { EncodedPacket } from '../../src/packet.js';
+import { MpegTsMuxer } from '../../src/mpeg-ts/mpeg-ts-muxer.js';
+
+const AVC_DECODER_CONFIG: VideoDecoderConfig = {
+	codec: 'avc1.64001f',
+	codedWidth: 16,
+	codedHeight: 16,
+};
 
 test('MPEG-TS output format', async () => {
 	const format = new MpegTsOutputFormat();
@@ -118,7 +126,7 @@ test('MPEG-TS muxing with AVC and AAC', async () => {
 	const videoTrack = await input.getPrimaryVideoTrack();
 	assert(videoTrack);
 
-	expect(videoTrack.id).toBe(0x100);
+	expect(videoTrack.id).toBe(1);
 	expect(await videoTrack.getCodec()).toBe('avc');
 	expect(await videoTrack.getDisplayWidth()).toBe(640);
 	expect(await videoTrack.getDisplayHeight()).toBe(480);
@@ -134,7 +142,7 @@ test('MPEG-TS muxing with AVC and AAC', async () => {
 	const audioTrack = await input.getPrimaryAudioTrack();
 	assert(audioTrack);
 
-	expect(audioTrack.id).toBe(0x101);
+	expect(audioTrack.id).toBe(2);
 	expect(await audioTrack.getCodec()).toBe('aac');
 	expect(await audioTrack.getNumberOfChannels()).toBe(2);
 	expect(await audioTrack.getSampleRate()).toBe(48000);
@@ -288,7 +296,7 @@ test('MPEG-TS muxing with HEVC and MP3', async () => {
 	const videoTrack = await input.getPrimaryVideoTrack();
 	assert(videoTrack);
 
-	expect(videoTrack.id).toBe(0x100);
+	expect(videoTrack.id).toBe(1);
 	expect(await videoTrack.getCodec()).toBe('hevc');
 
 	const videoDecoderConfig = await videoTrack.getDecoderConfig();
@@ -300,7 +308,7 @@ test('MPEG-TS muxing with HEVC and MP3', async () => {
 	const audioTrack = await input.getPrimaryAudioTrack();
 	assert(audioTrack);
 
-	expect(audioTrack.id).toBe(0x101);
+	expect(audioTrack.id).toBe(2);
 	expect(await audioTrack.getCodec()).toBe('mp3');
 	expect(await audioTrack.getNumberOfChannels()).toBe(2);
 	expect(await audioTrack.getSampleRate()).toBe(24000);
@@ -533,8 +541,8 @@ test('MPEG-TS muxing with two video tracks', async () => {
 
 	expect(await videoTracks[0]!.getCodec()).toBe('hevc');
 	expect(await videoTracks[1]!.getCodec()).toBe('hevc');
-	expect(videoTracks[0]!.id).toBe(0x100);
-	expect(videoTracks[1]!.id).toBe(0x101);
+	expect(videoTracks[0]!.id).toBe(1);
+	expect(videoTracks[1]!.id).toBe(2);
 });
 
 test('MPEG-TS muxing with two audio tracks', async () => {
@@ -601,8 +609,8 @@ test('MPEG-TS muxing with two audio tracks', async () => {
 
 	expect(await audioTracks[0]!.getCodec()).toBe('aac');
 	expect(await audioTracks[1]!.getCodec()).toBe('aac');
-	expect(audioTracks[0]!.id).toBe(0x100);
-	expect(audioTracks[1]!.id).toBe(0x101);
+	expect(audioTracks[0]!.id).toBe(1);
+	expect(audioTracks[1]!.id).toBe(2);
 });
 
 test('MPEG-TS transmux (Annex B and ADTS passthrough)', async () => {
@@ -802,3 +810,194 @@ const testNegativeTimestampRoundTrip = async (timestamps: number[], duration: nu
 		}).toEqual(expectedPacket);
 	}
 };
+
+test('DTS with B-frames', async () => {
+	const output = new Output({
+		format: new MpegTsOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const source = new EncodedVideoPacketSource('avc');
+	output.addVideoTrack(source);
+	await output.start();
+
+	// Two GOPs in decode order, presentation times given in frames
+	const frames = [0, 3, 1, 2, 6, 4, 5, 7, 10, 8, 9];
+	for (let i = 0; i < frames.length; i++) {
+		const isKey = i === 0 || i === 7;
+		const packet = new EncodedPacket(
+			new Uint8Array([0, 0, 0, 1, isKey ? 0x65 : 0x41, 0x88]),
+			isKey ? 'key' : 'delta',
+			frames[i]! / 30,
+			1 / 30,
+		);
+
+		await source.add(packet, { decoderConfig: AVC_DECODER_CONFIG });
+	}
+
+	await output.finalize();
+
+	const pesPackets = readPesPackets(new Uint8Array(output.target.buffer!), 0x100);
+	expect(pesPackets.map(x => x.pts)).toEqual(frames.map(x => 3000 * x));
+	expect(pesPackets.map(x => x.dts)).toEqual([-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(x => 3000 * x));
+});
+
+test('HEVC access unit delimiter', async () => {
+	const output = new Output({
+		format: new MpegTsOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const source = new EncodedVideoPacketSource('hevc');
+	output.addVideoTrack(source);
+	await output.start();
+
+	// A lone IDR_W_RADL slice
+	const packet = new EncodedPacket(new Uint8Array([0, 0, 0, 1, 0x26, 0x01, 0xaf]), 'key', 0, 1 / 30);
+	await source.add(packet, {
+		decoderConfig: {
+			codec: 'hev1.1.6.L93.B0',
+			codedWidth: 16,
+			codedHeight: 16,
+		},
+	});
+
+	await output.finalize();
+
+	const pesPackets = readPesPackets(new Uint8Array(output.target.buffer!), 0x100);
+	expect(pesPackets).toHaveLength(1);
+	// AUD with pic_type 2 and its RBSP trailing bits, followed by the slice
+	expect([...pesPackets[0]!.data]).toEqual([0, 0, 0, 1, 0x46, 0x01, 0x50, 0, 0, 0, 1, 0x26, 0x01, 0xaf]);
+});
+
+const readPesPackets = (bytes: Uint8Array, pid: number) => {
+	const pesPackets: {
+		pts: number;
+		dts: number | null;
+		data: Uint8Array;
+	}[] = [];
+	let payloads: Uint8Array[] = [];
+
+	for (let pos = 0; pos < bytes.length; pos += 188) {
+		const packet = bytes.subarray(pos, pos + 188);
+		expect(packet[0]).toBe(0x47);
+
+		const packetPid = ((packet[1]! & 0x1f) << 8) | packet[2]!;
+		if (packetPid !== pid) {
+			continue;
+		}
+
+		const pusi = !!(packet[1]! & 0x40);
+		const hasAdaptationField = !!(packet[3]! & 0x20);
+		const adaptationFieldLength = packet[4]!;
+		const payload = packet.subarray(hasAdaptationField ? 5 + adaptationFieldLength : 4);
+
+		if (pusi && payloads.length > 0) {
+			pesPackets.push(parsePesPacket(payloads));
+			payloads = [];
+		}
+
+		payloads.push(payload);
+	}
+
+	if (payloads.length > 0) {
+		pesPackets.push(parsePesPacket(payloads));
+	}
+
+	return pesPackets;
+};
+
+const parsePesPacket = (payloads: Uint8Array[]) => {
+	const pes = new Uint8Array(payloads.reduce((a, b) => a + b.length, 0));
+	let offset = 0;
+	for (const payload of payloads) {
+		pes.set(payload, offset);
+		offset += payload.length;
+	}
+
+	expect([...pes.subarray(0, 3)]).toEqual([0, 0, 1]);
+
+	const ptsDtsFlags = pes[7]! >> 6;
+	const headerDataLength = pes[8]!;
+	expect(ptsDtsFlags & 0b10).toBe(0b10);
+
+	return {
+		pts: readTimestamp(pes.subarray(9)),
+		dts: ptsDtsFlags === 0b11 ? readTimestamp(pes.subarray(14)) : null,
+		data: pes.subarray(9 + headerDataLength),
+	};
+};
+
+const readTimestamp = (bytes: Uint8Array) => {
+	const high = (bytes[0]! >> 1) & 0x07;
+	const middle = (bytes[1]! << 7) | (bytes[2]! >> 1);
+	const low = (bytes[3]! << 7) | (bytes[4]! >> 1);
+	const value = 2 ** 30 * high + 2 ** 15 * middle + low;
+
+	// Values in the upper half are negative timestamps that were wrapped around
+	return value >= 2 ** 32 ? value - 2 ** 33 : value;
+};
+
+test('Write error while closing a track', async () => {
+	const output = new Output({
+		format: new MpegTsOutputFormat(),
+		target: new StreamTarget(new WritableStream({
+			write() {
+				throw new Error('Write failed');
+			},
+		})),
+	});
+
+	const source = new EncodedVideoPacketSource('avc');
+	output.addVideoTrack(source);
+	await output.start();
+
+	// The second key packet flushes out the first GOP, which errors the stream
+	for (let i = 0; i < 3; i++) {
+		const isKey = i !== 1;
+		const packet = new EncodedPacket(
+			new Uint8Array([0, 0, 0, 1, isKey ? 0x65 : 0x41, 0x88]),
+			isKey ? 'key' : 'delta',
+			i / 30,
+			1 / 30,
+		);
+
+		await source.add(packet, { decoderConfig: AVC_DECODER_CONFIG });
+	}
+
+	await new Promise(resolve => setTimeout(resolve));
+
+	// The error only surfaces with the next flush, which happens as the track closes
+	const muxer = output._muxer as MpegTsMuxer;
+	await expect(muxer.onTrackClose(output.tracks[0]!)).rejects.toThrow('Write failed');
+
+	await expect(output.finalize()).rejects.toThrow('Write failed');
+});
+
+test('Unrepresentable AAC channel configuration', async () => {
+	const output = new Output({
+		format: new MpegTsOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const source = new EncodedAudioPacketSource('aac');
+	output.addAudioTrack(source);
+	await output.start();
+
+	// Channel configuration 13 (22.2), too large for the 3-bit ADTS field
+	const addPacket = () => source.add(
+		new EncodedPacket(new Uint8Array(16), 'key', 0, 1024 / 48000),
+		{
+			decoderConfig: {
+				codec: 'mp4a.40.2',
+				numberOfChannels: 24,
+				sampleRate: 48000,
+				description: new Uint8Array([0x11, 0xe8, 0x56, 0xe5, 0x00]),
+			},
+		},
+	);
+	await expect(addPacket()).rejects.toThrow('channel configuration 13');
+
+	// The rejected packet should not leave the track half set up
+	await expect(addPacket()).rejects.toThrow('channel configuration 13');
+});

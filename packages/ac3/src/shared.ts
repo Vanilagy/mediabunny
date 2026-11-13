@@ -6,6 +6,15 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+export type DecodedChunk = {
+	pcmData: ArrayBuffer;
+	format: AudioSampleFormat;
+	channels: number;
+	sampleRate: number;
+	sampleCount: number;
+	pts: number | null;
+};
+
 export type WorkerCommand = {
 	type: 'init-decoder';
 	data: {
@@ -61,14 +70,10 @@ export type WorkerResponseData = {
 	frameSize: number;
 } | {
 	type: 'decode';
-	pcmData: ArrayBuffer;
-	format: AudioSampleFormat;
-	channels: number;
-	sampleRate: number;
-	sampleCount: number;
-	pts: number;
+	chunks: DecodedChunk[];
 } | {
 	type: 'flush-decoder';
+	chunks: DecodedChunk[];
 } | {
 	type: 'close-decoder';
 } | {

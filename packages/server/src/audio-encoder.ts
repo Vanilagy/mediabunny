@@ -24,7 +24,7 @@ import {
 	buildAdtsHeaderTemplate,
 	parseAacAudioSpecificConfig,
 } from '../../../shared/aac-misc';
-import { DTS_CHANNEL_COUNTS, DTS_SAMPLE_RATES, dtsBitrateFits } from '../../../shared/dts-misc';
+import { clampDtsBitrate, DTS_CHANNEL_COUNTS, DTS_SAMPLE_RATES } from '../../../shared/dts-misc';
 import { TRUEHD_CHANNEL_COUNTS, TRUEHD_SAMPLE_RATES } from '../../../shared/truehd-misc';
 
 const AAC_SAMPLE_RATES
@@ -33,7 +33,18 @@ const OPUS_SAMPLE_RATES = [8000, 12000, 16000, 24000, 48000];
 const MP3_SAMPLE_RATES = [8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000];
 const AC3_SAMPLE_RATES = [32000, 44100, 48000];
 
+const SUPPORTED_AAC_CHANNEL_COUNTS = [1, 2, 3, 4, 5, 6, 8];
+
 const FRAME_SIZE_FALLBACK = 1024; // Just 'cause
+
+const DTS_ENCODER_DELAY = 512; // In samples
+
+// How many samples these encoders hold back without ever flushing them on their own
+const UNFLUSHED_ENCODER_DELAYS: Partial<Record<AudioCodec, number>> = {
+	ac3: 256,
+	eac3: 256,
+	dts: DTS_ENCODER_DELAY,
+};
 
 export class NodeAvAudioEncoder extends CustomAudioEncoder {
 	frame!: NodeAv.Frame;
@@ -53,17 +64,18 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 		const { numberOfChannels, sampleRate } = config;
 
 		return (
-			codec === 'aac' && numberOfChannels >= 1 && numberOfChannels <= 48
+			codec === 'aac' && SUPPORTED_AAC_CHANNEL_COUNTS.includes(numberOfChannels)
 			&& AAC_SAMPLE_RATES.includes(sampleRate)
 		) || (
-			codec === 'opus' && numberOfChannels >= 1 && numberOfChannels <= 255
+			// Without an explicit mapping family, libopus only does up to 8 channels
+			codec === 'opus' && numberOfChannels >= 1 && numberOfChannels <= 8
 			&& OPUS_SAMPLE_RATES.includes(sampleRate)
 		) || (
 			codec === 'mp3' && numberOfChannels >= 1 && numberOfChannels <= 2
 			&& MP3_SAMPLE_RATES.includes(sampleRate)
 		) || (
-			codec === 'vorbis' && numberOfChannels >= 1 && numberOfChannels <= 255
-			&& sampleRate <= 200000
+			codec === 'vorbis' && numberOfChannels >= 1 && numberOfChannels <= 8
+			&& sampleRate <= 50000
 		) || (
 			codec === 'flac' && numberOfChannels >= 1 && numberOfChannels <= 8
 			&& sampleRate <= 655350
@@ -71,12 +83,11 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 			codec === 'ac3' && numberOfChannels >= 1 && numberOfChannels <= 6
 			&& AC3_SAMPLE_RATES.includes(sampleRate)
 		) || (
-			codec === 'eac3' && numberOfChannels >= 1 && numberOfChannels <= 16
+			codec === 'eac3' && numberOfChannels >= 1 && numberOfChannels <= 6
 			&& AC3_SAMPLE_RATES.includes(sampleRate)
 		) || (
 			codec === 'dts' && DTS_CHANNEL_COUNTS.includes(numberOfChannels)
 			&& DTS_SAMPLE_RATES.includes(sampleRate)
-			&& dtsBitrateFits(resolveBitrate(config, codec), sampleRate, numberOfChannels)
 		) || (
 			codec === 'truehd' && TRUEHD_CHANNEL_COUNTS.includes(numberOfChannels)
 			&& TRUEHD_SAMPLE_RATES.includes(sampleRate)
@@ -99,29 +110,48 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 
 		this.avCodec = codec;
 
-		await this.createCodecContext();
+		if (this.codec !== 'flac') {
+			// FLAC's bit depth depends on the first sample's format
+			await this.createCodecContext(null);
+		}
 	}
 
-	async createCodecContext() {
+	async createCodecContext(firstSample: AudioSample | null) {
 		assert(this.codecContext === null);
 
 		const codecContext = new NodeAv.CodecContext();
 		codecContext.allocContext3(this.avCodec);
+		codecContext.threadCount = 0; // Auto
 
 		let sampleFormat = NodeAv.AV_SAMPLE_FMT_FLTP;
 		if (this.codec === 'truehd') {
 			// The first listed format is 16-bit, which would needlessly truncate what's supposed to be lossless
 			sampleFormat = NodeAv.AV_SAMPLE_FMT_S32P;
+		} else if (this.codec === 'flac') {
+			assert(firstSample);
+
+			if (firstSample.format.startsWith('u8') || firstSample.format.startsWith('s16')) {
+				sampleFormat = NodeAv.AV_SAMPLE_FMT_S16;
+			} else {
+				sampleFormat = NodeAv.AV_SAMPLE_FMT_S32;
+				codecContext.bitsPerRawSample = 24;
+			}
 		} else if (this.avCodec.sampleFormats && !this.avCodec.sampleFormats.includes(NodeAv.AV_SAMPLE_FMT_FLTP)) {
 			// Use a format that's supported
 			sampleFormat = this.avCodec.sampleFormats[0]!;
 		}
+
+		const isAacOrAc3 = this.codec === 'aac' || this.codec === 'ac3' || this.codec === 'eac3';
 
 		codecContext.sampleRate = this.config.sampleRate;
 		if (this.codec === 'dts') {
 			codecContext.channelLayout = getDtsChannelLayout(this.config.numberOfChannels);
 		} else if (this.codec === 'truehd') {
 			codecContext.channelLayout = getTrueHdChannelLayout(this.config.numberOfChannels);
+		} else if (isAacOrAc3 && this.config.numberOfChannels === 3) {
+			codecContext.channelLayout = NodeAv.AV_CHANNEL_LAYOUT_SURROUND;
+		} else if (isAacOrAc3 && this.config.numberOfChannels === 5) {
+			codecContext.channelLayout = NodeAv.AV_CHANNEL_LAYOUT_5POINT0_BACK;
 		} else {
 			codecContext.channelLayout = getChannelLayout(this.config.numberOfChannels);
 		}
@@ -150,7 +180,7 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 
 	async encode(audioSample: AudioSample): Promise<void> {
 		if (this.codecContext === null) {
-			await this.createCodecContext();
+			await this.createCodecContext(audioSample);
 			assert(this.codecContext);
 		}
 
@@ -192,9 +222,12 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 				this.resamplerInputSampleRate = this.frame.sampleRate;
 
 				// Resample straight to whatever layout the encoder was opened with, since not every codec accepts
-				// the layout that getChannelLayout hands out for a given channel count
+				// the layout that getChannelLayout hands out for a given channel count. Same-count input just takes
+				// on that layout, since remixing it between two layouts could mix or drop channels.
 				const outLayout = this.codecContext.channelLayout;
-				const inLayout = getChannelLayout(this.frame.channels);
+				const inLayout = this.frame.channels === this.codecContext.channels
+					? outLayout
+					: getChannelLayout(this.frame.channels);
 
 				const ret = this.resampler.allocSetOpts2(
 					outLayout, this.codecContext.sampleFormat, this.codecContext.sampleRate,
@@ -276,7 +309,8 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 			return;
 		}
 
-		const timestamp = Number(this.packet.pts) / this.codecContext.sampleRate;
+		const delay = this.codec === 'dts' ? DTS_ENCODER_DELAY : 0;
+		const timestamp = (Number(this.packet.pts) - delay) / this.codecContext.sampleRate;
 		const duration = Number(this.packet.duration) / this.codecContext.sampleRate;
 
 		let data: Uint8Array = this.packet.data;
@@ -371,6 +405,15 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 		if (this.resampler) {
 			assert(this.resamplerInputSampleRate !== null);
 
+			const unflushedDelay = UNFLUSHED_ENCODER_DELAYS[this.codec];
+			if (unflushedDelay !== undefined) {
+				// Push the audio the encoder is still holding back out with silence
+				this.resampler.injectSilence(
+					Math.ceil((unflushedDelay / this.codecContext.sampleRate) * this.resamplerInputSampleRate),
+				);
+				await this.pullResampledFrames();
+			}
+
 			const currentOutSamples = this.resampler.getOutSamples(0);
 			if (currentOutSamples === 0) {
 				break outer; // Clean cut-off point
@@ -378,6 +421,20 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 
 			const frameSize = this.codecContext.frameSize || FRAME_SIZE_FALLBACK;
 			assert(currentOutSamples < frameSize); // Because if it's more, it would've already been retrieved
+
+			// Lossless codecs would keep silence padding as part of the audio, so they get a short last frame instead
+			if (this.codec === 'flac' || this.codec === 'truehd') {
+				assert(this.dstFrame);
+				assert(this.nextResamplerPts !== null);
+
+				const samples = await this.resampler.convert(this.dstFrame.data, frameSize, null, 0);
+				this.dstFrame.nbSamples = samples;
+				this.dstFrame.duration = BigInt(samples);
+				this.dstFrame.pts = this.nextResamplerPts;
+				await this.sendFrameAndReceivePackets(this.dstFrame);
+
+				break outer;
+			}
 
 			const inputSamplesNeeded = Math.ceil(
 				((frameSize - currentOutSamples) / this.codecContext.sampleRate) * this.resamplerInputSampleRate,
@@ -413,5 +470,8 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 }
 
 const resolveBitrate = (config: AudioEncoderConfig, codec: AudioCodec) => {
-	return config.bitrate ?? new Quality('medium')._toAudioBitrate(codec) ?? 0;
+	const bitrate = config.bitrate ?? new Quality('medium')._toAudioBitrate(codec, config.numberOfChannels) ?? 0;
+	return codec === 'dts'
+		? clampDtsBitrate(bitrate, config.sampleRate, config.numberOfChannels)
+		: bitrate;
 };

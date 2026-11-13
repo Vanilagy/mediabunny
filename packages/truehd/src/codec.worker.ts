@@ -108,6 +108,8 @@ const AV_FORMAT_MAP: Record<number, { format: AudioSampleFormat; bytesPerSample:
 	8: { format: 'f32-planar', bytesPerSample: 4, planar: true },
 };
 
+const AV_NOPTS_VALUE = -(BigInt(2) ** BigInt(63));
+
 const decode = (ctx: number, packets: { encodedData: ArrayBuffer; timestamp: number }[]) => {
 	const chunks: DecodedChunk[] = [];
 
@@ -144,7 +146,7 @@ const decode = (ctx: number, packets: { encodedData: ArrayBuffer; timestamp: num
 			const channels = getDecodedChannels(ctx);
 			const sampleRate = getDecodedSampleRate(ctx);
 			const sampleCount = getDecodedSampleCount(ctx);
-			const pts = Number(getDecodedPts(ctx));
+			const pts = getDecodedPts(ctx);
 
 			let pcmData: ArrayBuffer;
 			if (info.planar) {
@@ -169,7 +171,7 @@ const decode = (ctx: number, packets: { encodedData: ArrayBuffer; timestamp: num
 				channels,
 				sampleRate,
 				sampleCount,
-				pts,
+				pts: pts === AV_NOPTS_VALUE ? null : Number(pts),
 			});
 		}
 	}

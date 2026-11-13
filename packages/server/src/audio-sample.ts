@@ -75,7 +75,7 @@ export class AvFrameAudioSampleResource extends AudioSampleResource {
 	}
 
 	getTimestamp(): number {
-		return Number(this.frame.pts) / this.frame.timeBase.den;
+		return Number(this.frame.pts) * this.frame.timeBase.num / this.frame.timeBase.den;
 	}
 
 	close(): void {
@@ -84,8 +84,10 @@ export class AvFrameAudioSampleResource extends AudioSampleResource {
 	}
 
 	getDataPlane(planeIndex: number): Uint8Array {
-		assert(this.frame.data && planeIndex < this.frame.data.length);
-		return toUint8Array(this.frame.data[planeIndex]!);
+		// data only holds the first 8 planes, extendedData holds all of them
+		const planes = this.frame.extendedData;
+		assert(planes && planeIndex < planes.length);
+		return toUint8Array(planes[planeIndex]!);
 	}
 }
 
@@ -98,9 +100,11 @@ export const copyAudioSampleToAvFrame = (sample: AudioSample, frame: NodeAv.Fram
 	frame.channelLayout = getChannelLayout(sample.numberOfChannels);
 
 	frame.allocBuffer();
-	assert(frame.data);
 
-	for (let i = 0; i < frame.data.length; i++) {
-		sample.copyTo(frame.data[i]!, { planeIndex: i });
+	const planes = frame.extendedData;
+	assert(planes);
+
+	for (let i = 0; i < planes.length; i++) {
+		sample.copyTo(planes[i]!, { planeIndex: i });
 	}
 };

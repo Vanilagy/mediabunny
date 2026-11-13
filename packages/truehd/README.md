@@ -113,6 +113,6 @@ The build artifacts included in this repo, which are also the ones bundled into 
 - Emscripten 4.0.21 (`d6f42310010ddec0753a69bab01a4b33aae255b7`)
 - `src/bridge.c` of this package
 
-SHA-256 of the WASM binary inlined in `build/truehd.js`: `d8d329d3ca7e180d55d642a8efc3ed2c25cf4d71d820512fbb6ba85afbeda159`
+SHA-256 of the WASM binary inlined in `build/truehd.js`: `dcf9d0faee22eb08d39526cb8d8cbf65c8c551fcb84508990af329c063319596`
 
 FFmpeg is licensed under the LGPL v2.1 or later; this build enables no GPL, version 3 or nonfree components. Its license files are in [`licenses/ffmpeg`](./licenses/ffmpeg). To use a modified FFmpeg, rebuild using the steps above.

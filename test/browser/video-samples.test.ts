@@ -1,12 +1,12 @@
-import { expect, test } from 'vitest';
-import { VideoSample } from '../../src/sample.js';
+import { expect, test, vi } from 'vitest';
+import { VideoSample, VideoSampleColorSpace, VideoSampleInit, VideoSampleResource } from '../../src/sample.js';
 import { VideoSampleSource } from '../../src/media-source.js';
 import { Output } from '../../src/output.js';
 import { Mp4OutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
 import { Quality } from '../../src/encode.js';
 import { PacketType } from '../../src/packet.js';
-import { Rotation } from '../../src/misc.js';
+import { Rectangle, Rotation, SetRequired } from '../../src/misc.js';
 
 test('allocationSize', async () => {
 	{
@@ -420,6 +420,22 @@ test('crop (rect option) for ArrayBuffer-backed data', async () => {
 	}
 });
 
+test('copyTo RGB conversion failure closes temporary frame', async () => {
+	using sample = new VideoSample(new Uint8Array(4 * 4 * 3 / 2), {
+		format: 'I420',
+		codedWidth: 4,
+		codedHeight: 4,
+		timestamp: 0,
+	});
+	const toVideoFrameSpy = vi.spyOn(sample, 'toVideoFrame');
+
+	// Too small
+	await expect(sample.copyTo(new Uint8Array(4), { format: 'RGBA' })).rejects.toThrow();
+
+	const frame = toVideoFrameSpy.mock.results[0]!.value as VideoFrame;
+	expect(frame.format).toBe(null);
+});
+
 test('draw with flip', () => {
 	using sample = makeCoordinateSample({ flip: true });
 	const pixels = drawToPixels(sample, 4, 4);
@@ -467,8 +483,57 @@ test('transform with flip metadata and additional rotation', async () => {
 	expect(pixelAt(pixels, 4, 3, 0)).toEqual([3, 0]);
 });
 
+test('toVideoFrame with visibleRect offset', async () => {
+	using sample = makeCoordinateSample({ visibleRect: { left: 1, top: 2, width: 2, height: 2 } });
+
+	const frame = sample.toVideoFrame();
+	const data = new Uint8Array(frame.allocationSize());
+	await frame.copyTo(data);
+	frame.close();
+
+	expect(Array.from(data)).toEqual([
+		1, 2, 0, 255, 2, 2, 0, 255,
+		1, 3, 0, 255, 2, 3, 0, 255,
+	]);
+});
+
+test('drawWithFit with out-of-bounds crop', () => {
+	using sample = makeCoordinateSample({});
+
+	const canvas = new OffscreenCanvas(4, 4);
+	const context = canvas.getContext('2d', { willReadFrequently: true })!;
+	context.imageSmoothingEnabled = false;
+	sample.drawWithFit(context, {
+		fit: 'fill',
+		// Gets clamped to a width of 2
+		crop: { left: 2, top: 0, width: 4, height: 4 },
+	});
+
+	const pixels = context.getImageData(0, 0, 4, 4).data;
+	expect(pixelAt(pixels, 4, 0, 0)).toEqual([2, 0]);
+	expect(pixelAt(pixels, 4, 1, 0)).toEqual([2, 0]);
+	expect(pixelAt(pixels, 4, 2, 0)).toEqual([3, 0]);
+	expect(pixelAt(pixels, 4, 3, 0)).toEqual([3, 0]);
+});
+
+test('transform after a failed transform', async () => {
+	const closedSample = makeCoordinateSample({});
+	closedSample.close();
+	await expect(closedSample.transform({ flip: true })).rejects.toThrow('closed');
+
+	// Uses the same cached canvas as the failed transform
+	using sample = makeCoordinateSample({});
+	using transformed = await sample.transform({});
+
+	const pixels = drawToPixels(transformed, 4, 4);
+	expect(pixelAt(pixels, 4, 0, 0)).toEqual([0, 0]);
+	expect(pixelAt(pixels, 4, 1, 0)).toEqual([1, 0]);
+	expect(pixelAt(pixels, 4, 2, 0)).toEqual([2, 0]);
+	expect(pixelAt(pixels, 4, 3, 0)).toEqual([3, 0]);
+});
+
 /** 4x4 RGBA sample where each pixel's R/G channels encode its (x, y) position. */
-const makeCoordinateSample = (init: { rotation?: Rotation; flip?: boolean }) => {
+const makeCoordinateSample = (init: { rotation?: Rotation; flip?: boolean; visibleRect?: Rectangle }) => {
 	const data = new Uint8Array(4 * 4 * 4);
 	for (let y = 0; y < 4; y++) {
 		for (let x = 0; x < 4; x++) {
@@ -487,6 +552,7 @@ const makeCoordinateSample = (init: { rotation?: Rotation; flip?: boolean }) => 
 		timestamp: 0,
 		rotation: init.rotation,
 		flip: init.flip,
+		visibleRect: init.visibleRect,
 	});
 };
 
@@ -535,7 +601,7 @@ test('null format', async () => {
 	await sample.copyTo(buffer, { format: 'BGRX' });
 });
 
-test('encodeOptions', () => {
+test('encodeOptions', async () => {
 	const canvas = new OffscreenCanvas(100, 100);
 	canvas.getContext('2d');
 
@@ -550,6 +616,10 @@ test('encodeOptions', () => {
 	// Cloning carries the encode options over
 	using aClone = a.clone();
 	expect(aClone.encodeOptions).toEqual({ keyFrame: true });
+
+	// Transforming carries the encode options over
+	using aTransformed = await a.transform({ width: 2 });
+	expect(aTransformed.encodeOptions).toEqual({ keyFrame: true });
 
 	// It can be set via the constructor
 	using b = new VideoSample(canvas, { timestamp: 0, encodeOptions: { keyFrame: true } });
@@ -628,3 +698,55 @@ test('Treat non-standard VideoFrame color space values as unknown', () => {
 	expect(sample.colorSpace.matrix).toBe('smpte170m');
 	expect(sample.colorSpace.fullRange).toBe(true);
 });
+
+test('VideoSample from a closed VideoFrame', () => {
+	const frame = new VideoFrame(new Uint8Array(16), { format: 'RGBA', codedWidth: 2, codedHeight: 2, timestamp: 0 });
+	frame.close();
+
+	expect(() => new VideoSample(frame)).toThrow(TypeError);
+});
+
+test('toVideoFrame of a resource-backed sample without duration', () => {
+	using sample = new VideoSample(new TestVideoSampleResource(), { timestamp: 0 });
+	const frame = sample.toVideoFrame();
+	frame.close();
+
+	// Like for all other sample types, a 0 duration becomes no duration at all
+	expect(frame.duration).toBe(null);
+});
+
+class TestVideoSampleResource extends VideoSampleResource {
+	getFormat() {
+		return 'RGBA' as const;
+	}
+
+	getCodedWidth() {
+		return 2;
+	}
+
+	getCodedHeight() {
+		return 2;
+	}
+
+	getSquarePixelWidth() {
+		return 2;
+	}
+
+	getSquarePixelHeight() {
+		return 2;
+	}
+
+	getColorSpace() {
+		return new VideoSampleColorSpace();
+	}
+
+	getDataPlanes() {
+		return [{ data: new Uint8Array(2 * 2 * 4), stride: 2 * 4 }];
+	}
+
+	toRgbSample(init: SetRequired<VideoSampleInit, 'timestamp'>) {
+		return new VideoSample(this, init);
+	}
+
+	close() {}
+}

@@ -52,7 +52,7 @@ import {
 	Rotation,
 } from './misc';
 import { Output, OutputTrackGroup } from './output';
-import { Mp4OutputFormat } from './output-format';
+import { NullOutputFormat } from './output-format';
 import { EncodedPacket } from './packet';
 import {
 	AudioSample,
@@ -986,10 +986,6 @@ export class Conversion {
 
 		const outputTrackCounts = this.output.format.getSupportedTrackCounts();
 
-		// Input track counters
-		let nVideo = 1;
-		let nAudio = 1;
-
 		// All tracks that aren't discarded by the user
 		const filteredTracks: InputTrack[] = [];
 		const filteredTrackOptions: (ConversionVideoOptions | ConversionAudioOptions)[][] = [];
@@ -1000,7 +996,7 @@ export class Conversion {
 			if (track.isVideoTrack()) {
 				if (this._options.video) {
 					if (typeof this._options.video === 'function') {
-						const returnedTrackOptions = await this._options.video(track, nVideo) ?? {};
+						const returnedTrackOptions = await this._options.video(track, track.number) ?? {};
 						if (Array.isArray(returnedTrackOptions)) {
 							for (const obj of returnedTrackOptions) {
 								validateVideoOptions(obj);
@@ -1012,8 +1008,6 @@ export class Conversion {
 						trackOptions = Array.isArray(returnedTrackOptions)
 							? returnedTrackOptions
 							: [returnedTrackOptions];
-
-						nVideo++;
 					} else {
 						// Already validated
 						trackOptions = Array.isArray(this._options.video)
@@ -1026,7 +1020,7 @@ export class Conversion {
 			} else if (track.isAudioTrack()) {
 				if (this._options.audio) {
 					if (typeof this._options.audio === 'function') {
-						const returnedTrackOptions = await this._options.audio(track, nAudio) ?? {};
+						const returnedTrackOptions = await this._options.audio(track, track.number) ?? {};
 						if (Array.isArray(returnedTrackOptions)) {
 							for (const obj of returnedTrackOptions) {
 								validateAudioOptions(obj);
@@ -1038,8 +1032,6 @@ export class Conversion {
 						trackOptions = Array.isArray(returnedTrackOptions)
 							? returnedTrackOptions
 							: [returnedTrackOptions];
-
-						nAudio++;
 					} else {
 						// Already validated
 						trackOptions = Array.isArray(this._options.audio)
@@ -1239,8 +1231,12 @@ export class Conversion {
 			);
 
 			if (encodabilityIsTheProblem) {
-				const codecs = this.discardedTracks.flatMap((x) => {
-					if (x.reason === 'discarded_by_user') return [];
+				const codecs: MediaCodec[] = [];
+				const uncontainableCodecs: MediaCodec[] = [];
+				for (const x of this.discardedTracks) {
+					if (x.reason === 'discarded_by_user') {
+						continue;
+					}
 
 					let supportedCodecs: MediaCodec[];
 					if (x.track.type === 'video') {
@@ -1252,17 +1248,30 @@ export class Conversion {
 					}
 
 					// If the user requested a specific codec, only that codec was ever attempted
-					return supportedCodecs.filter(codec => !x.trackOptions.codec || codec === x.trackOptions.codec);
-				});
+					const requestedCodec = x.trackOptions.codec;
+					if (requestedCodec && !supportedCodecs.includes(requestedCodec)) {
+						uncontainableCodecs.push(requestedCodec);
+					} else {
+						codecs.push(...supportedCodecs.filter(codec => !requestedCodec || codec === requestedCodec));
+					}
+				}
 
 				const uniqueCodecs = [...new Set(codecs)];
+				const uniqueUncontainableCodecs = [...new Set(uncontainableCodecs)];
+
+				if (uniqueUncontainableCodecs.length > 0) {
+					elements.push(
+						'\nTracks were discarded because the output format cannot contain the requested codecs'
+						+ ` ${uniqueUncontainableCodecs.map(x => `'${x}'`).join(', ')}.`,
+					);
+				}
 
 				if (uniqueCodecs.length === 1) {
 					elements.push(
 						`\nTracks were discarded because your environment is not able to encode '${uniqueCodecs[0]}'`
 						+ ' with the provided parameters.',
 					);
-				} else {
+				} else if (uniqueCodecs.length > 1) {
 					elements.push(
 						'\nTracks were discarded because your environment is not able to encode any of the codecs'
 						+ ` ${uniqueCodecs.map(x => `'${x}'`).join(', ')} with the provided parameters.`,
@@ -1291,6 +1300,25 @@ export class Conversion {
 				if (uniqueCodecs.includes('flac')) {
 					elements.push(
 						'\nThe @mediabunny/flac-encoder extension package provides support for encoding FLAC.',
+					);
+				}
+
+				if (uniqueCodecs.includes('dts')) {
+					elements.push(
+						'\nThe @mediabunny/dts extension package provides support for encoding and decoding DTS.',
+					);
+				}
+
+				if (uniqueCodecs.includes('truehd')) {
+					elements.push(
+						'\nThe @mediabunny/truehd extension package provides support for encoding and decoding TrueHD.',
+					);
+				}
+
+				if (uniqueCodecs.length > 0 && typeof VideoEncoder === 'undefined') {
+					elements.push(
+						'\nIn server-side environments, the @mediabunny/server extension package provides support for'
+						+ ' encoding and decoding all common codecs.',
 					);
 				}
 			} else {
@@ -1370,58 +1398,57 @@ export class Conversion {
 			}
 		}
 
-		if (!this._executed) {
-			this._executed = true;
-
-			for (const id of this._outputTrackIds) {
-				this._synchronizer.declareTrack(id);
-			}
-
-			if (this.onProgress) {
-				// Compute duration using only the utilized tracks
-				const uniqueUtilizedTracks = new Set(this.utilizedTracks);
-				const durationPromises = [...uniqueUtilizedTracks].map(track => this._getTrackDuration(track));
-				const duration = Math.max(0, ...await Promise.all(durationPromises));
-
-				this._computeProgress = true;
-				this._totalDuration = Math.min(
-					duration - this._startTimestamp,
-					this._endTimestamp - this._startTimestamp,
-				);
+		try {
+			if (!this._executed) {
+				this._executed = true;
 
 				for (const id of this._outputTrackIds) {
-					// Used for progress calculation. We start these at 0 which is technically not always the first
-					// timestamp, but this is how we choose to model what "progress" means: it's how far we are done
-					// with the trim region.
-					this._maxTimestamps.set(id, 0);
+					this._synchronizer.declareTrack(id);
 				}
 
-				this.onProgress?.(0, 0);
+				if (this.onProgress) {
+					// Compute duration using only the utilized tracks
+					const uniqueUtilizedTracks = new Set(this.utilizedTracks);
+					const durationPromises = [...uniqueUtilizedTracks].map(track => this._getTrackDuration(track));
+					const duration = Math.max(0, ...await Promise.all(durationPromises));
+
+					this._computeProgress = true;
+					this._totalDuration = Math.min(
+						duration - this._startTimestamp,
+						this._endTimestamp - this._startTimestamp,
+					);
+
+					for (const id of this._outputTrackIds) {
+						// Used for progress calculation. We start these at 0 which is technically not always the first
+						// timestamp, but this is how we choose to model what "progress" means: it's how far we are
+						// done with the trim region.
+						this._maxTimestamps.set(id, 0);
+					}
+
+					this.onProgress?.(0, 0);
+				}
+
+				if (!this._composable) {
+					await this.output.start();
+				}
+
+				for (const pump of this._trackPumps) {
+					pump.start();
+				}
+			} else {
+				// Wake all suspended track pumps
+				for (const pump of this._trackPumps) {
+					pump.wake?.();
+				}
 			}
 
-			if (!this._composable) {
-				await this.output.start();
-			}
-
-			for (const pump of this._trackPumps) {
-				pump.start();
-			}
-		} else {
-			// Wake all suspended track pumps
-			for (const pump of this._trackPumps) {
-				pump.wake?.();
-			}
-		}
-
-		try {
 			await Promise.all(this._trackPumps.map(x => x.resolvers.promise));
 		} catch (error) {
 			if ((this._state as Conversion['_state']) !== 'canceled') {
 				// Make sure to cancel to stop other encoding processes and clean up resources
-				void this.cancel();
+				void this.cancel().catch(() => {});
+				throw error;
 			}
-
-			throw error;
 		} finally {
 			options.pauseSignal?.removeEventListener('abort', onPause);
 		}
@@ -1431,18 +1458,31 @@ export class Conversion {
 		}
 
 		const isDone = this._trackPumps.every(x => x.done);
-		this._state = isDone ? 'done' : 'idle';
+		if (!isDone) {
+			this._state = 'idle';
+			return;
+		}
 
-		if (isDone) {
-			if (!this._composable) {
+		if (!this._composable) {
+			try {
 				await this.output.finalize();
+			} catch (error) {
+				this._state = 'canceled';
+				throw error;
 			}
 
-			if (this._computeProgress) {
-				// By this point, all tracks have closed and removed themselves from _maxTimestamps, so we use the last
-				// processed time we saw while they were still open
-				this.onProgress?.(1, this._lastProcessedTime);
+			if ((this._state as Conversion['_state']) === 'canceled') {
+				// Canceled while finalizing, which the output doesn't stop anymore
+				throw new ConversionCanceledError();
 			}
+		}
+
+		this._state = 'done';
+
+		if (this._computeProgress) {
+			// By this point, all tracks have closed and removed themselves from _maxTimestamps, so we use the last
+			// processed time we saw while they were still open
+			this.onProgress?.(1, this._lastProcessedTime);
 		}
 	}
 
@@ -1780,7 +1820,7 @@ export class Conversion {
 					await this._checkpoint(pump, modifiedPacket.timestamp);
 				}
 
-				source.close();
+				source.close(); // No-op if a cancel already force-closed it
 				this._closeTrack(outputTrackId);
 			});
 		} else {
@@ -1852,7 +1892,7 @@ export class Conversion {
 				// now, this is the simplest way. Will refactor in the future! TODO
 
 				const tempOutput = new Output({
-					format: new Mp4OutputFormat(), // Supports all video codecs
+					format: new NullOutputFormat(),
 					target: new NullTarget(),
 				});
 
@@ -1928,7 +1968,10 @@ export class Conversion {
 					const clampedStartTimestamp = Math.max(this._startTimestamp, sample.timestamp);
 					const clampedEndTimestamp = Math.min(this._endTimestamp, sample.timestamp + sample.duration);
 
-					if (clampedStartTimestamp >= clampedEndTimestamp) {
+					if (
+						clampedStartTimestamp > clampedEndTimestamp
+						|| (clampedStartTimestamp === clampedEndTimestamp && sample.duration > 0)
+					) {
 						// Wholly out of the trim region
 						continue;
 					}
@@ -1949,7 +1992,7 @@ export class Conversion {
 					}
 				}
 
-				source.close();
+				source.close(); // No-op if a cancel already force-closed it
 				this._closeTrack(outputTrackId);
 			});
 		}
@@ -1972,14 +2015,16 @@ export class Conversion {
 
 		let maximumPacketCount = trackOptions.maximumPacketCount;
 		if (this.output.format.requiresMaximumPacketCount && maximumPacketCount === undefined) {
-			// Frames map 1:1 to packets, so the input's packet rate is a good stand-in unless the frame rate is changed
-			const packetRate = trackOptions.frameRate
-				?? (await track.computePacketStats(PACKET_STATS_PACKET_COUNT)).averagePacketRate;
 			const startTimestamp = needsTranscode
 				? this._startTimestamp
 				: copyStartPacket?.timestamp ?? this._startTimestamp;
 
-			maximumPacketCount = await this._estimateMaximumPacketCount(track, startTimestamp, packetRate);
+			// Frames map 1:1 to packets, so the input's packet rate is a good stand-in unless the frame rate is changed
+			maximumPacketCount = await this._estimateMaximumPacketCount(
+				track,
+				startTimestamp,
+				trackOptions.frameRate ?? null,
+			);
 		}
 
 		this.output.addVideoTrack(videoSource, {
@@ -2071,8 +2116,10 @@ export class Conversion {
 					)
 					|| (
 						this._copyBoundaryPolicy === 'expand'
-						// Check if packet is wholly before the start
+						// Check if the packet is wholly before the start
 						&& startPacket.timestamp + startPacket.duration <= this._startTimestamp
+						// With delta packets, the rest of the key packet's group may still reach past the start
+						&& await track.hasOnlyKeyPackets()
 					)
 				)
 			) {
@@ -2227,7 +2274,7 @@ export class Conversion {
 					await this._checkpoint(pump, modifiedPacket.timestamp);
 				}
 
-				source.close();
+				source.close(); // No-op if a cancel already force-closed it
 				this._closeTrack(outputTrackId);
 			});
 		} else {
@@ -2283,6 +2330,8 @@ export class Conversion {
 					outputCodec = nonPcmCodec;
 					numberOfChannels = FALLBACK_NUMBER_OF_CHANNELS;
 					sampleRate = FALLBACK_SAMPLE_RATE;
+				} else {
+					outputCodec = encodableCodecs[0] ?? null;
 				}
 			} else {
 				outputCodec = encodableCodecs[0] ?? null;
@@ -2371,29 +2420,37 @@ export class Conversion {
 					if (paddingLengthInSamples === null) {
 						paddingLengthInSamples = this.output.format.supportsTimestampedMediaData
 							? 0
-							: Math.round(finalSample.timestamp * originalSampleRate);
+							: Math.round(finalSample.timestamp * finalSample.sampleRate);
 					}
 
 					if (paddingLengthInSamples > 0) {
-						// Add one padding sample at the beginning
-						const bytesPerSample = getBytesPerSample(sample.format);
-						const data = new Uint8Array(bytesPerSample * paddingLengthInSamples * originalNumberOfChannels);
+						// Add padding samples at the beginning, at most a second each so long paddings don't need huge
+						// allocations. Their parameters come from the decoded sample rather than the track metadata,
+						// since these can differ (think implicitly signaled HE-AAC).
+						const bytesPerFrame = getBytesPerSample(sample.format) * finalSample.numberOfChannels;
+						const silence = new Uint8Array(
+							bytesPerFrame * Math.min(paddingLengthInSamples, finalSample.sampleRate),
+						);
 						if (sample.format === 'u8' || sample.format === 'u8-planar') {
-							data.fill(2 ** 7); // Fill it with the silent value
+							silence.fill(2 ** 7); // Fill it with the silent value
 						}
 
-						using silentSample = new AudioSample({
-							data,
-							// Use the same format the decoder is spitting out. This avoids feeding changing sample
-							// formats to the audio encoder.
-							format: sample.format,
-							numberOfChannels: originalNumberOfChannels,
-							sampleRate: originalSampleRate,
-							timestamp: 0,
-						});
-						await this._registerAudioSample(
-							pump, silentSample, source, outputTrackId, () => lastSampleTimestamp,
-						);
+						for (let offset = 0; offset < paddingLengthInSamples; offset += finalSample.sampleRate) {
+							const frameCount = Math.min(paddingLengthInSamples - offset, finalSample.sampleRate);
+							using silentSample = new AudioSample({
+								data: silence.subarray(0, bytesPerFrame * frameCount),
+								_doNotCopy: true,
+								// Use the same format the decoder is spitting out. This avoids feeding changing sample
+								// formats to the audio encoder.
+								format: sample.format,
+								numberOfChannels: finalSample.numberOfChannels,
+								sampleRate: finalSample.sampleRate,
+								timestamp: offset / finalSample.sampleRate,
+							});
+							await this._registerAudioSample(
+								pump, silentSample, source, outputTrackId, () => lastSampleTimestamp,
+							);
+						}
 
 						paddingLengthInSamples = 0;
 					}
@@ -2403,7 +2460,7 @@ export class Conversion {
 					);
 				}
 
-				source.close();
+				source.close(); // No-op if a cancel already force-closed it
 				this._closeTrack(outputTrackId);
 			});
 		}
@@ -2425,12 +2482,10 @@ export class Conversion {
 
 		let maximumPacketCount = trackOptions.maximumPacketCount;
 		if (this.output.format.requiresMaximumPacketCount && maximumPacketCount === undefined) {
-			let packetRate: number;
+			let packetRate: number | null = null;
 			if (needsTranscode) {
 				assert(outputCodec);
 				packetRate = sampleRate / getMinimumAudioPacketSize(outputCodec, sampleRate);
-			} else {
-				packetRate = (await track.computePacketStats(PACKET_STATS_PACKET_COUNT)).averagePacketRate;
 			}
 
 			const startTimestamp = needsTranscode
@@ -2459,7 +2514,17 @@ export class Conversion {
 	}
 
 	/** @internal */
-	async _estimateMaximumPacketCount(track: InputTrack, startTimestamp: number, packetRate: number) {
+	async _estimateMaximumPacketCount(track: InputTrack, startTimestamp: number, packetRate: number | null) {
+		if (packetRate === null) {
+			const stats = await track.computePacketStats(PACKET_STATS_PACKET_COUNT);
+			if (stats.averagePacketRate === Infinity) {
+				// All packets sit at a single instant, so the stats went through and counted every last one of them
+				return stats.packetCount;
+			}
+
+			packetRate = stats.averagePacketRate;
+		}
+
 		const endTimestamp = Math.min(await this._getTrackDuration(track), this._endTimestamp);
 		const duration = Math.max(endTimestamp - startTimestamp, 0);
 
@@ -2567,7 +2632,9 @@ export class Conversion {
 		assert(this._totalDuration !== null);
 
 		const minTimestamp = Math.min(...this._maxTimestamps.values());
-		const newProgress = clamp(minTimestamp / this._totalDuration, 0, 1);
+		const newProgress = this._totalDuration > 0
+			? clamp(minTimestamp / this._totalDuration, 0, 1)
+			: 0;
 
 		this._lastProcessedTime = minTimestamp;
 

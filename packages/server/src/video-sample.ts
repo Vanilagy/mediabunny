@@ -105,7 +105,10 @@ export class AvFrameVideoSampleResource extends VideoSampleResource {
 	}
 
 	getSquarePixelHeight(): number {
-		if (this.frame.sampleAspectRatio.num > this.frame.sampleAspectRatio.den) {
+		if (
+			this.frame.sampleAspectRatio.num > this.frame.sampleAspectRatio.den
+			|| this.frame.sampleAspectRatio.num === 0 // FFmpeg uses 0:1 for an unknown aspect ratio
+		) {
 			return this.frame.height;
 		} else {
 			return Math.round(this.frame.height * this.frame.sampleAspectRatio.den / this.frame.sampleAspectRatio.num);
@@ -204,7 +207,11 @@ export const copyVideoSampleToAvFrame = async (sample: VideoSample, frame: NodeA
 
 	frame.unref();
 
-	frame.format = fromPixelFormat(sample.format);
+	const widenFrom12To16Bit = sample.format === 'I420AP12'; // Need to widen this because of the missing pixel format
+
+	frame.format = widenFrom12To16Bit
+		? NodeAv.AV_PIX_FMT_YUVA420P16LE
+		: fromPixelFormat(sample.format);
 	frame.width = sample.codedWidth;
 	frame.height = sample.codedHeight;
 	frame.sampleAspectRatio = new NodeAv.Rational(
@@ -229,6 +236,14 @@ export const copyVideoSampleToAvFrame = async (sample: VideoSample, frame: NodeA
 	}
 
 	await sample.copyTo(lastBuffer);
+
+	if (widenFrom12To16Bit) {
+		const values = new Uint16Array(lastBuffer.buffer, lastBuffer.byteOffset, lastBuffer.byteLength / 2);
+		for (let i = 0; i < values.length; i++) {
+			values[i] = (values[i]! << 4) | (values[i]! >> 8);
+		}
+	}
+
 	frame.fromBuffer(lastBuffer);
 
 	return lastBuffer;
@@ -251,8 +266,6 @@ export const transformVideoSample = async (
 		srcFrame = new NodeAv.Frame();
 		srcFrame.alloc();
 		srcFrameOwned = true;
-
-		await copyVideoSampleToAvFrame(sample, srcFrame, null);
 	}
 
 	// Build the filter chain. Order: square-pixel normalize -> rotate -> flip -> crop -> resize-with-fit.
@@ -294,10 +307,36 @@ export const transformVideoSample = async (
 	graph.alloc();
 
 	try {
+		if (srcFrameOwned) {
+			await copyVideoSampleToAvFrame(sample, srcFrame, null);
+		}
+
+		if (description.alpha === 'discard') {
+			// Premultiplying the color by the alpha paints the frame onto black, after which the alpha plane can go
+			const formatName = NodeAv.avGetPixFmtName(srcFrame.format as NodeAv.AVPixelFormat);
+			assert(formatName);
+
+			const opaqueFormatName = formatName
+				.replace(/^yuva/, 'yuv')
+				.replace(/^gbrap/, 'gbrp')
+				.replace(/^ya8$/, 'gray')
+				.replace(/^ya16/, 'gray16')
+				.replace(/^(rgb|bgr)a64/, '$148')
+				.replace(/^(rgb|bgr)a/, '$10')
+				.replace(/^a(rgb|bgr)/, '0$1');
+
+			if (opaqueFormatName !== formatName) {
+				assert(NodeAv.avGetPixFmtFromName(opaqueFormatName) !== NodeAv.AV_PIX_FMT_NONE);
+				chain.splice(-1, 0, 'premultiply=inplace=1', `format=${opaqueFormatName}`);
+			}
+		}
+
 		const srcArgs = `video_size=${srcFrame.width}x${srcFrame.height}`
 			+ `:pix_fmt=${srcFrame.format}`
 			+ `:time_base=1/1000000`
-			+ `:pixel_aspect=${sample.pixelAspectRatio.num}/${sample.pixelAspectRatio.den}`;
+			+ `:pixel_aspect=${sample.pixelAspectRatio.num}/${sample.pixelAspectRatio.den}`
+			+ `:colorspace=${srcFrame.colorSpace}`
+			+ `:range=${srcFrame.colorRange}`;
 
 		const bufferSrc = graph.createFilter(NodeAv.Filter.getByName('buffer')!, 'src', srcArgs);
 		const bufferSink = graph.createFilter(NodeAv.Filter.getByName('buffersink')!, 'sink');
@@ -315,7 +354,8 @@ export const transformVideoSample = async (
 		const configRet = await graph.config();
 		NodeAv.FFmpegError.throwIfError(configRet, 'FilterGraph.config');
 
-		const addRet = await bufferSrc.buffersrcAddFrame(srcFrame);
+		// Without KEEP_REF, the graph would take the frame's buffers away from the sample
+		const addRet = await bufferSrc.buffersrcAddFrame(srcFrame, NodeAv.AV_BUFFERSRC_FLAG_KEEP_REF);
 		NodeAv.FFmpegError.throwIfError(addRet, 'buffersrcAddFrame');
 
 		// Flush - we only ever push a single frame through this graph.
@@ -333,6 +373,7 @@ export const transformVideoSample = async (
 			// Baked in by the filter graph:
 			rotation: 0,
 			flip: false,
+			encodeOptions: sample.encodeOptions,
 		});
 	} finally {
 		graph.free();

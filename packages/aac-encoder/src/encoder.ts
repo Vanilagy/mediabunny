@@ -50,6 +50,7 @@ class AacEncoder extends CustomAudioEncoder {
 	private pendingBuffer = new Float32Array(2 ** 16);
 	private pendingFrames = 0;
 	private nextSampleTimestampInSamples: number | null = null;
+	private inFlightEncode: Promise<void> | null = null;
 
 	static override supports(codec: AudioCodec, config: AudioEncoderConfig): boolean {
 		return codec === 'aac'
@@ -171,9 +172,14 @@ class AacEncoder extends CustomAudioEncoder {
 		this.pendingBuffer.set(incomingData, this.pendingFrames * channels);
 		this.pendingFrames += incomingFrames;
 
-		while (this.pendingFrames >= this.encoderFrameSize) {
-			await this.encodeOneFrame();
+		let encodedFrames = 0;
+		while (this.pendingFrames - encodedFrames >= this.encoderFrameSize) {
+			await this.encodeOneFrame(encodedFrames);
+			encodedFrames += this.encoderFrameSize;
 		}
+
+		this.pendingBuffer.copyWithin(0, encodedFrames * channels, this.pendingFrames * channels);
+		this.pendingFrames -= encodedFrames;
 	}
 
 	async flush() {
@@ -185,10 +191,13 @@ class AacEncoder extends CustomAudioEncoder {
 			const frameSamples = frameSize * channels;
 
 			this.pendingBuffer.fill(0, usedSamples, frameSamples);
-			this.pendingFrames = frameSize;
+			this.pendingFrames = 0;
 
-			await this.encodeOneFrame();
+			await this.encodeOneFrame(0);
 		}
+
+		await this.inFlightEncode;
+		this.inFlightEncode = null;
 
 		const result = await this.sendCommand({ type: 'flush', data: { ctx: this.ctx } });
 		this.emitPackets(result.packets);
@@ -200,34 +209,32 @@ class AacEncoder extends CustomAudioEncoder {
 		this.worker?.terminate();
 	}
 
-	private async encodeOneFrame() {
+	private async encodeOneFrame(startFrame: number) {
 		assert(this.nextSampleTimestampInSamples !== null);
 
 		const channels = this.numberOfChannels;
-		const frameSize = this.encoderFrameSize;
-		const frameSamples = frameSize * channels;
-
-		const frameData = this.pendingBuffer.slice(0, frameSamples);
-
-		// Shift remaining using copyWithin
-		this.pendingFrames -= frameSize;
-		if (this.pendingFrames > 0) {
-			this.pendingBuffer.copyWithin(0, frameSamples, frameSamples + this.pendingFrames * channels);
-		}
+		const frameData = this.pendingBuffer.slice(
+			startFrame * channels,
+			(startFrame + this.encoderFrameSize) * channels,
+		);
 
 		const audioData = frameData.buffer;
-		const result = await this.sendCommand({
+		const encode = this.sendCommand({
 			type: 'encode',
 			data: {
 				ctx: this.ctx,
 				audioData,
 				timestamp: this.nextSampleTimestampInSamples,
 			},
-		}, [audioData]);
+		}, [audioData]).then(result => this.emitPackets(result.packets));
+		encode.catch(() => {}); // Surfaces through whoever awaits it next
 
-		this.nextSampleTimestampInSamples += frameSize;
+		this.nextSampleTimestampInSamples += this.encoderFrameSize;
 
-		this.emitPackets(result.packets);
+		// Keep one frame in flight, so the worker already has the next frame by the time it's done with the current one
+		const previousEncode = this.inFlightEncode;
+		this.inFlightEncode = encode;
+		await previousEncode;
 	}
 
 	private emitPackets(packets: PacketInfo[]) {

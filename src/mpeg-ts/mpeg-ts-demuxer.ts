@@ -8,8 +8,13 @@
 
 import { TrackType } from '../output';
 import { SAMPLES_PER_AAC_FRAME } from '../adts/adts-demuxer';
-import { MAX_ADTS_FRAME_HEADER_SIZE, readAdtsFrameHeader } from '../adts/adts-reader';
-import { aacChannelMap, aacFrequencyTable } from '../../shared/aac-misc';
+import { MAX_ADTS_FRAME_HEADER_SIZE, MIN_ADTS_FRAME_HEADER_SIZE, readAdtsFrameHeader } from '../adts/adts-reader';
+import {
+	aacChannelMap,
+	aacFrequencyTable,
+	getAacProgramConfigElementChannelCount,
+	readAdtsProgramConfigElement,
+} from '../../shared/aac-misc';
 import {
 	AacCodecInfo,
 	AudioCodec,
@@ -169,7 +174,6 @@ type TsPacket = TsPacketHeader & {
 
 type Section = {
 	startPos: number;
-	endPos: number | null; // null if the section was not read fully
 	pid: number;
 	payload: Uint8Array<ArrayBufferLike>;
 	randomAccessIndicator: number;
@@ -252,22 +256,27 @@ export class MpegTsDemuxer extends Demuxer {
 					continue;
 				}
 
+				const isElementaryStreamPid = this.elementaryStreams.some(x => x.pid === packetHeader.pid);
 				const section = await this.readSection(
 					currentPos,
-					true,
+					!isElementaryStreamPid,
 					!hasProgramMap, // Expect contiguous sections as long as we don't have the PMT
 				);
 				if (!section) {
 					break;
 				}
 
-				const BYTES_BEFORE_SECTION_LENGTH = 3;
 				const BITS_IN_CRC_32 = 32; // Duh
 
-				// Some streams don't contain a PAT for some reason, so we must do some guesswork to figure out where
-				// the PMT is.
-				let isProbablyProgramMap = false;
-				if (!hasProgramMap && section.pid !== 0) {
+				// Some streams don't contain a PAT for some reason, so as long as we haven't seen one, we must do some
+				// guesswork to figure out where the PMT is. Either way, the PMT PID may also carry private sections, so
+				// the table ID tells us it's the PMT.
+				let isProgramMap = false;
+				if (
+					!hasProgramMap
+					&& section.pid !== 0
+					&& (programMapPid === null || section.pid === programMapPid)
+				) {
 					const isPesPacket
 						= section.payload[0] === 0x00 && section.payload[1] === 0x00 && section.payload[2] === 0x01;
 
@@ -280,7 +289,7 @@ export class MpegTsDemuxer extends Demuxer {
 						bitstream.skipBits(8 * pointerField);
 
 						const tableId = bitstream.readBits(8);
-						isProbablyProgramMap = tableId === 0x02; // 0x02 == TS_program_map_section
+						isProgramMap = tableId === 0x02; // 0x02 == TS_program_map_section
 					}
 				}
 
@@ -292,10 +301,11 @@ export class MpegTsDemuxer extends Demuxer {
 
 					bitstream.skipBits(14);
 					const sectionLength = bitstream.readBits(10);
+					const sectionEndPos = bitstream.pos + 8 * sectionLength;
 
 					bitstream.skipBits(40);
 
-					while (8 * (sectionLength + BYTES_BEFORE_SECTION_LENGTH) - bitstream.pos > BITS_IN_CRC_32) {
+					while (sectionEndPos - bitstream.pos > BITS_IN_CRC_32) {
 						const programNumber = bitstream.readBits(16);
 						bitstream.skipBits(3); // Reserved
 						const id = bitstream.readBits(13);
@@ -314,7 +324,7 @@ export class MpegTsDemuxer extends Demuxer {
 					}
 
 					hasProgramAssociationTable = true;
-				} else if ((section.pid === programMapPid || isProbablyProgramMap) && !hasProgramMap) {
+				} else if (isProgramMap) {
 					const bitstream = new Bitstream(section.payload);
 					const pointerField = bitstream.readAlignedByte();
 
@@ -322,6 +332,7 @@ export class MpegTsDemuxer extends Demuxer {
 
 					bitstream.skipBits(12);
 					const sectionLength = bitstream.readBits(12);
+					const sectionEndPos = bitstream.pos + 8 * sectionLength;
 
 					bitstream.skipBits(43);
 					// eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -354,7 +365,7 @@ export class MpegTsDemuxer extends Demuxer {
 
 					bitstream.pos = programInfoEndPos;
 
-					while (8 * (sectionLength + BYTES_BEFORE_SECTION_LENGTH) - bitstream.pos > BITS_IN_CRC_32) {
+					while (sectionEndPos - bitstream.pos > BITS_IN_CRC_32) {
 						const streamType = bitstream.readBits(8);
 						bitstream.skipBits(3);
 						const elementaryPid = bitstream.readBits(13);
@@ -521,8 +532,8 @@ export class MpegTsDemuxer extends Demuxer {
 					const elementaryStream = this.elementaryStreams.find(x => x.pid === section.pid);
 					outer:
 					if (elementaryStream && !elementaryStream.initialized) {
-						const pesPacket = readPesPacket(this, section, true);
-						if (!pesPacket) {
+						const pesPacketHeader = readPesPacketHeader(this, section, true);
+						if (!pesPacketHeader) {
 							throw new Error(
 								`Couldn't read first PES packet for Elementary Stream with PID ${elementaryStream.pid}`,
 							);
@@ -533,6 +544,12 @@ export class MpegTsDemuxer extends Demuxer {
 
 						if (this.input._initInput) {
 							const initDemuxer = (await this.input._initInput._getDemuxer()) as MpegTsDemuxer;
+							if (initDemuxer.constructor !== MpegTsDemuxer) {
+								throw new Error('Init input must match the input\'s format.');
+							}
+
+							await initDemuxer.readMetadata();
+
 							const matchingStream = initDemuxer.elementaryStreams.find(x => (
 								x.pid === section.pid && x.info.codec === elementaryStream.info.codec && x.initialized
 							));
@@ -545,7 +562,7 @@ export class MpegTsDemuxer extends Demuxer {
 							}
 						}
 
-						const context = new PacketReadingContext(elementaryStream, pesPacket);
+						const context = new PacketReadingContext(elementaryStream, section.startPos);
 
 						if (elementaryStream.info.type === 'video') {
 							// We loop because in some files, the video parameters are not in the first packet
@@ -681,6 +698,7 @@ export class MpegTsDemuxer extends Demuxer {
 									colorSpace: elementaryStream.info.colorSpace,
 									avcType: 1,
 									avcCodecInfo: elementaryStream.info.avcCodecInfo,
+									hevcType: 'hev1',
 									hevcCodecInfo: elementaryStream.info.hevcCodecInfo,
 									vp9CodecInfo: null,
 									av1CodecInfo: null,
@@ -724,8 +742,28 @@ export class MpegTsDemuxer extends Demuxer {
 									isMpeg2: false,
 									objectType: header.objectType,
 								};
-								elementaryStream.info.numberOfChannels
-									= aacChannelMap[header.channelConfiguration]!;
+
+								if (header.channelConfiguration === 0) {
+									// The channel layout comes from the PCE at the start of the frame's raw data block
+									const headerSize = header.crcCheck === null
+										? MIN_ADTS_FRAME_HEADER_SIZE
+										: MAX_ADTS_FRAME_HEADER_SIZE;
+									const result = readAdtsProgramConfigElement(
+										context.suppliedPacket.data.subarray(headerSize, header.frameLength),
+									);
+									if (!result) {
+										throw new Error(
+											'Invalid AAC audio stream; ADTS frames with channel configuration 0 must'
+											+ ' begin with a program config element.',
+										);
+									}
+
+									elementaryStream.info.numberOfChannels
+										= getAacProgramConfigElementChannelCount(result.programConfigElement);
+								} else {
+									elementaryStream.info.numberOfChannels
+										= aacChannelMap[header.channelConfiguration]!;
+								}
 								elementaryStream.info.sampleRate
 									= aacFrequencyTable[header.samplingFrequencyIndex]!;
 							} else if (elementaryStream.info.codec === 'mp3') {
@@ -880,15 +918,14 @@ export class MpegTsDemuxer extends Demuxer {
 			}
 
 			if (!firstPacket) {
-				if (packet.payloadUnitStartIndicator === 0) {
-					break;
-				}
-
+				assert(packet.payloadUnitStartIndicator === 1); // Callers only start sections at such packets
 				firstPacket = packet;
 			} else {
 				if (packet.pid !== firstPacket.pid) {
 					if (contiguous) {
-						break; // End of section
+						// The section may well continue after the foreign packets, so this isn't necessarily its end
+						mustAddSectionEnd = false;
+						break;
 					} else {
 						continue; // Ignore this packet
 					}
@@ -962,7 +999,6 @@ export class MpegTsDemuxer extends Demuxer {
 
 		return {
 			startPos,
-			endPos: full ? endPos : null,
 			pid: firstPacket.pid,
 			payload: merged,
 			randomAccessIndicator,
@@ -1053,20 +1089,11 @@ export class MpegTsDemuxer extends Demuxer {
 
 type PesPacketHeader = {
 	sectionStartPos: number;
-	sectionEndPos: number | null; // null if the section wasn't read fully
 	pts: number | null;
 	randomAccessIndicator: number;
 };
 
 type TimestampedPesPacketHeader = PesPacketHeader & {
-	pts: number;
-};
-
-type PesPacket = PesPacketHeader & {
-	data: Uint8Array<ArrayBufferLike>;
-};
-
-type TimestampedPesPacket = PesPacket & {
 	pts: number;
 };
 
@@ -1128,52 +1155,9 @@ const readPesPacketHeader = <T extends boolean>(
 
 	return {
 		sectionStartPos: section.startPos,
-		sectionEndPos: section.endPos,
 		pts,
 		randomAccessIndicator: section.randomAccessIndicator,
 	} as T extends true ? TimestampedPesPacketHeader : PesPacketHeader;
-};
-
-const readPesPacket = <T extends boolean>(
-	demuxer: MpegTsDemuxer,
-	section: Section,
-	expectPts: T,
-): (T extends true ? TimestampedPesPacket : PesPacket) | null => {
-	assert(section.endPos !== null); // Can only read full PES packets from fully read sections
-
-	const header = readPesPacketHeader(demuxer, section, expectPts);
-	if (!header) {
-		return null;
-	}
-
-	const bitstream = new Bitstream(section.payload);
-	bitstream.skipBits(32);
-	const pesPacketLength = bitstream.readBits(16);
-	const BYTES_UNTIL_END_OF_PES_PACKET_LENGTH = 6;
-
-	bitstream.skipBits(16);
-	const pesHeaderDataLength = bitstream.readBits(8);
-	const pesHeaderEndPos = bitstream.pos + 8 * pesHeaderDataLength;
-
-	bitstream.pos = pesHeaderEndPos;
-
-	const bytePos = pesHeaderEndPos / 8;
-	assert(Number.isInteger(bytePos));
-
-	const data = section.payload.subarray(
-		bytePos,
-		// "A value of 0 indicates that the PES packet length is neither specified nor bounded and is allowed only in
-		// PES packets whose payload consists of bytes from a video elementary stream contained in
-		// transport stream packets."
-		pesPacketLength > 0
-			? BYTES_UNTIL_END_OF_PES_PACKET_LENGTH + pesPacketLength
-			: section.payload.byteLength,
-	);
-
-	return {
-		...header,
-		data,
-	} as T extends true ? TimestampedPesPacket : PesPacket;
 };
 
 abstract class MpegTsTrackBacking implements InputTrackBacking {
@@ -1185,10 +1169,6 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 
 	abstract getType(): TrackType;
 	abstract getDecoderConfig(): Promise<VideoDecoderConfig | AudioDecoderConfig | null>;
-
-	getId() {
-		return this.elementaryStream.pid;
-	}
 
 	getNumber() {
 		const demuxer = this.elementaryStream.demuxer;
@@ -1296,10 +1276,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 		const section = this.elementaryStream.firstSection;
 		assert(section);
 
-		const pesPacket = readPesPacket(this.elementaryStream.demuxer, section, true);
-		assert(pesPacket);
-
-		const context = new PacketReadingContext(this.elementaryStream, pesPacket);
+		const context = new PacketReadingContext(this.elementaryStream, section.startPos);
 		const buffer = new PacketBuffer(this, context);
 
 		const result = await buffer.readNext();
@@ -1318,14 +1295,14 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 		let buffer = this.packetBuffers.get(packet);
 
 		if (buffer) {
-			// Fast path
+			// Remove PacketBuffer access from the old packet, it belongs to the next packet now. Remove it before any
+			// async to prevent races
+			this.packetBuffers.delete(packet);
+
 			const result = await buffer.readNext();
 			if (!result) {
 				return null;
 			}
-
-			// Remove PacketBuffer access from the old packet, it belongs to the next packet now
-			this.packetBuffers.delete(packet);
 
 			const newPacket = this.createEncodedPacket(result.packet, result.duration, options);
 			this.packetBuffers.set(newPacket, buffer);
@@ -1341,13 +1318,32 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 		}
 
 		const demuxer = this.elementaryStream.demuxer;
-		const section = await demuxer.readSection(sectionStartPos, true);
-		assert(section);
 
-		const pesPacket = readPesPacket(demuxer, section, true);
-		assert(pesPacket);
+		// Rewind by reorderSize PES packets, since the reordering (and with it the packet durations) depends on the
+		// packets decoded before this one
+		let startPos = sectionStartPos;
+		let pesPacketsToRewind = this.getReorderSize();
+		let pos = sectionStartPos - demuxer.packetStride;
 
-		const context = new PacketReadingContext(this.elementaryStream, pesPacket);
+		while (pesPacketsToRewind > 0 && pos >= demuxer.packetOffset) {
+			const packetHeader = await demuxer.readPacketHeader(pos);
+			assert(packetHeader);
+
+			if (packetHeader.pid === this.elementaryStream.pid && packetHeader.payloadUnitStartIndicator === 1) {
+				const pesSection = await demuxer.readSection(pos, false);
+				assert(pesSection);
+
+				const pesHeader = readPesPacketHeader(demuxer, pesSection, false);
+				if (pesHeader && pesHeader.pts !== null) {
+					startPos = pos;
+					pesPacketsToRewind--;
+				}
+			}
+
+			pos -= demuxer.packetStride;
+		}
+
+		const context = new PacketReadingContext(this.elementaryStream, startPos);
 		buffer = new PacketBuffer(this, context);
 
 		// Advance until we pass the current packet's sequence number
@@ -1409,11 +1405,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 		const { reader, seekChunkSize } = demuxer;
 		const pid = this.elementaryStream.pid;
 
-		const findFirstPesPacketHeaderInChunk = async (
-			startPos: number,
-			endPos: number,
-			readSectionInFull: boolean,
-		) => {
+		const findFirstPesPacketHeaderInChunk = async (startPos: number, endPos: number) => {
 			let currentPos = startPos;
 
 			while (currentPos < endPos) {
@@ -1423,17 +1415,14 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 				}
 
 				if (packetHeader.pid === pid && packetHeader.payloadUnitStartIndicator === 1) {
-					const section = await demuxer.readSection(currentPos, readSectionInFull);
+					const section = await demuxer.readSection(currentPos, false);
 					if (!section) {
 						return null;
 					}
 
 					const pesPacketHeader = readPesPacketHeader(demuxer, section, false);
 					if (pesPacketHeader && pesPacketHeader.pts !== null) {
-						return {
-							pesPacketHeader: pesPacketHeader as TimestampedPesPacketHeader,
-							section,
-						};
+						return pesPacketHeader as TimestampedPesPacketHeader;
 					}
 				}
 
@@ -1449,11 +1438,6 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 		const firstPesPacketHeader = readPesPacketHeader(demuxer, firstSection, true);
 		assert(firstPesPacketHeader);
 
-		if (searchPts < firstPesPacketHeader.pts) {
-			// We're before the first packet, definitely nothing here
-			return null;
-		}
-
 		let scanStartPos: number;
 
 		const referencePesPackets = this.elementaryStream.referencePesPackets;
@@ -1465,7 +1449,12 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 		} else {
 			let startChunkIndex = 0;
 
-			if (reader.fileSize !== null) {
+			if (
+				reader.fileSize !== null
+				// Packets presented before the first PES packet can only be leading frames right after it (think open
+				// GOPs), so those don't need any searching
+				&& searchPts >= firstPesPacketHeader.pts
+			) {
 				const numChunks = Math.ceil(reader.fileSize / seekChunkSize);
 
 				if (numChunks > 1) {
@@ -1480,15 +1469,15 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 							+ firstPesPacketHeader.sectionStartPos;
 						const chunkEndPos = chunkStartPos + seekChunkSize;
 
-						const result = await findFirstPesPacketHeaderInChunk(chunkStartPos, chunkEndPos, false);
+						const pesPacketHeader = await findFirstPesPacketHeaderInChunk(chunkStartPos, chunkEndPos);
 
-						if (!result) {
+						if (!pesPacketHeader) {
 							// No PES packet found in this chunk, search left
 							high = mid - 1;
 							continue;
 						}
 
-						if (result.pesPacketHeader.pts <= searchPts) {
+						if (pesPacketHeader.pts <= searchPts) {
 							// This chunk's first PES is <= searchPts, it's a candidate
 							startChunkIndex = mid;
 							low = mid + 1; // Search right
@@ -1507,13 +1496,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 		}
 
 		// Find the first PES packet at or after scanStartPos
-		const result = await findFirstPesPacketHeaderInChunk(
-			scanStartPos,
-			reader.fileSize ?? Infinity,
-			false,
-		);
-
-		let currentPesHeader = result?.pesPacketHeader ?? null;
+		let currentPesHeader = await findFirstPesPacketHeaderInChunk(scanStartPos, reader.fileSize ?? Infinity);
 		if (!currentPesHeader) {
 			// Fall back to first packet
 			currentPesHeader = firstPesPacketHeader;
@@ -1525,14 +1508,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 			sectionStartPos: number,
 			predicate: (packet: SuppliedPacket) => boolean,
 		) => {
-			// Load the relevant section in full
-			const section = await demuxer.readSection(sectionStartPos, true);
-			assert(section);
-
-			const pesPacket = readPesPacket(demuxer, section, true);
-			assert(pesPacket);
-
-			const context = new PacketReadingContext(this.elementaryStream, pesPacket);
+			const context = new PacketReadingContext(this.elementaryStream, sectionStartPos);
 			const buffer = new PacketBuffer(this, context);
 
 			// Advance until the top-most presentation timestamp crosses or equals searchPts
@@ -1554,13 +1530,9 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 			}
 
 			const targetPacket = buffer.presentationOrderPackets[targetIndex]!;
-			const lastDuration = targetIndex === 0
-				? 0
-				: targetPacket.pts - buffer.presentationOrderPackets[targetIndex - 1]!.pts;
 
 			// Pop packets in decode order until we hit the target packet
 			buffer.decodeOrderPackets.splice(0, buffer.decodeOrderPackets.indexOf(targetPacket));
-			buffer.lastDuration = lastDuration; // Kinda ugly but necessary fix
 
 			const result = await buffer.readNext();
 			assert(result);
@@ -1609,12 +1581,13 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 				}
 			}
 
-			// Rewind by reorderSize + 1 PES packets (even for audio! To ensure proper durations)
+			// Rewind by reorderSize + 1 PES packets (even for audio! To ensure proper durations), but never past the
+			// track's first PES packet, since anything before it isn't part of the track
 			outer:
 			for (let i = 0; i < reorderSize + 1; i++) {
 				let pos = currentPesHeader.sectionStartPos - demuxer.packetStride;
 
-				while (pos >= demuxer.packetOffset) {
+				while (pos >= firstPesPacketHeader.sectionStartPos) {
 					const packetHeader = await demuxer.readPacketHeader(pos);
 					if (!packetHeader) {
 						break outer;
@@ -1634,8 +1607,8 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 					pos -= demuxer.packetStride;
 				}
 
-				if (pos < demuxer.packetOffset) {
-					break; // We've hit the start of the file, there's nothing more to rewind
+				if (pos < firstPesPacketHeader.sectionStartPos) {
+					break; // We've hit the track's first PES packet, there's nothing more to rewind
 				}
 			}
 
@@ -1647,28 +1620,19 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 			let currentChunkStartPos = scanStartPos;
 			let nextChunkStartPos: number | null = null; // "next" as in later in the file, even tho we scan backwards
 
-			const readSectionsInFull = !this.elementaryStream.canBeTrustedWithKeyPackets;
-
 			while (true) {
 				let bestKeyPesHeader: TimestampedPesPacketHeader | null = null;
 
 				const isFirstChunk = currentChunkStartPos <= firstPesPacketHeader.sectionStartPos;
 
 				let pesHeader: TimestampedPesPacketHeader | null;
-				let pesHeaderSection: Section | null = null;
-
 				if (isFirstChunk) {
 					pesHeader = firstPesPacketHeader;
-					pesHeaderSection = firstSection;
 				} else {
-					const result = await findFirstPesPacketHeaderInChunk(
+					pesHeader = await findFirstPesPacketHeaderInChunk(
 						currentChunkStartPos,
 						nextChunkStartPos ?? reader.fileSize ?? Infinity,
-						readSectionsInFull,
 					);
-
-					pesHeader = result?.pesPacketHeader ?? null;
-					pesHeaderSection = result?.section ?? null;
 				}
 
 				let passedSearchPts = false;
@@ -1687,13 +1651,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 						if (this.elementaryStream.canBeTrustedWithKeyPackets) {
 							isKeyPacket = pesHeader.randomAccessIndicator === 1;
 						} else {
-							if (!context) {
-								assert(pesHeaderSection);
-								const pesPacket = readPesPacket(demuxer, pesHeaderSection, true);
-								assert(pesPacket);
-
-								context = new PacketReadingContext(this.elementaryStream, pesPacket);
-							}
+							context ??= new PacketReadingContext(this.elementaryStream, pesHeader.sectionStartPos);
 
 							// Advance to the first packet that starts in this PES packet
 							while (
@@ -1740,13 +1698,12 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 						}
 
 						if (packetHeader.pid === pid && packetHeader.payloadUnitStartIndicator === 1) {
-							const section = await demuxer.readSection(currentPos, readSectionsInFull);
+							const section = await demuxer.readSection(currentPos, false);
 							if (section) {
 								const nextPesHeader = readPesPacketHeader(demuxer, section, false);
 
 								if (nextPesHeader && nextPesHeader.pts !== null) {
 									pesHeader = nextPesHeader as TimestampedPesPacketHeader;
-									pesHeaderSection = section;
 									maybeInsertReferencePacket(this.elementaryStream, pesHeader);
 
 									break;
@@ -1764,17 +1721,17 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 					if (lookaheadCount === 0) {
 						// Packet is at the end of stream, let's rewind a little to obtain the correct packet duration
 						outer:
-						for (let i = 0; i < reorderSize; i++) {
+						for (let i = 0; i < reorderSize + 1; i++) {
 							let pos = startPesHeader.sectionStartPos - demuxer.packetStride;
 
-							while (pos >= demuxer.packetOffset) {
+							while (pos >= firstPesPacketHeader.sectionStartPos) {
 								const packetHeader = await demuxer.readPacketHeader(pos);
 								if (!packetHeader) {
 									break outer;
 								}
 
 								if (packetHeader.pid === pid && packetHeader.payloadUnitStartIndicator === 1) {
-									const section = await demuxer.readSection(pos, readSectionsInFull);
+									const section = await demuxer.readSection(pos, false);
 									if (section) {
 										const header = readPesPacketHeader(demuxer, section, false);
 										if (header && header.pts !== null) {
@@ -1787,8 +1744,8 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 								pos -= demuxer.packetStride;
 							}
 
-							if (pos < demuxer.packetOffset) {
-								break; // We've hit the start of the file, there's nothing more to rewind
+							if (pos < firstPesPacketHeader.sectionStartPos) {
+								break; // We've hit the track's first PES packet, there's nothing more to rewind
 							}
 						}
 					}
@@ -1920,6 +1877,8 @@ const maybeInsertReferencePacket = (
 		pesPacketHeader.sectionStartPos,
 		x => x.sectionStartPos,
 	);
+	const minByteDistance = elementaryStream.demuxer.minReferencePointByteDistance;
+
 	if (index >= 0) {
 		// Since pts and file position don't necessarily have a monotonic relationship (since pts can go crazy),
 		// let's see if inserting at the given index would violate the pts order. If so, return.
@@ -1928,31 +1887,27 @@ const maybeInsertReferencePacket = (
 			return false;
 		}
 
-		const minByteDistance = elementaryStream.demuxer.minReferencePointByteDistance;
-
 		if (pesPacketHeader.sectionStartPos - entry.sectionStartPos < minByteDistance) {
 			// Too close
 			return false;
 		}
+	}
 
-		if (index < referencePesPackets.length - 1) {
-			const nextEntry = referencePesPackets[index + 1]!;
-			if (nextEntry.pts < pesPacketHeader.pts) {
-				// Out of order
-				return false;
-			}
+	if (index < referencePesPackets.length - 1) {
+		const nextEntry = referencePesPackets[index + 1]!;
+		if (nextEntry.pts < pesPacketHeader.pts) {
+			// Out of order
+			return false;
+		}
 
-			if (nextEntry.sectionStartPos - pesPacketHeader.sectionStartPos < minByteDistance) {
-				// Too close
-				return false;
-			}
+		if (nextEntry.sectionStartPos - pesPacketHeader.sectionStartPos < minByteDistance) {
+			// Too close
+			return false;
 		}
 	}
 
-	// Copy only the header fields (callers may pass a whole PES packet)
 	referencePesPackets.splice(index + 1, 0, {
 		sectionStartPos: pesPacketHeader.sectionStartPos,
-		sectionEndPos: pesPacketHeader.sectionEndPos,
 		pts: pesPacketHeader.pts,
 		randomAccessIndicator: pesPacketHeader.randomAccessIndicator,
 	});
@@ -1961,6 +1916,7 @@ const maybeInsertReferencePacket = (
 
 type SuppliedPacket = {
 	pts: number;
+	intrinsicDuration: number;
 	data: Uint8Array;
 	sequenceNumber: number;
 	sectionStartPos: number;
@@ -1972,23 +1928,30 @@ class PacketReadingContext {
 	elementaryStream: ElementaryStream;
 	pid: number;
 	demuxer: MpegTsDemuxer;
-	startingPesPacket: TimestampedPesPacket;
 
-	currentPos = 0; // Relative to the data in startingPesPacket
-	pesPackets: PesPacket[] = [];
-	currentPesPacketIndex = 0;
-	currentPesPacketPos = 0;
+	nextTsPacketPos: number;
+	reachedEnd = false;
+	isInPesPacket = false;
+	pesHeaderBytesLeft = 0;
+	pesDataBytesLeft = 0;
+
+	// Positions are relative to `pesPacketStartPos`
+	currentPos = 0;
 	endPos = 0;
-	lastSuppliedPesPacket: PesPacket | null = null;
+	scratch = new Uint8Array(2 ** 16);
+	scratchStartPos = 0;
+	pesPackets: PesPacketHeader[] = [];
+	pesPacketDataStartPositions: number[] = [];
+	lastSuppliedPesPacket: PesPacketHeader | null = null;
 	nextPts: number | null = null;
 
 	suppliedPacket: SuppliedPacket | null = null;
 
-	constructor(elementaryStream: ElementaryStream, startingPesPacket: TimestampedPesPacket) {
+	constructor(elementaryStream: ElementaryStream, pesPacketStartPos: number) {
 		this.elementaryStream = elementaryStream;
 		this.pid = elementaryStream.pid;
 		this.demuxer = elementaryStream.demuxer;
-		this.startingPesPacket = startingPesPacket;
+		this.nextTsPacketPos = pesPacketStartPos;
 	}
 
 	ensureBuffered(length: number) {
@@ -2001,144 +1964,106 @@ class PacketReadingContext {
 			.then(() => Math.min(this.endPos - this.currentPos, length));
 	}
 
-	getCurrentPesPacket() {
-		const packet = this.pesPackets[this.currentPesPacketIndex];
-		assert(packet);
-
-		return packet;
-	}
-
 	async bufferData(length: number): Promise<void> {
 		const targetEndPos = this.endPos + length;
 
-		while (this.endPos < targetEndPos) {
-			let pesPacket: PesPacket;
-			if (this.pesPackets.length === 0) {
-				pesPacket = this.startingPesPacket;
-			} else {
-				// Find the next PES packet
-				let currentPos = last(this.pesPackets)!.sectionEndPos;
-				assert(currentPos !== null);
-
-				while (true) {
-					const packetHeader = await this.demuxer.readPacketHeader(currentPos);
-					if (!packetHeader) {
-						return;
-					}
-
-					if (packetHeader.pid === this.pid) {
-						const nextSection = await this.demuxer.readSection(currentPos, true);
-						if (!nextSection) {
-							return;
-						}
-
-						const nextPesPacket = readPesPacket(this.demuxer, nextSection, false);
-						if (nextPesPacket) {
-							pesPacket = nextPesPacket;
-							break;
-						}
-					}
-
-					currentPos += this.demuxer.packetStride;
-				}
+		// Data is taken in one TS packet at a time
+		while (this.endPos < targetEndPos && !this.reachedEnd) {
+			const pos = this.nextTsPacketPos;
+			const packet = await this.demuxer.readPacket(pos);
+			if (!packet) {
+				this.reachedEnd = true;
+				break;
 			}
 
-			this.pesPackets.push(pesPacket);
-			this.endPos += pesPacket.data.byteLength;
+			this.nextTsPacketPos += this.demuxer.packetStride;
+
+			if (packet.pid !== this.pid) {
+				continue;
+			}
+
+			if (packet.payloadUnitStartIndicator === 1) {
+				this.isInPesPacket = false;
+
+				const section = await this.demuxer.readSection(pos, false);
+				assert(section);
+
+				const header = readPesPacketHeader(this.demuxer, section, false);
+				if (!header) {
+					continue; // Not a PES packet we can use, so skip over its whole section
+				}
+
+				const bitstream = new Bitstream(section.payload);
+				bitstream.skipBits(32);
+				const pesPacketLength = bitstream.readBits(16);
+				const BYTES_UNTIL_END_OF_PES_PACKET_LENGTH = 6;
+
+				bitstream.skipBits(16);
+				const pesHeaderDataLength = bitstream.readBits(8);
+				this.pesHeaderBytesLeft = bitstream.pos / 8 + pesHeaderDataLength;
+
+				// "A value of 0 indicates that the PES packet length is neither specified nor bounded and is allowed
+				// only in PES packets whose payload consists of bytes from a video elementary stream contained in
+				// transport stream packets."
+				this.pesDataBytesLeft = pesPacketLength > 0
+					? Math.max(BYTES_UNTIL_END_OF_PES_PACKET_LENGTH + pesPacketLength - this.pesHeaderBytesLeft, 0)
+					: Infinity;
+
+				this.isInPesPacket = true;
+				this.pesPackets.push(header);
+				this.pesPacketDataStartPositions.push(this.endPos);
+			}
+
+			if (!this.isInPesPacket || !(packet.adaptationFieldControl & 0b01)) {
+				continue;
+			}
+
+			const body = packet.body;
+			let start = packet.adaptationFieldControl & 0b10 ? 1 + body[0]! : 0;
+
+			const skippedHeaderBytes = Math.min(this.pesHeaderBytesLeft, Math.max(body.byteLength - start, 0));
+			this.pesHeaderBytesLeft -= skippedHeaderBytes;
+			start += skippedHeaderBytes;
+
+			// Anything past the declared PES packet length is stuffing
+			const end = Math.min(body.byteLength, start + this.pesDataBytesLeft);
+			if (end <= start) {
+				continue;
+			}
+
+			const byteCount = end - start;
+			this.pesDataBytesLeft -= byteCount;
+
+			const scratchLength = this.endPos - this.scratchStartPos;
+			if (scratchLength + byteCount > this.scratch.byteLength) {
+				const scratch = new Uint8Array(2 * this.scratch.byteLength);
+				scratch.set(this.scratch.subarray(0, scratchLength));
+				this.scratch = scratch;
+			}
+
+			this.scratch.set(body.subarray(start, end), scratchLength);
+			this.endPos += byteCount;
 		}
 	}
 
 	readBytes(length: number) {
-		const currentPesPacket = this.getCurrentPesPacket();
-
-		const relativeStartOffset = this.currentPos - this.currentPesPacketPos;
-		const relativeEndOffset = relativeStartOffset + length;
-
+		const start = this.currentPos - this.scratchStartPos;
 		this.currentPos += length;
 
-		if (relativeEndOffset <= currentPesPacket.data.byteLength) {
-			// Request can be satisfied with one PES packet
-			return currentPesPacket.data.subarray(relativeStartOffset, relativeEndOffset);
-		}
-
-		// Data spans multiple PES packets, we must do some merging
-		const result = new Uint8Array(length);
-		result.set(currentPesPacket.data.subarray(relativeStartOffset));
-		let offset = currentPesPacket.data.byteLength - relativeStartOffset;
-
-		while (true) {
-			this.advanceCurrentPacket();
-			const currentPesPacket = this.getCurrentPesPacket();
-			const relativeEndOffset = length - offset;
-
-			if (relativeEndOffset <= currentPesPacket.data.byteLength) {
-				result.set(currentPesPacket.data.subarray(0, relativeEndOffset), offset);
-				break;
-			}
-
-			result.set(currentPesPacket.data, offset);
-			offset += currentPesPacket.data.byteLength;
-		}
-
-		return result;
+		return this.scratch.subarray(start, start + length);
 	}
 
 	readU8() {
-		let currentPesPacket = this.getCurrentPesPacket();
-
-		const relativeOffset = this.currentPos - this.currentPesPacketPos;
-		this.currentPos++;
-
-		if (relativeOffset < currentPesPacket.data.byteLength) {
-			return currentPesPacket.data[relativeOffset]!;
-		}
-
-		// Skip over PES packets without any data
-		do {
-			this.advanceCurrentPacket();
-			currentPesPacket = this.getCurrentPesPacket();
-		} while (currentPesPacket.data.byteLength === 0);
-
-		return currentPesPacket.data[0]!;
+		return this.scratch[this.currentPos++ - this.scratchStartPos]!;
 	}
 
 	seekTo(pos: number) {
-		if (pos === this.currentPos) {
-			return;
-		}
-
-		if (pos < this.currentPos) {
-			while (pos < this.currentPesPacketPos) {
-				// Move to the previous PES packet
-				this.currentPesPacketIndex--;
-				const currentPacket = this.getCurrentPesPacket();
-				this.currentPesPacketPos -= currentPacket.data.byteLength;
-			}
-		} else {
-			while (true) {
-				// Move to the next PES packet
-				const currentPesPacket = this.getCurrentPesPacket();
-				const currentEndPos = this.currentPesPacketPos + currentPesPacket.data.byteLength;
-
-				if (pos < currentEndPos) {
-					break;
-				}
-
-				this.currentPesPacketPos += currentPesPacket.data.byteLength;
-				this.currentPesPacketIndex++;
-			}
-		}
-
+		assert(pos >= this.scratchStartPos);
 		this.currentPos = pos;
 	}
 
 	skip(n: number) {
 		this.seekTo(this.currentPos + n);
-	}
-
-	advanceCurrentPacket() {
-		this.currentPesPacketPos += this.getCurrentPesPacket().data.byteLength;
-		this.currentPesPacketIndex++;
 	}
 
 	async markNextPacket() {
@@ -2219,14 +2144,9 @@ class PacketReadingContext {
 					const nalHeaderStart = i + startCodeLength;
 					const payloadStart = nalHeaderStart + nalHeaderSize;
 
-					// Bytes peeked from the start of a slice header to decode first_mb_in_slice. Six bytes (48 bits)
-					// comfortably covers the exp-Golomb code for any realistic macroblock count
-					const AVC_SLICE_HEADER_PEEK_SIZE = 6;
-
 					// We read the NAL header plus, for slices, the start of the slice header to decode the
-					// first_mb_in_slice / first_slice_segment_in_pic_flag. Make sure all of it is buffered.
-					const bytesNeeded = payloadStart + (codec === 'avc' ? AVC_SLICE_HEADER_PEEK_SIZE : 1);
-					if (bytesNeeded > length) {
+					// first_mb_in_slice / first_slice_segment_in_pic_flag. Make sure at least a byte of it is there.
+					if (payloadStart + 1 > length) {
 						this.seekTo(posBeforeZero);
 						break;
 					}
@@ -2260,8 +2180,8 @@ class PacketReadingContext {
 						// VCL slices: 0..RASL_R, plus the IRAP range BLA_W_LP..CRA_NUT
 						isSlice = nalUnitType <= HevcNalUnitType.RASL_R
 							|| (nalUnitType >= HevcNalUnitType.BLA_W_LP && nalUnitType <= 21);
-						// VPS..FD, prefix SEI, and the reserved/unspecified non-VCL ranges
-						isAccessUnitStart = (nalUnitType >= HevcNalUnitType.VPS_NUT && nalUnitType <= 37)
+						// VPS..AUD, prefix SEI, and the reserved/unspecified non-VCL ranges
+						isAccessUnitStart = (nalUnitType >= HevcNalUnitType.VPS_NUT && nalUnitType <= 35)
 							|| nalUnitType === HevcNalUnitType.PREFIX_SEI_NUT
 							|| (nalUnitType >= 41 && nalUnitType <= 44)
 							|| (nalUnitType >= 48 && nalUnitType <= 55);
@@ -2274,8 +2194,21 @@ class PacketReadingContext {
 						let startsNewPicture: boolean;
 
 						if (codec === 'avc') {
-							const headerBytes = chunk.subarray(payloadStart, payloadStart + AVC_SLICE_HEADER_PEEK_SIZE);
-							const firstMacroblockInSlice = readExpGolomb(new Bitstream(headerBytes));
+							// first_mb_in_slice may not be fully buffered yet, in which case reading it either runs
+							// past the end (where Bitstream reads zeros) or throws from all those zeros
+							const bitstream = new Bitstream(chunk.subarray(payloadStart));
+							let firstMacroblockInSlice: number | null;
+							try {
+								firstMacroblockInSlice = readExpGolomb(bitstream);
+							} catch {
+								firstMacroblockInSlice = null;
+							}
+
+							if (firstMacroblockInSlice === null || bitstream.getBitsLeft() < 0) {
+								this.seekTo(posBeforeZero);
+								break;
+							}
+
 							startsNewPicture = !frameStartFound || firstMacroblockInSlice <= lastFirstMacroblockInSlice;
 							lastFirstMacroblockInSlice = firstMacroblockInSlice;
 						} else {
@@ -2360,9 +2293,7 @@ class PacketReadingContext {
 
 							return this.supplyPacket(
 								remaining,
-								Math.round(
-									SAMPLES_PER_AAC_FRAME * MPEG_TS_TIMESCALE / elementaryStream.info.sampleRate,
-								),
+								SAMPLES_PER_AAC_FRAME * MPEG_TS_TIMESCALE / elementaryStream.info.sampleRate,
 							);
 						} else {
 							this.seekTo(possibleHeaderStartPos + 1);
@@ -2394,7 +2325,7 @@ class PacketReadingContext {
 
 							const duration = result.header.audioSamplesInFrame * MPEG_TS_TIMESCALE
 								/ elementaryStream.info.sampleRate;
-							return this.supplyPacket(remaining, Math.round(duration));
+							return this.supplyPacket(remaining, duration);
 						} else {
 							this.seekTo(possibleHeaderStartPos + 1);
 						}
@@ -2439,9 +2370,7 @@ class PacketReadingContext {
 						remaining = this.ensureBuffered(frameSize);
 						if (isThenable(remaining)) remaining = await remaining;
 
-						const duration = Math.round(
-							AC3_SAMPLES_PER_FRAME * MPEG_TS_TIMESCALE / elementaryStream.info.sampleRate,
-						);
+						const duration = AC3_SAMPLES_PER_FRAME * MPEG_TS_TIMESCALE / elementaryStream.info.sampleRate;
 						return this.supplyPacket(remaining, duration);
 					} else if (codec === 'eac3') {
 						if (byte !== 0x0b) {
@@ -2467,10 +2396,37 @@ class PacketReadingContext {
 						}
 
 						const frmsiz = ((headerBytes[2]! & 0x07) << 8) | headerBytes[3]!;
-						const frameSize = (frmsiz + 1) * 2;
+						let frameSize = (frmsiz + 1) * 2;
 						const fscod = headerBytes[4]! >> 6;
 						const numblkscod = fscod === 3 ? 3 : (headerBytes[4]! >> 4) & 0x03;
 						const numblks = EAC3_NUMBLKS_TABLE[numblkscod]!;
+
+						// Dependent substreams extend the frame before them to more channels, so they're part of its
+						// access unit
+						while (true) {
+							this.seekTo(possibleSyncPos);
+
+							const neededBytes = frameSize + 4;
+							let remaining = this.ensureBuffered(neededBytes);
+							if (isThenable(remaining)) remaining = await remaining;
+
+							if (remaining < neededBytes) {
+								break;
+							}
+
+							this.seekTo(possibleSyncPos + frameSize);
+							const nextHeaderBytes = this.readBytes(4);
+
+							if (
+								nextHeaderBytes[0] !== 0x0b
+								|| nextHeaderBytes[1] !== 0x77
+								|| (nextHeaderBytes[2]! >> 6) !== 1 // strmtyp of a dependent substream
+							) {
+								break;
+							}
+
+							frameSize += 2 * ((((nextHeaderBytes[2]! & 0x07) << 8) | nextHeaderBytes[3]!) + 1);
+						}
 
 						this.seekTo(possibleSyncPos);
 
@@ -2479,9 +2435,7 @@ class PacketReadingContext {
 
 						// Duration = numblks * 256 samples per block
 						const samplesPerFrame = numblks * 256;
-						const duration = Math.round(
-							samplesPerFrame * MPEG_TS_TIMESCALE / elementaryStream.info.sampleRate,
-						);
+						const duration = samplesPerFrame * MPEG_TS_TIMESCALE / elementaryStream.info.sampleRate;
 						return this.supplyPacket(remaining, duration);
 					} else if (codec === 'dts') {
 						if (byte !== 0x7f && byte !== 0x64) {
@@ -2562,9 +2516,7 @@ class PacketReadingContext {
 						remaining = this.ensureBuffered(frameSize);
 						if (isThenable(remaining)) remaining = await remaining;
 
-						const duration = Math.round(
-							sampleCount * MPEG_TS_TIMESCALE / elementaryStream.info.sampleRate,
-						);
+						const duration = sampleCount * MPEG_TS_TIMESCALE / elementaryStream.info.sampleRate;
 						return this.supplyPacket(remaining, duration);
 					} else {
 						throw new Error('Unhandled.');
@@ -2580,7 +2532,10 @@ class PacketReadingContext {
 
 	/** Supplies the context with a new encoded packet, beginning at the current position. */
 	supplyPacket(packetLength: number, intrinsicDuration: number) {
-		const currentPesPacket = this.getCurrentPesPacket();
+		const pesPacketIndex = findLastIndex(this.pesPacketDataStartPositions, x => x <= this.currentPos);
+		assert(pesPacketIndex !== -1);
+		const currentPesPacket = this.pesPackets[pesPacketIndex]!;
+		const currentPesPacketDataStartPos = this.pesPacketDataStartPositions[pesPacketIndex]!;
 
 		let pts: number;
 		if (this.lastSuppliedPesPacket === currentPesPacket) {
@@ -2593,7 +2548,7 @@ class PacketReadingContext {
 
 			pts = currentPesPacket.pts;
 
-			maybeInsertReferencePacket(this.elementaryStream, currentPesPacket as TimestampedPesPacket);
+			maybeInsertReferencePacket(this.elementaryStream, currentPesPacket as TimestampedPesPacketHeader);
 		}
 
 		this.lastSuppliedPesPacket = currentPesPacket;
@@ -2602,8 +2557,8 @@ class PacketReadingContext {
 		const sectionStartPos = currentPesPacket.sectionStartPos;
 		// The sequence number is the starting position of the section the PES packet is in, PLUS the offset within the
 		// PES packet where the packet starts.
-		const sequenceNumber = sectionStartPos + (this.currentPos - this.currentPesPacketPos);
-		const data = this.readBytes(packetLength);
+		const sequenceNumber = sectionStartPos + (this.currentPos - currentPesPacketDataStartPos);
+		const data = this.readBytes(packetLength).slice();
 
 		let randomAccessIndicator = currentPesPacket.randomAccessIndicator;
 
@@ -2625,16 +2580,25 @@ class PacketReadingContext {
 			}
 		}
 
+		const roundedPts = Math.round(pts);
+
 		this.suppliedPacket = {
-			pts,
+			pts: roundedPts,
+			intrinsicDuration: Math.round(pts + intrinsicDuration) - roundedPts,
 			data,
 			sequenceNumber,
 			sectionStartPos,
 			randomAccessIndicator,
 		};
 
-		this.pesPackets.splice(0, this.currentPesPacketIndex);
-		this.currentPesPacketIndex = 0;
+		// Nothing before the end of the packet is needed anymore
+		const keptStart = this.currentPos - this.scratchStartPos;
+		this.scratch.copyWithin(0, keptStart, this.endPos - this.scratchStartPos);
+		this.scratchStartPos = this.currentPos;
+
+		const keptPesPacketIndex = findLastIndex(this.pesPacketDataStartPositions, x => x <= this.currentPos);
+		this.pesPackets.splice(0, keptPesPacketIndex);
+		this.pesPacketDataStartPositions.splice(0, keptPesPacketIndex);
 	}
 }
 
@@ -2678,13 +2642,19 @@ class PacketBuffer {
 		const presentationIndex = this.presentationOrderPackets.indexOf(packet);
 
 		let duration: number;
-		if (presentationIndex === -1 || presentationIndex === this.presentationOrderPackets.length - 1) {
-			// The packet has no known successor (or isn't even placed yet when timestamps are messed up)
-			duration = this.lastDuration; // Reasonable heuristic
-		} else {
+		if (presentationIndex !== -1 && presentationIndex < this.presentationOrderPackets.length - 1) {
 			const nextPacket = this.presentationOrderPackets[presentationIndex + 1]!;
 			duration = nextPacket.pts - packet.pts;
 			this.lastDuration = duration;
+		} else if (packet.intrinsicDuration > 0) {
+			// The packet has no known successor (or isn't even placed yet when timestamps are messed up), but the codec
+			// tells us how long it lasts
+			duration = packet.intrinsicDuration;
+		} else if (presentationIndex > 0) {
+			// Let's say it lasts as long as the packet presented before it
+			duration = packet.pts - this.presentationOrderPackets[presentationIndex - 1]!.pts;
+		} else {
+			duration = this.lastDuration; // Reasonable heuristic
 		}
 
 		this.decodeOrderPackets.shift();

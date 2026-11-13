@@ -8,7 +8,13 @@
 
 import { CustomVideoDecoder, VideoCodec, EncodedPacket, VideoSample, type MaybePromise, Rational } from 'mediabunny';
 import * as NodeAv from 'node-av';
-import { CODEC_TO_CODEC_ID, getHardwareDecoderCodec } from './misc';
+import {
+	CODEC_TO_CODEC_ID,
+	getHardwareDecoderCodec,
+	mapColorPrimaries,
+	mapMatrixCoefficients,
+	mapTransferCharacteristics,
+} from './misc';
 import { assert, binarySearchLessOrEqual, simplifyRational, toUint8Array } from '../../../src/misc';
 import { AvFrameVideoSampleResource } from './video-sample';
 
@@ -67,6 +73,7 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 
 		const codecContext = new NodeAv.CodecContext();
 		codecContext.allocContext3(codec);
+		codecContext.threadCount = 0; // Auto
 
 		this.pixelAspectRatio = simplifyRational({
 			num: (this.config.displayAspectWidth ?? this.config.codedWidth ?? 0) * (this.config.codedHeight ?? 0),
@@ -84,7 +91,9 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 
 		// Honor inferred H.264 reorder buffering even when bitstream restrictions aren't explicitly signaled
 		// See https://github.com/Vanilagy/mediabunny/issues/488
-		const options = NodeAv.Dictionary.fromObject({ strict: NodeAv.FF_COMPLIANCE_STRICT });
+		const options = this.codec === 'avc'
+			? NodeAv.Dictionary.fromObject({ strict: NodeAv.FF_COMPLIANCE_STRICT })
+			: null;
 
 		const ret = await codecContext.open2(codec, options);
 		NodeAv.FFmpegError.throwIfError(ret, 'Open codec context');
@@ -166,6 +175,21 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 
 		this.frame.sampleAspectRatio = new NodeAv.Rational(this.pixelAspectRatio.num, this.pixelAspectRatio.den);
 
+		// Any config-side color space overrides take precedence
+		const colorSpace = this.config.colorSpace;
+		if (colorSpace?.primaries) {
+			this.frame.colorPrimaries = mapColorPrimaries(colorSpace.primaries) ?? this.frame.colorPrimaries;
+		}
+		if (colorSpace?.transfer) {
+			this.frame.colorTrc = mapTransferCharacteristics(colorSpace.transfer) ?? this.frame.colorTrc;
+		}
+		if (colorSpace?.matrix) {
+			this.frame.colorSpace = mapMatrixCoefficients(colorSpace.matrix) ?? this.frame.colorSpace;
+		}
+		if (typeof colorSpace?.fullRange === 'boolean') {
+			this.frame.colorRange = colorSpace.fullRange ? NodeAv.AVCOL_RANGE_JPEG : NodeAv.AVCOL_RANGE_MPEG;
+		}
+
 		let timestamp = Number(this.frame.pts) / 1e6;
 		let duration = Number(this.frame.duration) / 1e6;
 
@@ -221,6 +245,7 @@ export class NodeAvVideoDecoder extends CustomVideoDecoder {
 		}
 
 		this.codecContext.flushBuffers();
+		this.preciseTimings.length = 0;
 	}
 
 	close(): MaybePromise<void> {

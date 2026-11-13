@@ -7,7 +7,7 @@
  */
 
 import createModule from '../build/ac3';
-import type { WorkerCommand, WorkerResponse, WorkerResponseData } from './shared';
+import type { DecodedChunk, WorkerCommand, WorkerResponse, WorkerResponseData } from './shared';
 
 type ExtendedEmscriptenModule = EmscriptenModule & {
 	cwrap: typeof cwrap;
@@ -18,14 +18,16 @@ let modulePromise: Promise<ExtendedEmscriptenModule> | null = null;
 
 let initDecoderFn: (codecId: number) => number;
 let configureDecodePacket: (ctx: number, size: number) => number;
-let decodePacket: (ctx: number, pts: bigint) => number;
+let sendDecodePacket: (ctx: number, pts: bigint) => number;
+let sendDecodeFlush: (ctx: number) => number;
+let receiveDecodedFrame: (ctx: number) => number;
 let getDecodedFormat: (ctx: number) => number;
 let getDecodedPlanePtr: (ctx: number, plane: number) => number;
 let getDecodedChannels: (ctx: number) => number;
 let getDecodedSampleRate: (ctx: number) => number;
 let getDecodedSampleCount: (ctx: number) => number;
 let getDecodedPts: (ctx: number) => bigint;
-let flushDecoderFn: (ctx: number) => void;
+let resetDecoder: (ctx: number) => void;
 let closeDecoderFn: (ctx: number) => void;
 
 let initEncoderFn: (codecId: number, channels: number, sampleRate: number, bitrate: number) => number;
@@ -53,14 +55,20 @@ const ensureModule = async () => {
 
 		initDecoderFn = module.cwrap('init_decoder', 'number', ['number']);
 		configureDecodePacket = module.cwrap('configure_decode_packet', 'number', ['number', 'number']);
-		decodePacket = module.cwrap('decode_packet', 'number', ['number', 'number']) as unknown as typeof decodePacket;
+		sendDecodePacket = module.cwrap(
+			'send_decode_packet',
+			'number',
+			['number', 'number'],
+		) as unknown as typeof sendDecodePacket;
+		sendDecodeFlush = module.cwrap('send_decode_flush', 'number', ['number']);
+		receiveDecodedFrame = module.cwrap('receive_decoded_frame', 'number', ['number']);
 		getDecodedFormat = module.cwrap('get_decoded_format', 'number', ['number']);
 		getDecodedPlanePtr = module.cwrap('get_decoded_plane_ptr', 'number', ['number', 'number']);
 		getDecodedChannels = module.cwrap('get_decoded_channels', 'number', ['number']);
 		getDecodedSampleRate = module.cwrap('get_decoded_sample_rate', 'number', ['number']);
 		getDecodedSampleCount = module.cwrap('get_decoded_sample_count', 'number', ['number']);
 		getDecodedPts = module.cwrap('get_decoded_pts', 'number', ['number']) as unknown as typeof getDecodedPts;
-		flushDecoderFn = module.cwrap('flush_decoder', null, ['number']);
+		resetDecoder = module.cwrap('reset_decoder', null, ['number']);
 		closeDecoderFn = module.cwrap('close_decoder', null, ['number']);
 
 		initEncoderFn = module.cwrap('init_encoder', 'number', ['number', 'number', 'number', 'number']);
@@ -98,6 +106,8 @@ const AV_FORMAT_MAP: Record<number, { format: AudioSampleFormat; bytesPerSample:
 	8: { format: 'f32-planar', bytesPerSample: 4, planar: true },
 };
 
+const AV_NOPTS_VALUE = -(BigInt(2) ** BigInt(63));
+
 const decode = (ctx: number, encodedData: ArrayBuffer, timestamp: number) => {
 	const bytes = new Uint8Array(encodedData);
 
@@ -108,40 +118,77 @@ const decode = (ctx: number, encodedData: ArrayBuffer, timestamp: number) => {
 
 	module.HEAPU8.set(bytes, dataPtr);
 
-	const ret = decodePacket(ctx, BigInt(timestamp));
+	const ret = sendDecodePacket(ctx, BigInt(timestamp));
 	if (ret < 0) {
 		throw new Error(`Decode failed with error code ${ret}.`);
 	}
 
-	const avFormat = getDecodedFormat(ctx);
-	const info = AV_FORMAT_MAP[avFormat];
-	if (!info) {
-		throw new Error(`Unsupported AVSampleFormat: ${avFormat}`);
+	return receiveDecodedChunks(ctx);
+};
+
+const flushDecoder = (ctx: number) => {
+	const ret = sendDecodeFlush(ctx);
+	if (ret < 0) {
+		throw new Error(`Decoder flush failed with error code ${ret}.`);
 	}
 
-	const channels = getDecodedChannels(ctx);
-	const sampleRate = getDecodedSampleRate(ctx);
-	const sampleCount = getDecodedSampleCount(ctx);
-	const pts = Number(getDecodedPts(ctx));
+	const chunks = receiveDecodedChunks(ctx);
+	resetDecoder(ctx);
 
-	let pcmData: ArrayBuffer;
-	if (info.planar) {
-		const planeSize = sampleCount * info.bytesPerSample;
-		const buffer = new Uint8Array(planeSize * channels);
+	return chunks;
+};
 
-		for (let ch = 0; ch < channels; ch++) {
-			const ptr = getDecodedPlanePtr(ctx, ch);
-			buffer.set(module.HEAPU8.subarray(ptr, ptr + planeSize), ch * planeSize);
+const receiveDecodedChunks = (ctx: number) => {
+	const chunks: DecodedChunk[] = [];
+
+	while (true) {
+		const ret = receiveDecodedFrame(ctx);
+		if (ret < 0) {
+			throw new Error(`Decode failed with error code ${ret}.`);
+		}
+		if (ret === 0) {
+			break;
 		}
 
-		pcmData = buffer.buffer;
-	} else {
-		const totalSize = sampleCount * channels * info.bytesPerSample;
-		const ptr = getDecodedPlanePtr(ctx, 0);
-		pcmData = module.HEAPU8.slice(ptr, ptr + totalSize).buffer;
+		const avFormat = getDecodedFormat(ctx);
+		const info = AV_FORMAT_MAP[avFormat];
+		if (!info) {
+			throw new Error(`Unsupported AVSampleFormat: ${avFormat}`);
+		}
+
+		const channels = getDecodedChannels(ctx);
+		const sampleRate = getDecodedSampleRate(ctx);
+		const sampleCount = getDecodedSampleCount(ctx);
+		const pts = getDecodedPts(ctx);
+
+		let pcmData: ArrayBuffer;
+		if (info.planar) {
+			const planeSize = sampleCount * info.bytesPerSample;
+			const buffer = new Uint8Array(planeSize * channels);
+
+			for (let ch = 0; ch < channels; ch++) {
+				const ptr = getDecodedPlanePtr(ctx, ch);
+				buffer.set(module.HEAPU8.subarray(ptr, ptr + planeSize), ch * planeSize);
+			}
+
+			pcmData = buffer.buffer;
+		} else {
+			const totalSize = sampleCount * channels * info.bytesPerSample;
+			const ptr = getDecodedPlanePtr(ctx, 0);
+			pcmData = module.HEAPU8.slice(ptr, ptr + totalSize).buffer;
+		}
+
+		chunks.push({
+			pcmData,
+			format: info.format,
+			channels,
+			sampleRate,
+			sampleCount,
+			pts: pts === AV_NOPTS_VALUE ? null : Number(pts),
+		});
 	}
 
-	return { pcmData, format: info.format, channels, sampleRate, sampleCount, pts };
+	return chunks;
 };
 
 const initEncoder = async (
@@ -201,22 +248,15 @@ const onMessage = (data: { id: number; command: WorkerCommand }) => {
 				}; break;
 
 				case 'decode': {
-					const decoded = decode(command.data.ctx, command.data.encodedData, command.data.timestamp);
-					result = {
-						type: command.type,
-						pcmData: decoded.pcmData,
-						format: decoded.format,
-						channels: decoded.channels,
-						sampleRate: decoded.sampleRate,
-						sampleCount: decoded.sampleCount,
-						pts: decoded.pts,
-					};
-					transferables.push(decoded.pcmData);
+					const chunks = decode(command.data.ctx, command.data.encodedData, command.data.timestamp);
+					result = { type: command.type, chunks };
+					transferables.push(...chunks.map(x => x.pcmData));
 				}; break;
 
 				case 'flush-decoder': {
-					flushDecoderFn(command.data.ctx);
-					result = { type: command.type };
+					const chunks = flushDecoder(command.data.ctx);
+					result = { type: command.type, chunks };
+					transferables.push(...chunks.map(x => x.pcmData));
 				}; break;
 
 				case 'close-decoder': {

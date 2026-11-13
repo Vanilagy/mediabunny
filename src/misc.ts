@@ -202,18 +202,6 @@ export const readSignedExpGolomb = (bitstream: Bitstream) => {
 		: (codeNum + 1) / 2;
 };
 
-export const writeBits = (bytes: Uint8Array, start: number, end: number, value: number) => {
-	for (let i = start; i < end; i++) {
-		const byteIndex = Math.floor(i / 8);
-		let byte = bytes[byteIndex]!;
-		const bitIndex = 0b111 - (i & 0b111);
-
-		byte &= ~(1 << bitIndex);
-		byte |= ((value & (1 << (end - i - 1))) >> (end - i - 1)) << bitIndex;
-		bytes[byteIndex] = byte;
-	}
-};
-
 export const toUint8Array = (source: AllowSharedBufferSource): Uint8Array => {
 	if (source.constructor === Uint8Array) { // We want a true Uint8Array, not something that extends it like Buffer
 		return source;
@@ -235,7 +223,7 @@ export const toDataView = (source: AllowSharedBufferSource): DataView => {
 };
 
 // Include a polyfill for environments that don't have TextEncoder (like AudioWorkletGlobalScope)
-export const TextEncoder = typeof globalThis.TextEncoder !== 'undefined'
+export const TextEncoder = /* #__PURE__ */ (() => typeof globalThis.TextEncoder !== 'undefined'
 	? globalThis.TextEncoder
 	: class TextEncoder {
 		readonly encoding = 'utf-8';
@@ -275,10 +263,10 @@ export const TextEncoder = typeof globalThis.TextEncoder !== 'undefined'
 
 			return bytes.slice(0, n);
 		}
-	};
+	})();
 
 // Include a polyfill for environments that don't have TextEncoder (like AudioWorkletGlobalScope)
-export const TextDecoder = typeof globalThis.TextDecoder !== 'undefined'
+export const TextDecoder = /* #__PURE__ */ (() => typeof globalThis.TextDecoder !== 'undefined'
 	? globalThis.TextDecoder
 	: class TextDecoder {
 		readonly encoding: 'utf-8' | 'utf-16le' | 'utf-16be';
@@ -374,6 +362,10 @@ export const TextDecoder = typeof globalThis.TextDecoder !== 'undefined'
 							i += 2;
 						} else {
 							units.push(0xfffd);
+
+							if (i + 1 === bytes.length) {
+								i++; // Native decoders count a dangling odd byte after this as part of the same error
+							}
 						}
 					} else if (unit >= 0xdc00 && unit <= 0xdfff) {
 						units.push(0xfffd);
@@ -394,9 +386,10 @@ export const TextDecoder = typeof globalThis.TextDecoder !== 'undefined'
 
 			return result;
 		}
-	};
+	})();
 
 export const textDecoder = /* #__PURE__ */ new TextDecoder();
+export const strictTextDecoder = /* #__PURE__ */ new TextDecoder('utf-8', { fatal: true });
 export const textEncoder = /* #__PURE__ */ new TextEncoder();
 
 export const isIso88591Compatible = (text: string) => {
@@ -456,7 +449,7 @@ export const colorSpaceIsComplete = (
 		&& !!colorSpace.primaries
 		&& !!colorSpace.transfer
 		&& !!colorSpace.matrix
-		&& colorSpace.fullRange !== undefined
+		&& colorSpace.fullRange != null
 	);
 };
 
@@ -706,12 +699,14 @@ export const setInt24 = (view: DataView, byteOffset: number, value: number, litt
 };
 
 export const setInt64 = (view: DataView, byteOffset: number, value: number, littleEndian: boolean) => {
+	value = Math.trunc(value);
+
 	if (littleEndian) {
 		view.setUint32(byteOffset + 0, value, true);
 		view.setInt32(byteOffset + 4, Math.floor(value / 2 ** 32), true);
 	} else {
-		view.setInt32(byteOffset + 0, Math.floor(value / 2 ** 32), true);
-		view.setUint32(byteOffset + 4, value, true);
+		view.setInt32(byteOffset + 0, Math.floor(value / 2 ** 32), false);
+		view.setUint32(byteOffset + 4, value, false);
 	}
 };
 
@@ -728,8 +723,14 @@ export const mapAsyncGenerator = <T, U>(
 			const result = await generator.next();
 			if (result.done) {
 				return { value: undefined, done: true };
-			} else {
+			}
+
+			try {
 				return { value: map(result.value), done: false };
+			} catch (error) {
+				// The consumer won't call return() after next() rejected, so we end the source ourselves
+				await generator.return();
+				throw error;
 			}
 		},
 		return() {
@@ -979,7 +980,10 @@ export class CallSerializer {
 	currentPromise = Promise.resolve();
 
 	call(fn: () => Promise<void> | void) {
-		return this.currentPromise = this.currentPromise.then(fn);
+		const result = this.currentPromise.then(fn);
+		this.currentPromise = result.catch(() => {});
+
+		return result;
 	}
 }
 
@@ -1075,7 +1079,7 @@ export const isCodecReclaimedError = (error: unknown) => {
  */
 export type MaybePromise<T> = T | Promise<T>;
 
-const NativePromiseConstructor = /* #__PURE__ */ (async () => {})().constructor as PromiseConstructor;
+const NativePromiseConstructor = /* #__PURE__ */ (() => (async () => {})().constructor as PromiseConstructor)();
 
 /**
  * Needed to properly deal with custom Promise implementations and because this is closer to how the JS spec does it.
@@ -1214,25 +1218,38 @@ export const isNumber = (x: unknown) => {
 export type FilePath = string;
 
 export const joinPaths = (basePath: FilePath, relativePath: FilePath) => {
-	// If relativePath is a full URL with protocol, return it as-is
-	if (relativePath.includes('://')) {
+	// A path that starts with a scheme followed by "//" is absolute already, as are data: and blob: URIs
+	if (/^(?:[a-z][a-z0-9+.-]*:\/\/|(?:data|blob):)/i.test(relativePath)) {
 		return relativePath;
 	}
 
-	// Strip query parameters from URL base paths so their contents don't mess up the join
+	// Strip the query and fragment from URL base paths so their contents don't mess up the join
 	if (basePath.includes('://')) {
-		const queryIndex = basePath.indexOf('?');
+		const queryIndex = basePath.search(/[?#]/);
 		if (queryIndex !== -1) {
 			basePath = basePath.slice(0, queryIndex);
 		}
 	}
 
+	// Dot segments only mean something in the path, so the query and fragment stay out of the join and normalization
+	const suffixIndex = relativePath.search(/[?#]/);
+	const suffix = suffixIndex === -1 ? '' : relativePath.slice(suffixIndex);
+	if (suffixIndex !== -1) {
+		relativePath = relativePath.slice(0, suffixIndex);
+	}
+
 	let result: string;
 
-	if (relativePath.startsWith('/')) {
+	if (relativePath === '') {
+		// Just a query or fragment, which goes onto the base path itself
+		result = basePath;
+	} else if (relativePath.startsWith('/')) {
 		const protocolIndex = basePath.indexOf('://');
 		if (protocolIndex === -1) {
 			result = relativePath;
+		} else if (relativePath.startsWith('//')) {
+			// Protocol-relative URL
+			result = basePath.slice(0, protocolIndex + 1) + relativePath;
 		} else {
 			const pathStart = basePath.indexOf('/', protocolIndex + 3);
 			if (pathStart === -1) {
@@ -1242,8 +1259,12 @@ export const joinPaths = (basePath: FilePath, relativePath: FilePath) => {
 			}
 		}
 	} else {
+		const protocolIndex = basePath.indexOf('://');
 		const lastSlash = basePath.lastIndexOf('/');
-		if (lastSlash === -1) {
+		if (protocolIndex !== -1 && lastSlash === protocolIndex + 2) {
+			// The base URL has no path
+			result = basePath + '/' + relativePath;
+		} else if (lastSlash === -1) {
 			result = relativePath;
 		} else {
 			result = basePath.slice(0, lastSlash + 1) + relativePath;
@@ -1266,40 +1287,32 @@ export const joinPaths = (basePath: FilePath, relativePath: FilePath) => {
 	const normalized: string[] = [];
 	for (const segment of segments) {
 		if (segment === '..') {
-			normalized.pop();
+			if (normalized.length === 0 || normalized[normalized.length - 1] === '..') {
+				normalized.push('..');
+			} else if (normalized.length !== 1 || normalized[0] !== '') {
+				// Like browsers, never go above the root
+				normalized.pop();
+			}
 		} else if (segment !== '.') {
 			normalized.push(segment);
 		}
 	}
 
-	return prefix + normalized.join('/');
+	return prefix + normalized.join('/') + suffix;
 };
 
 // eg. path `/media.m3u8?token=abc%20123` and name `token` resolve to `abc 123`
 export const getQueryParameter = (path: string, name: string) => {
-	const queryIndex = path.indexOf('?');
+	// Everything after a # is the fragment, even a ?
+	const fragmentIndex = path.indexOf('#');
+	const pathWithoutFragment = fragmentIndex === -1 ? path : path.slice(0, fragmentIndex);
+
+	const queryIndex = pathWithoutFragment.indexOf('?');
 	if (queryIndex === -1) {
 		return null;
 	}
 
-	const fragmentIndex = path.indexOf('#', queryIndex);
-	const query = path.slice(queryIndex + 1, fragmentIndex === -1 ? undefined : fragmentIndex);
-
-	for (const parameter of query.split('&')) {
-		const equalsIndex = parameter.indexOf('=');
-		const encodedName = equalsIndex === -1 ? parameter : parameter.slice(0, equalsIndex);
-		const encodedValue = equalsIndex === -1 ? '' : parameter.slice(equalsIndex + 1);
-
-		try {
-			if (decodeURIComponent(encodedName) === name) {
-				return decodeURIComponent(encodedValue);
-			}
-		} catch {
-			// Malformed percent-encoding, so let's not treat this as the parameter we're looking for
-		}
-	}
-
-	return null;
+	return new URLSearchParams(pathWithoutFragment.slice(queryIndex + 1)).get(name);
 };
 
 export const arrayCount = <T>(array: T[], predicate: (item: T) => boolean) => {
@@ -1652,17 +1665,23 @@ export class EventEmitter<TEvents extends Record<string, unknown>> {
 			return;
 		}
 
-		for (const entry of listeners) {
+		// Iterate over a snapshot so that listeners added during this emit only receive the next one
+		for (const entry of [...listeners]) {
+			if (!listeners.has(entry)) {
+				continue;
+			}
+
+			// Remove before calling
+			if (entry.once) {
+				listeners.delete(entry);
+			}
+
 			try {
 				(entry.fn as (data: unknown) => void)(data);
 			} catch (error) {
 				// Deliberately not routed through Logging here: Logging emits via an EventEmitter, so a throwing
 				// log listener would recurse straight back into this handler.
 				console.error(error);
-			}
-
-			if (entry.once) {
-				listeners.delete(entry);
 			}
 		}
 	}
@@ -1738,4 +1757,53 @@ export const isRecordStringString = (value: unknown): value is Record<string, st
 		&& typeof value === 'object'
 		&& Object.getPrototypeOf(value) === Object.prototype
 		&& Object.values(value).every(x => typeof x === 'string');
+};
+
+export const createUtcDate = (year: number, monthIndex = 0, day = 1) => {
+	const date = new Date(0);
+	date.setUTCFullYear(year, monthIndex, day);
+
+	return date;
+};
+
+// Anything from yyyy up to yyyy-MM-ddTHH:mm:ss.sss with a time zone
+// eslint-disable-next-line @stylistic/max-len
+const ISO_SUFFIX_REGEX = /^(\d{4})(?:-(\d{2})(?:-(\d{2})(?:[T ](\d{2})(?::(\d{2})(?::(\d{2})(?:\.(\d+))?)?)?)?)?)?(?:Z|([+-])(\d{2})(?::?(\d{2}))?)?$/;
+
+export const parseIsoSuffix = (text: string) => {
+	const match = ISO_SUFFIX_REGEX.exec(text);
+	if (!match) {
+		return null;
+	}
+
+	const [
+		,
+		year,
+		month = '01',
+		day = '01',
+		hours = '00',
+		minutes = '00',
+		seconds = '00',
+		fraction = '',
+		offsetSign = '+',
+		offsetHours = '00',
+		offsetMinutes = '00',
+	] = match;
+	const isoString = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
+	const date = new Date(`${isoString}.${fraction.padEnd(3, '0').slice(0, 3)}Z`);
+
+	// Out-of-range fields like a February 31 would otherwise roll over
+	if (
+		Number.isNaN(date.getTime())
+		|| !date.toISOString().startsWith(isoString)
+		|| Number(offsetHours) > 23
+		|| Number(offsetMinutes) > 59
+	) {
+		return null;
+	}
+
+	const offsetInMinutes = (offsetSign === '-' ? -1 : 1) * (60 * Number(offsetHours) + Number(offsetMinutes));
+	date.setTime(date.getTime() - 60_000 * offsetInMinutes);
+
+	return date;
 };

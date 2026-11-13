@@ -57,11 +57,17 @@ const init = async (numberOfChannels: number, sampleRate: number, bitrate: numbe
 	closeLame = module.cwrap('close_lame', null, ['number']);
 
 	lamePtr = initLame(numberOfChannels, sampleRate, bitrate);
+	if (lamePtr === 0) {
+		throw new Error('Failed to initialize the MP3 encoder.');
+	}
 };
 
 const reset = () => {
 	closeLame(lamePtr);
 	lamePtr = initLame(storedNumberOfChannels, storedSampleRate, storedBitrate);
+	if (lamePtr === 0) {
+		throw new Error('Failed to initialize the MP3 encoder.');
+	}
 };
 
 const encode = (audioData: ArrayBuffer, numberOfFrames: number) => {
@@ -87,6 +93,10 @@ const encode = (audioData: ArrayBuffer, numberOfFrames: number) => {
 		outputSlice.ptr,
 		requiredOutputSize,
 	);
+	if (bytesWritten < 0) {
+		// Happens when LAME fails to allocate its internal buffers, for example for huge samples
+		throw new Error(`MP3 encoding failed with LAME error code ${bytesWritten}.`);
+	}
 
 	const result = module.HEAPU8.slice(outputSlice.ptr, outputSlice.ptr + bytesWritten);
 	return result.buffer;
@@ -102,6 +112,9 @@ const flush = () => {
 	outputSlice = maybeGrowSlice(outputSlice, requiredOutputSize);
 
 	const bytesWritten = flushLame(lamePtr, outputSlice.ptr, requiredOutputSize);
+	if (bytesWritten < 0) {
+		throw new Error(`MP3 encoder flush failed with LAME error code ${bytesWritten}.`);
+	}
 
 	const result = module.HEAPU8.slice(outputSlice.ptr, outputSlice.ptr + bytesWritten);
 	needsReset = true; // After a flush, the encoder must be prepared to start a new encoding process
@@ -122,8 +135,13 @@ const maybeGrowSlice = (slice: Slice | null, requiredSize: number) => {
 			module._free(slice.ptr);
 		}
 
+		const ptr = module._malloc(requiredSize);
+		if (ptr === 0) {
+			throw new Error(`Failed to allocate ${requiredSize} bytes for MP3 encoding.`);
+		}
+
 		return {
-			ptr: module._malloc(requiredSize),
+			ptr,
 			size: requiredSize,
 		};
 	}

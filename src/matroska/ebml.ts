@@ -79,6 +79,7 @@ export enum EBMLId {
 	Info = 0x1549a966,
 	TimestampScale = 0x2ad7b1,
 	DateUTC = 0x4461,
+	Title = 0x7ba9,
 	MuxingApp = 0x4d80,
 	WritingApp = 0x5741,
 	Tracks = 0x1654ae6b,
@@ -94,6 +95,7 @@ export enum EBMLId {
 	FlagVisualImpaired = 0x55ac,
 	FlagCommentary = 0x55af,
 	FlagLacing = 0x9c,
+	MaxBlockAdditionID = 0x55ee,
 	Name = 0x536e,
 	Language = 0x22b59c,
 	LanguageBCP47 = 0x22b59d,
@@ -108,9 +110,11 @@ export enum EBMLId {
 	DisplayWidth = 0x54b0,
 	DisplayHeight = 0x54ba,
 	DisplayUnit = 0x54b2,
+	StereoMode = 0x53b8,
 	AlphaMode = 0x53c0,
 	Audio = 0xe1,
 	SamplingFrequency = 0xb5,
+	OutputSamplingFrequency = 0x78b5,
 	Channels = 0x9f,
 	BitDepth = 0x6264,
 	SimpleBlock = 0xa3,
@@ -349,6 +353,10 @@ export class EBMLWriter {
 	}
 
 	writeVarInt(value: number, width = measureVarInt(value)) {
+		if (value >= 2 ** (7 * width) - 1) {
+			throw new Error(`EBML variable-size integer ${value} doesn't fit into ${width} bytes.`);
+		}
+
 		let pos = 0;
 
 		switch (width) {
@@ -416,26 +424,34 @@ export class EBMLWriter {
 			this.writeUnsignedInt(data.id); // ID field
 
 			if (Array.isArray(data.data)) {
-				const sizePos = this.writer.getPos();
-				const sizeSize = data.size === -1 ? 1 : (data.size ?? 4);
-
-				if (data.size === -1) {
-					// Write the reserved all-one-bits marker for unknown/unbounded size.
-					this.writeByte(0xff);
+				if (data.size === undefined) {
+					// The contents are known, so the size field can be exactly as wide as it needs to be
+					this.writeVarInt(measureEBML(data.data));
+					this.dataOffsets.set(data, this.writer.getPos());
+					this.writeEBML(data.data);
 				} else {
-					this.writer.seek(this.writer.getPos() + sizeSize);
-				}
+					// Elements with streamed contents reserve a size field of the given width and fill it in after
+					const sizePos = this.writer.getPos();
+					const sizeSize = data.size === -1 ? 1 : data.size;
 
-				const startPos = this.writer.getPos();
-				this.dataOffsets.set(data, startPos);
-				this.writeEBML(data.data);
+					if (data.size === -1) {
+						// Write the reserved all-one-bits marker for unknown/unbounded size.
+						this.writeByte(0xff);
+					} else {
+						this.writer.seek(this.writer.getPos() + sizeSize);
+					}
 
-				if (data.size !== -1) {
-					const size = this.writer.getPos() - startPos;
-					const endPos = this.writer.getPos();
-					this.writer.seek(sizePos);
-					this.writeVarInt(size, sizeSize);
-					this.writer.seek(endPos);
+					const startPos = this.writer.getPos();
+					this.dataOffsets.set(data, startPos);
+					this.writeEBML(data.data);
+
+					if (data.size !== -1) {
+						const size = this.writer.getPos() - startPos;
+						const endPos = this.writer.getPos();
+						this.writer.seek(sizePos);
+						this.writeVarInt(size, sizeSize);
+						this.writer.seek(endPos);
+					}
 				}
 			} else if (typeof data.data === 'number') {
 				const size = data.size ?? measureUnsignedInt(data.data);
@@ -471,6 +487,55 @@ export class EBMLWriter {
 		}
 	}
 }
+
+/** Returns the number of bytes writeEBML would write for the given data. */
+const measureEBML = (data: EBML | null): number => {
+	if (data === null) {
+		return 0;
+	} else if (data instanceof Uint8Array) {
+		return data.byteLength;
+	} else if (Array.isArray(data)) {
+		return data.reduce((sum, elem) => sum + measureEBML(elem), 0);
+	}
+
+	let contentSize: number;
+	let sizeSize: number;
+
+	if (Array.isArray(data.data)) {
+		contentSize = measureEBML(data.data);
+		sizeSize = data.size === undefined
+			? measureVarInt(contentSize)
+			: data.size === -1 ? 1 : data.size;
+	} else if (typeof data.data === 'number') {
+		contentSize = data.size ?? measureUnsignedInt(data.data);
+		sizeSize = measureVarInt(contentSize);
+	} else if (typeof data.data === 'bigint') {
+		contentSize = data.size ?? measureUnsignedBigInt(data.data);
+		sizeSize = measureVarInt(contentSize);
+	} else if (typeof data.data === 'string') {
+		contentSize = data.data.length;
+		sizeSize = measureVarInt(contentSize);
+	} else if (data.data instanceof Uint8Array) {
+		contentSize = data.data.byteLength;
+		sizeSize = data.size ?? measureVarInt(contentSize);
+	} else if (data.data instanceof EBMLFloat32) {
+		contentSize = 4;
+		sizeSize = 1;
+	} else if (data.data instanceof EBMLFloat64) {
+		contentSize = 8;
+		sizeSize = 1;
+	} else if (data.data instanceof EBMLSignedInt) {
+		contentSize = data.size ?? measureSignedInt(data.data.value);
+		sizeSize = measureVarInt(contentSize);
+	} else {
+		assert(data.data instanceof EBMLUnicodeString);
+
+		contentSize = textEncoder.encode(data.data.value).length;
+		sizeSize = measureVarInt(contentSize);
+	}
+
+	return measureUnsignedInt(data.id) + sizeSize + contentSize;
+};
 
 export const EBML_DATE_EPOCH = Date.UTC(2001, 0, 1); // In milliseconds since the Unix epoch
 export const MAX_VAR_INT_SIZE = 8;
@@ -559,7 +624,8 @@ export const readUnsignedInt = (slice: FileSlice, width: number) => {
 };
 
 export const readUnsignedBigInt = (slice: FileSlice, width: number) => {
-	if (width < 1 || width > 8) {
+	// Zero width is valid and means zero
+	if (width > 8) {
 		throw new Error('Bad unsigned int size ' + width);
 	}
 
@@ -609,30 +675,17 @@ export const readElementId = (slice: FileSlice) => {
 
 /** Returns `undefined` to indicate the EBML undefined size. Returns `null` if the size couldn't be read. */
 export const readElementSize = (slice: FileSlice): number | undefined | null => {
-	// Need at least 1 byte to read the size
-	if (slice.remainingLength < 1) {
-		return null;
-	}
-
-	const firstByte = readU8(slice);
-
-	if (firstByte === 0xff) {
-		return undefined;
-	}
-
-	slice.skip(-1);
+	const startPos = slice.filePos;
 	const size = readVarInt(slice);
 
 	if (size === null) {
 		return null;
 	}
 
-	// In some (livestreamed) files, this is the value of the size field. While this technically is just a very
-	// large number, it is intended to behave like the reserved size 0xFF, meaning the size is undefined. We
-	// catch the number here. Note that it cannot be perfectly represented as a double, but the comparison works
-	// nonetheless.
-	// eslint-disable-next-line no-loss-of-precision
-	if (size === 0x00ffffffffffffff) {
+	// The size is unknown when all of its data bits are set, at any width. For 8 bytes, the value can't be perfectly
+	// represented as a double, but the comparison works nonetheless.
+	const width = slice.filePos - startPos;
+	if (size === 2 ** (7 * width) - 1) {
 		return undefined;
 	}
 

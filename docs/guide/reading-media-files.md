@@ -142,7 +142,8 @@ await input.getAudioTracks({
 
 Once you have an `InputTrack`, you can start extracting metadata from it.
 ```ts
-// Get a unique ID for this track in the input file:
+// Get a unique ID for this track in the input file (its 1-based index in
+// the list of all tracks):
 track.id; // => number
 
 // Get the 1-based index of this track among all tracks of the same type
@@ -213,6 +214,11 @@ await track.computeDuration(); // => 1902.4615
 ```
 Analogous to the `Input`'s duration, this is identical to the end timestamp of the last sample. A track's duration may be shorter than the `Input`'s total duration if the `Input` has multiple tracks which differ in length.
 
+If the track has no packets at all, `computeDuration` returns 0. To tell that case apart, use `computeDurationOrNull` instead, which returns `null` for a track without packets:
+```ts
+await track.computeDurationOrNull(); // => number | null
+```
+
 You can also retrieve the approximate duration based on metadata in the file:
 ```ts
 await track.getDurationFromMetadata(); // => number | null
@@ -223,6 +229,11 @@ You can also retrieve the track's *start timestamp* in seconds:
 await track.getFirstTimestamp(); // => 0.041666666666666664
 ```
 This is the opposite of *duration*: It's the start timestamp of the first sample.
+
+If the track has no packets at all, `getFirstTimestamp` returns 0. To tell that case apart, use `getFirstTimestampOrNull` instead, which returns `null` for a track without packets:
+```ts
+await track.getFirstTimestampOrNull(); // => number | null
+```
 
 ::: warning
 A track's start timestamp does **NOT** need to be 0. It is typically close to zero, but it may be slightly positive, or even slightly negative.
@@ -643,7 +654,7 @@ type UrlSourceOptions = {
 	getRetryDelay?: (previousAttempts: number, error: unknown, url: string | URL | Request) => number | null;
 
 	// The maximum number of bytes the cache is allowed to hold
-	// in memory. Defaults to 8 MiB.
+	// in memory. Defaults to 64 MiB.
 	maxCacheSize?: number;
 
 	// The maximum number of parallel requests to use for fetching. Defaults to 2.
@@ -769,7 +780,7 @@ type MaybePromise<T> = T | Promise<T>;
 - `getSize`\
 	Called when the size of the entire file is requested. Must return or resolve to the size in bytes. This function is guaranteed to be called before `read`.
 - `read`\
-	Called when data is requested. Must return or resolve to the bytes from the specified byte range, or a stream that yields these bytes. You are guaranteed that `0 <= start < end < fileSize`.
+	Called when data is requested. Must return or resolve to the bytes from the specified byte range, or a stream that yields these bytes. You are guaranteed that `0 <= start < end <= fileSize`.
 - `dispose`\
 	Called when the `Input` driven by this source is disposed.
 - `maxCacheSize`\
@@ -808,7 +819,7 @@ This source is *unsized*, meaning calls to `.getSize()` will throw and readers a
 ```ts
 type ReadableStreamSourceOptions = {
 	// The maximum number of bytes the cache is allowed to hold
-	// in memory. Defaults to 16 MiB.
+	// in memory. Defaults to 32 MiB.
 	maxCacheSize?: number;
 
 	// Handles errors that occur while no read is pending

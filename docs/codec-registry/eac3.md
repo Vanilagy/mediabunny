@@ -22,7 +22,7 @@ The Dolby Digital Plus (E-AC-3) audio codec, specified in [ETSI TS 102 366](http
 
 ## `EncodedPacket` data
 
-The packet's data must be a sync frame as defined in Section E.1.2.0 of [ETSI TS 102 366](https://www.etsi.org/deliver/etsi_ts/102300_102399/102366/01.04.01_60/ts_102366v010401p.pdf), beginning with the sync word `0x0B77`.
+The packet's data must be a sync frame as defined in Section E.1.2.0 of [ETSI TS 102 366](https://www.etsi.org/deliver/etsi_ts/102300_102399/102366/01.04.01_60/ts_102366v010401p.pdf), beginning with the sync word `0x0B77`, followed by the dependent substream sync frames belonging to it, if any.
 
 ## `EncodedPacket` type
 

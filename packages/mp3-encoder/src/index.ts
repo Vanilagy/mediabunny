@@ -34,8 +34,9 @@ class Mp3Encoder extends CustomAudioEncoder {
 
 	private buffer = new Uint8Array(2 ** 16);
 	private currentBufferOffset = 0;
-	private currentTimestamp: number | null = null;
+	private nextTimestampInSamples: number | null = null;
 	private chunkMetadata: EncodedAudioChunkMetadata = {};
+	private inFlightEncode: Promise<void> | null = null;
 
 	static override supports(codec: AudioCodec, config: AudioDecoderConfig): boolean {
 		return codec === 'mp3'
@@ -101,7 +102,7 @@ class Mp3Encoder extends CustomAudioEncoder {
 
 	private resetInternalState() {
 		this.currentBufferOffset = 0;
-		this.currentTimestamp = null;
+		this.nextTimestampInSamples = null;
 		this.chunkMetadata = {
 			decoderConfig: {
 				codec: 'mp3',
@@ -112,9 +113,10 @@ class Mp3Encoder extends CustomAudioEncoder {
 	}
 
 	async encode(audioSample: AudioSample) {
-		if (this.currentTimestamp === null) {
+		if (this.nextTimestampInSamples === null) {
 			// LAME adds 576 samples of encoder delay on top of inherent delay
-			this.currentTimestamp = audioSample.timestamp - (576 + MP3_DECODER_DELAY) / this.config.sampleRate;
+			this.nextTimestampInSamples = Math.round(audioSample.timestamp * this.config.sampleRate)
+				- (576 + MP3_DECODER_DELAY);
 		}
 
 		const sizePerChannel = audioSample.allocationSize({
@@ -133,18 +135,25 @@ class Mp3Encoder extends CustomAudioEncoder {
 			});
 		}
 
-		const result = await this.sendCommand({
+		const encode = this.sendCommand({
 			type: 'encode',
 			data: {
 				audioData,
 				numberOfFrames: audioSample.numberOfFrames,
 			},
-		}, [audioData]);
+		}, [audioData]).then(result => this.digestOutput(new Uint8Array(result.encodedData)));
+		encode.catch(() => {}); // Surfaces through whoever awaits it next
 
-		this.digestOutput(new Uint8Array(result.encodedData));
+		// Keep one sample in flight, so the worker already has the next one by the time it's done with the current one
+		const previousEncode = this.inFlightEncode;
+		this.inFlightEncode = encode;
+		await previousEncode;
 	}
 
 	async flush() {
+		await this.inFlightEncode;
+		this.inFlightEncode = null;
+
 		const result = await this.sendCommand({ type: 'flush' });
 
 		this.digestOutput(new Uint8Array(result.flushedData));
@@ -161,7 +170,7 @@ class Mp3Encoder extends CustomAudioEncoder {
 	 * these chunks and extract the MP3 frames only when they're complete.
 	 */
 	private digestOutput(bytes: Uint8Array) {
-		assert(this.currentTimestamp !== null);
+		assert(this.nextTimestampInSamples !== null);
 
 		const requiredBufferSize = this.currentBufferOffset + bytes.length;
 		if (requiredBufferSize > this.buffer.length) {
@@ -190,12 +199,13 @@ class Mp3Encoder extends CustomAudioEncoder {
 			}
 
 			const data = this.buffer.slice(pos, pos + header.totalSize);
+			const timestamp = this.nextTimestampInSamples / this.config.sampleRate;
 			const duration = header.audioSamplesInFrame / header.sampleRate;
-			this.onPacket(new EncodedPacket(data, 'key', this.currentTimestamp, duration), this.chunkMetadata);
+			this.onPacket(new EncodedPacket(data, 'key', timestamp, duration), this.chunkMetadata);
 
 			this.chunkMetadata = {}; // Mimic WebCodecs-like behavior
 
-			this.currentTimestamp += duration;
+			this.nextTimestampInSamples += header.audioSamplesInFrame;
 			pos += header.totalSize;
 		}
 
