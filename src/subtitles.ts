@@ -124,11 +124,12 @@ export const parseSubtitleTimestamp = (string: string) => {
 		+ Number(match[4]);
 };
 
-export const formatSubtitleTimestamp = (timestamp: number) => {
-	const hours = Math.floor(timestamp / (60 * 60 * 1000));
-	const minutes = Math.floor((timestamp % (60 * 60 * 1000)) / (60 * 1000));
-	const seconds = Math.floor((timestamp % (60 * 1000)) / 1000);
-	const milliseconds = timestamp % 1000;
+export const formatSubtitleTimestamp = (timeInSeconds: number) => {
+	const totalMilliseconds = Math.round(1000 * timeInSeconds);
+	const hours = Math.floor(totalMilliseconds / (60 * 60 * 1000));
+	const minutes = Math.floor((totalMilliseconds % (60 * 60 * 1000)) / (60 * 1000));
+	const seconds = Math.floor((totalMilliseconds % (60 * 1000)) / 1000);
+	const milliseconds = totalMilliseconds % 1000;
 
 	return hours.toString().padStart(2, '0') + ':'
 		+ minutes.toString().padStart(2, '0') + ':'

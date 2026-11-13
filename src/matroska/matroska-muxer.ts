@@ -1146,7 +1146,7 @@ export class MatroskaMuxer extends Muxer {
 				const time = parseSubtitleTimestamp(match.slice(1, -1));
 				const offsetTime = time - timestampMs;
 
-				return `<${formatSubtitleTimestamp(offsetTime)}>`;
+				return `<${formatSubtitleTimestamp(offsetTime / 1000)}>`;
 			});
 
 			let subtitleChunk: InternalMediaChunk;

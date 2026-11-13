@@ -1043,7 +1043,7 @@ export class IsobmffMuxer extends Muxer {
 
 				const box = vttc(
 					cue.text,
-					containsTimestamp ? Math.round(1000 * sampleStart) : null,
+					containsTimestamp ? sampleStart : null,
 					cue.identifier ?? null,
 					cue.settings ?? null,
 					sourceId ?? null,
