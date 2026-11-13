@@ -52,7 +52,7 @@ import {
 	Rotation,
 } from './misc';
 import { Output, OutputTrackGroup } from './output';
-import { Mp4OutputFormat } from './output-format';
+import { NullOutputFormat } from './output-format';
 import { EncodedPacket } from './packet';
 import {
 	AudioSample,
@@ -1892,7 +1892,7 @@ export class Conversion {
 				// now, this is the simplest way. Will refactor in the future! TODO
 
 				const tempOutput = new Output({
-					format: new Mp4OutputFormat(), // Supports all video codecs
+					format: new NullOutputFormat(),
 					target: new NullTarget(),
 				});
 

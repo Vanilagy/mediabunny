@@ -984,20 +984,20 @@ test('Unrepresentable AAC channel configuration', async () => {
 	output.addAudioTrack(source);
 	await output.start();
 
-	// What FFmpeg's encoder writes for 7.1: channel configuration 12, too large for the 3-bit ADTS field
+	// Channel configuration 13 (22.2), too large for the 3-bit ADTS field
 	const addPacket = () => source.add(
 		new EncodedPacket(new Uint8Array(16), 'key', 0, 1024 / 48000),
 		{
 			decoderConfig: {
 				codec: 'mp4a.40.2',
-				numberOfChannels: 8,
+				numberOfChannels: 24,
 				sampleRate: 48000,
-				description: new Uint8Array([0x11, 0xe0, 0x56, 0xe5, 0x00]),
+				description: new Uint8Array([0x11, 0xe8, 0x56, 0xe5, 0x00]),
 			},
 		},
 	);
-	await expect(addPacket()).rejects.toThrow('channel configuration 12');
+	await expect(addPacket()).rejects.toThrow('channel configuration 13');
 
-	// The rejected packet mustn't leave the track half set up
-	await expect(addPacket()).rejects.toThrow('channel configuration 12');
+	// The rejected packet should not leave the track half set up
+	await expect(addPacket()).rejects.toThrow('channel configuration 13');
 });

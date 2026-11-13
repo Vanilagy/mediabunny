@@ -2424,6 +2424,7 @@ export class IsobmffDemuxer extends Demuxer {
 					throw error;
 				} finally {
 					this.currentTrack = null;
+					this.currentFragmentTrackState = null;
 				}
 			}; break;
 

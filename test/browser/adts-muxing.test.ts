@@ -238,12 +238,12 @@ test('ADTS muxer with ADTS input (passthrough)', { timeout: 15_000 }, async () =
 test('Unrepresentable channel configuration', async () => {
 	const { output, addPacket } = await startAdtsOutput();
 
-	// What FFmpeg's encoder writes for 7.1: channel configuration 12, too large for the 3-bit ADTS field
-	const description = new Uint8Array([0x11, 0xe0, 0x56, 0xe5, 0x00]);
-	await expect(addPacket(description)).rejects.toThrow('channel configuration 12');
+	// Channel configuration 13 (22.2), too large for the 3-bit ADTS field
+	const description = new Uint8Array([0x11, 0xe8, 0x56, 0xe5, 0x00]);
+	await expect(addPacket(description)).rejects.toThrow('channel configuration 13');
 
 	// The rejected packet mustn't leave the muxer half set up
-	await expect(addPacket(description)).rejects.toThrow('channel configuration 12');
+	await expect(addPacket(description)).rejects.toThrow('channel configuration 13');
 	await expect(output.finalize()).rejects.toThrow('Cannot finalize an empty ADTS file');
 });
 

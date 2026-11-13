@@ -93,3 +93,16 @@ export class PacketOrderValidator {
 		return true;
 	}
 }
+
+export class NullMuxer extends Muxer {
+	async start() {}
+
+	async getMimeType() {
+		return 'application/x-black-hole';
+	}
+
+	async addEncodedVideoPacket() {}
+	async addEncodedAudioPacket() {}
+	async addSubtitleCue() {}
+	async finalize() {}
+}

@@ -1064,6 +1064,7 @@ export class Output<
 				this.state = 'finalized';
 			} catch (error) {
 				this.state = 'canceled';
+				this._canceled.resolve();
 				throw error;
 			} finally {
 				this._targetsClosed = true;

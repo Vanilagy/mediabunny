@@ -127,7 +127,7 @@ class DtsEncoder extends CustomAudioEncoder {
 			}
 		}
 
-		// FFmpeg's DTS encoder has no delay of its own, so there's nothing to flush out of it
+		// FFmpeg's DTS encoder doesn't hold back any frames, so there's nothing to flush out of it
 		await this.inFlightEncode;
 		this.inFlightEncode = null;
 

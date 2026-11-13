@@ -821,17 +821,15 @@ Behavior changes worth a look are marked **[behavior change]**.
 
 ### AAC encoder extension ✅
 
-✅ Closing during worker creation leaked the worker. Fix: `init()` stores its work as `initPromise`, and `close()`
-  awaits it (ignoring errors) before terminating the worker.
-✅ Closing during encoder initialization hung forever. Fix: same change; the init request to the worker now
-  settles before the worker is terminated.
+✅ Closing during worker creation leaked the worker. Fix: none needed in the extension; the encoder wrappers'
+  `flushAndClose` awaits a pending `ensureEncoderPromise`, so `close()` never runs during `init()`.
+✅ Closing during encoder initialization hung forever. Fix: same as above.
 ✅ 3 channels were encoded as 2.1 (third channel lost). Fix: new `set_aac_channel_layout` in the bridge with
   explicit layouts (3 -> surround) instead of `av_channel_layout_default`.
 ✅ 7 channels were encoded as 6.1 with a PCE (channel configuration 0), which QuickTime silently drops. (An
-  earlier claim that FFmpeg decodes it permuted did not hold up in verification.) **[behavior change]** 7- and
-  8-channel AAC now use channel configurations 11/12, which can't go into ADTS/MPEG-TS; `supports()` rejects ADTS
-  for them. Fix: the same mapping uses 6.1(back) for 7 and 7.1 for 8 channels; `supports()` returns false for
-  ADTS with >= 7 channels.
+  earlier claim that FFmpeg decodes it permuted did not hold up in verification.) Fix: the same mapping uses
+  6.1(back) for 7 and 7.1 for 8 channels, i.e. channel configurations 11/12. For ADTS/MPEG-TS, which can't signal
+  these, `buildAdtsHeaderTemplate` writes an equivalent PCE instead (same element layout as FFmpeg's tables).
 ✅ The encoder couldn't be reused after a flush (stayed at EOF). Fix: `reset_encoder` replaces the drained codec
   context with a freshly opened one (`avcodec_flush_buffers` does nothing for AAC); failures are reported.
 ✅ Shifting the pending buffer with `copyWithin` after every frame was quadratic for one huge sample (perf; no
@@ -840,7 +838,7 @@ Behavior changes worth a look are marked **[behavior change]**.
 
 ### FLAC encoder extension ✅
 
-✅ Closing during worker creation leaked the worker. Fix: same `initPromise` approach as the AAC encoder.
+✅ Closing during worker creation leaked the worker. Fix: none needed in the extension, see the AAC encoder.
 ✅ The encoder couldn't be reused after a flush (libFLAC reset its config). Fix: new `init_stream` re-applies the
   whole configuration (channels, sample rate, bit depth, compression level, verify) before every (re)init.
 
@@ -886,8 +884,8 @@ Behavior changes worth a look are marked **[behavior change]**.
   browsers decode). Fix: only set it for AVC, where it's needed for the inferred reorder buffering.
 ✅ `supports()` claimed AAC/Opus/E-AC-3/Vorbis channel and rate combinations that fail at open. Fix: AAC is limited
   to 1-6 and 8 channels, Opus to <= 8, E-AC-3 to <= 6, Vorbis to <= 8 channels and <= 50 kHz.
-✅ `supports()` claimed AAC ADTS with 4/8 channels, which writes bad headers. Fix: ADTS with 8 channels (channel
-  configuration 12) is rejected; 4 channels now work since the ADTS headers carry the PCE (see ADTS / AAC).
+✅ `supports()` claimed AAC ADTS with 4/8 channels, which writes bad headers. Fix: 4 channels work since the ADTS
+  headers carry the PCE (see ADTS / AAC), and 8 channels (channel configuration 12) since that's written as a PCE.
 ✅ 3/5-channel AAC/AC-3 used unspecified channel layouts. Fix: open AAC/AC-3/E-AC-3 with explicit surround (3) and
   5.0(back) (5) layouts.
 ✅ Vorbis channels 9+ were silent. Fix: `supports()` caps Vorbis at 8 channels, since NodeAV's resampler only
@@ -1030,7 +1028,7 @@ The current behavior is arguably intended, or fixing it means picking between va
 ✅ `getUnixTimeForTimestamp` waits for a timestamp past the live edge (no `skipLiveWait`). Fix: it always skips the
   live wait, since extrapolating from the last known segment is just as precise.
 ✅ The AAC encoder's 4-channel layout is 4.0 (L R C BC), not Mediabunny's quad convention; AAC has no PCE-free quad.
-  Fix: 4 channels are encoded as quad with a PCE, and ADTS is no longer supported for them.
+  Fix: 4 channels are encoded as quad with a PCE, which ADTS carries in its frames.
 ✅ Server: VP8 alpha decodes opaque (docs only promise VP9/ProRes transparency).
 ✅ Server: the Vorbis bitrate doesn't scale with channel count (6 ch at 48 kHz needs >= 96k).
   Fix: `Quality` now scales Opus and Vorbis bitrates by `numberOfChannels / 2`. AAC stays unscaled, as Chrome on

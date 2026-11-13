@@ -39,7 +39,7 @@ const FRAME_SIZE_FALLBACK = 1024; // Just 'cause
 
 const DTS_ENCODER_DELAY = 512; // In samples
 
-// How much audio samples are held back by these encoders without ever flushing it on their own
+// How many samples these encoders hold back without ever flushing them on their own
 const UNFLUSHED_ENCODER_DELAYS: Partial<Record<AudioCodec, number>> = {
 	ac3: 256,
 	eac3: 256,
@@ -62,14 +62,10 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 
 	static override supports(codec: AudioCodec, config: AudioEncoderConfig): boolean {
 		const { numberOfChannels, sampleRate } = config;
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
-		const isAdts = (config as any).aac?.format === 'adts';
 
 		return (
 			codec === 'aac' && SUPPORTED_AAC_CHANNEL_COUNTS.includes(numberOfChannels)
 			&& AAC_SAMPLE_RATES.includes(sampleRate)
-			// FFmpeg's encoder signals 7.1 with channel configuration 12, too large for the ADTS header's 3 bits
-			&& !(isAdts && numberOfChannels === 8)
 		) || (
 			// Without an explicit mapping family, libopus only does up to 8 channels
 			codec === 'opus' && numberOfChannels >= 1 && numberOfChannels <= 8

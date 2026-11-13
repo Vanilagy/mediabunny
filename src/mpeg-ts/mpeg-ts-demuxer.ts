@@ -174,7 +174,6 @@ type TsPacket = TsPacketHeader & {
 
 type Section = {
 	startPos: number;
-	endPos: number | null; // null if the section was not read fully
 	pid: number;
 	payload: Uint8Array<ArrayBufferLike>;
 	randomAccessIndicator: number;
@@ -1000,7 +999,6 @@ export class MpegTsDemuxer extends Demuxer {
 
 		return {
 			startPos,
-			endPos: full ? endPos : null,
 			pid: firstPacket.pid,
 			payload: merged,
 			randomAccessIndicator,
@@ -1908,7 +1906,6 @@ const maybeInsertReferencePacket = (
 		}
 	}
 
-	// Copy only the header fields (callers may pass a whole PES packet)
 	referencePesPackets.splice(index + 1, 0, {
 		sectionStartPos: pesPacketHeader.sectionStartPos,
 		pts: pesPacketHeader.pts,

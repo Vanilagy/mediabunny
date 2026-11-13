@@ -22,7 +22,7 @@ import {
 } from './matroska/ebml';
 import { MatroskaDemuxer } from './matroska/matroska-demuxer';
 import { Mp3Demuxer } from './mp3/mp3-demuxer';
-import { ID3_V2_HEADER_SIZE, readId3V2Header, skipId3V2Tags } from './id3';
+import { skipId3V2Tags } from './id3';
 import { readConfirmedMp3FrameHeader } from './mp3/mp3-reader';
 import { OggDemuxer } from './ogg/ogg-demuxer';
 import { WaveDemuxer } from './wave/wave-demuxer';
@@ -473,23 +473,10 @@ export class OggInputFormat extends InputFormat {
 export class FlacInputFormat extends InputFormat {
 	/** @internal */
 	async _getMatchPosition(input: Input) {
-		let currentPos = 0;
-
 		// There might be ID3v2 headers at the start, skip 'em
-		while (true) {
-			let slice = input._reader.requestSlice(currentPos, ID3_V2_HEADER_SIZE);
-			if (isThenable(slice)) slice = await slice;
-			if (!slice) break;
+		const startPos = await skipId3V2Tags(input._reader, 0);
 
-			const id3V2Header = readId3V2Header(slice);
-			if (!id3V2Header) {
-				break;
-			}
-
-			currentPos = slice.filePos + id3V2Header.size;
-		}
-
-		let slice = input._reader.requestSlice(currentPos, 4);
+		let slice = input._reader.requestSlice(startPos, 4);
 		if (isThenable(slice)) slice = await slice;
 		if (!slice) return null;
 

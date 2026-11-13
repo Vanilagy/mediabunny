@@ -8,7 +8,7 @@ import { BufferTarget } from '../../src/target.js';
 import { canEncode, Quality } from '../../src/encode.js';
 import { AudioSampleSource } from '../../src/media-source.js';
 import { AudioSampleSink, EncodedPacketSink } from '../../src/media-sink.js';
-import { Mp4OutputFormat } from '../../src/output-format.js';
+import { AdtsOutputFormat, Mp4OutputFormat, OutputFormat } from '../../src/output-format.js';
 import { AudioSample } from '../../src/sample.js';
 import { EncodedPacket } from '../../src/packet.js';
 import {
@@ -202,11 +202,23 @@ test('AAC with four channels', async () => {
 	await testChannelPositions(4);
 });
 
+test('AAC with four channels in ADTS', async () => {
+	await testChannelPositions(4, new AdtsOutputFormat());
+});
+
 test('AAC with seven channels', async () => {
 	await testChannelPositions(7);
 });
 
-const testChannelPositions = async (numberOfChannels: number) => {
+test('AAC with seven channels in ADTS', async () => {
+	await testChannelPositions(7, new AdtsOutputFormat());
+});
+
+test('AAC with eight channels in ADTS', async () => {
+	await testChannelPositions(8, new AdtsOutputFormat());
+});
+
+const testChannelPositions = async (numberOfChannels: number, format: OutputFormat = new Mp4OutputFormat()) => {
 	registerAacEncoder();
 
 	// The extension only encodes, so FFmpeg does the decoding
@@ -218,7 +230,7 @@ const testChannelPositions = async (numberOfChannels: number) => {
 
 	// Every channel gets a tone of its own, so we can tell where each of them ends up. The fourth one stays low because
 	// it's the LFE channel in the layouts that have one.
-	const tones = [500, 700, 1000, 60, 1300, 1600, 1900];
+	const tones = [500, 700, 1000, 60, 1300, 1600, 1900, 2200];
 	const data = new Float32Array(sampleRate * numberOfChannels);
 	for (let i = 0; i < sampleRate; i++) {
 		for (let channel = 0; channel < numberOfChannels; channel++) {
@@ -227,7 +239,7 @@ const testChannelPositions = async (numberOfChannels: number) => {
 	}
 
 	const output = new Output({
-		format: new Mp4OutputFormat(),
+		format,
 		target: new BufferTarget(),
 	});
 	const audioSource = new AudioSampleSource({
@@ -256,13 +268,15 @@ const testChannelPositions = async (numberOfChannels: number) => {
 	const track = (await input.getPrimaryAudioTrack())!;
 	expect(await track.getNumberOfChannels()).toBe(numberOfChannels);
 
-	// Quad has no channel configuration of its own, so it's declared in a PCE (configuration 0)
-	const channelConfigurations = [1, 2, 3, 0, 5, 6, 11, 12];
-	const decoderConfig = await track.getDecoderConfig();
-	assert(decoderConfig);
-	const description = toUint8Array(decoderConfig.description!);
-	const channelConfiguration = (description[1]! >> 3) & 0xf;
-	expect(channelConfiguration).toBe(channelConfigurations[numberOfChannels - 1]);
+	if (format instanceof Mp4OutputFormat) {
+		// Quad has no channel configuration of its own, so it's declared in a PCE (configuration 0)
+		const channelConfigurations = [1, 2, 3, 0, 5, 6, 11, 12];
+		const decoderConfig = await track.getDecoderConfig();
+		assert(decoderConfig);
+		const description = toUint8Array(decoderConfig.description!);
+		const channelConfiguration = (description[1]! >> 3) & 0xf;
+		expect(channelConfiguration).toBe(channelConfigurations[numberOfChannels - 1]);
+	}
 
 	// Lay the decoded audio out on the timeline to line it up with the input
 	const decoded = Array.from({ length: numberOfChannels }, () => new Float32Array(sampleRate));
@@ -299,25 +313,6 @@ const getToneAmplitude = (signal: Float32Array, frequency: number, sampleRate: n
 
 	return 2 * Math.hypot(sinSum, cosSum) / signal.length;
 };
-
-test('AAC ADTS with four, seven or eight channels', () => {
-	registerAacEncoder();
-
-	const supportsAdts = (numberOfChannels: number) => customAudioEncoders.some(x => x.supports('aac', {
-		codec: 'mp4a.40.2',
-		numberOfChannels,
-		sampleRate: 48000,
-		bitrate: 128000,
-		// @ts-expect-error Not in the types
-		aac: { format: 'adts' },
-	}));
-
-	// ADTS headers can't carry the PCE or the channel configurations (11 and 12) these are encoded with
-	expect(supportsAdts(4)).toBe(false);
-	expect(supportsAdts(6)).toBe(true);
-	expect(supportsAdts(7)).toBe(false);
-	expect(supportsAdts(8)).toBe(false);
-});
 
 test('AAC encoding after a flush', async () => {
 	registerAacEncoder();

@@ -257,7 +257,8 @@ export type AdtsHeaderTemplate = {
 };
 
 export const buildAdtsHeaderTemplate = (config: AacAudioSpecificConfig): AdtsHeaderTemplate => {
-	const { coreObjectType, frequencyIndex, channelConfiguration, frameLength, programConfigElement } = config;
+	const { coreObjectType, frequencyIndex, frameLength } = config;
+	let { channelConfiguration, programConfigElement } = config;
 
 	if (coreObjectType < 1 || coreObjectType > 4) {
 		throw new Error(`AAC object type ${coreObjectType} can't be stored in ADTS.`);
@@ -266,6 +267,52 @@ export const buildAdtsHeaderTemplate = (config: AacAudioSpecificConfig): AdtsHea
 		// The explicit rate that index 15 escapes to has no room in the header, and 13 and 14 are reserved
 		throw new Error(`AAC sampling frequency index ${frequencyIndex} can't be stored in ADTS.`);
 	}
+
+	if (channelConfiguration === 11 || channelConfiguration === 12) {
+		// ADTS has no room for these configurations, but a PCE listing the same elements describes the same layout:
+		// 6.1 with back surround and a back center (11), or 7.1 with side and back surround (12)
+		const surroundPair = {
+			isCpe: true,
+			tagSelect: 1,
+		};
+		programConfigElement = {
+			elementInstanceTag: 0,
+			objectType: coreObjectType - 1,
+			samplingFrequencyIndex: frequencyIndex,
+			frontElements: [
+				{
+					isCpe: false,
+					tagSelect: 0,
+				},
+				{
+					isCpe: true,
+					tagSelect: 0,
+				},
+			],
+			sideElements: channelConfiguration === 12 ? [surroundPair] : [],
+			backElements: channelConfiguration === 11
+				? [
+						surroundPair,
+						{
+							isCpe: false,
+							tagSelect: 1,
+						},
+					]
+				: [{
+						isCpe: true,
+						tagSelect: 2,
+					}],
+			lfeElementTags: [0],
+			assocDataElementTags: [],
+			ccElements: [],
+			monoMixdownElementNumber: null,
+			stereoMixdownElementNumber: null,
+			matrixMixdown: null,
+			comment: new Uint8Array(0),
+		};
+		channelConfiguration = 0;
+	}
+
 	if (channelConfiguration > 7) {
 		throw new Error(`AAC channel configuration ${channelConfiguration} can't be stored in ADTS.`);
 	}

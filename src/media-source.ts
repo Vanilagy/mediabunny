@@ -103,8 +103,6 @@ export abstract class MediaSource {
 	_connectedTrack: OutputTrack | null = null;
 	/** @internal */
 	_closingPromise: Promise<void> | null = null;
-	/** @internal */
-	_closed = false;
 	/**
 	 * Set when the encoder is configured with a bitrate.
 	 * @internal
@@ -163,8 +161,6 @@ export abstract class MediaSource {
 		this._closingPromise = (async () => {
 			await this._flushAndClose(false);
 
-			this._closed = true;
-
 			if (connectedTrack.output.state === 'finalizing' || connectedTrack.output.state === 'finalized') {
 				return;
 			}
@@ -177,10 +173,7 @@ export abstract class MediaSource {
 
 	/** @internal */
 	async _flushOrWaitForOngoingClose(forceClose: boolean) {
-		return this._closingPromise ??= (async () => {
-			await this._flushAndClose(forceClose);
-			this._closed = true;
-		})();
+		return this._closingPromise ??= this._flushAndClose(forceClose);
 	}
 }
 
@@ -271,8 +264,9 @@ class VideoEncoderWrapper {
 	private outputWidth: number | null = null;
 	private outputHeight: number | null = null;
 
-	// Frame rate normalization state
 	private addMutex = new AsyncMutex();
+
+	// Frame rate normalization state
 	private frameRateLastSample: VideoSample | null = null;
 	private frameRateLastTimestamp: number | null = null;
 	private frameRateLastEndTimestamp: number | null = null;
@@ -450,11 +444,9 @@ class VideoEncoderWrapper {
 				this.frameRateLastSample = videoSample.clone();
 				this.frameRateLastTimestamp = alignedTimestamp;
 				this.frameRateLastEndTimestamp = originalEndTimestamp;
-
-				await this.processAndEncode(videoSample, encodeOptions);
-			} else {
-				await this.processAndEncode(videoSample, encodeOptions);
 			}
+
+			await this.processAndEncode(videoSample, encodeOptions);
 		} finally {
 			release?.();
 
@@ -1184,7 +1176,7 @@ class VideoEncoderWrapper {
 	}
 
 	getQueueSize() {
-		// Adds waiting for the frame rate mutex are queued up for encoding just the same
+		// Adds waiting for the add mutex are queued up for encoding just the same
 		if (this.customEncoder) {
 			return this.addMutex.pending + this.customEncoderQueueSize;
 		} else {

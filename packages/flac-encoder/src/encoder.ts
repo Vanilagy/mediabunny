@@ -23,7 +23,6 @@ const FLAC_SAMPLE_RATES = [
 
 class FlacEncoder extends CustomAudioEncoder {
 	private worker: Worker | null = null;
-	private initPromise: Promise<void> | null = null;
 	private workerError: Error | null = null;
 	private nextMessageId = 0;
 	private pendingMessages = new Map<number, {
@@ -44,47 +43,45 @@ class FlacEncoder extends CustomAudioEncoder {
 			&& FLAC_SAMPLE_RATES.includes(config.sampleRate);
 	}
 
-	init() {
-		return this.initPromise = (async () => {
-			// eslint-disable-next-line @typescript-eslint/no-unsafe-call
-			this.worker = (await createWorker()) as Worker;
+	async init() {
+		// eslint-disable-next-line @typescript-eslint/no-unsafe-call
+		this.worker = (await createWorker()) as Worker;
 
-			const onMessage = (data: WorkerResponse) => {
-				const pending = this.pendingMessages.get(data.id);
-				assert(pending !== undefined);
+		const onMessage = (data: WorkerResponse) => {
+			const pending = this.pendingMessages.get(data.id);
+			assert(pending !== undefined);
 
-				this.pendingMessages.delete(data.id);
-				if (data.success) {
-					pending.resolve(data.data);
-				} else {
-					pending.reject(data.error);
-				}
-			};
-
-			// Treats any worker error (like CSP errors) as fatal, rejecting pending and future commands
-			const onError = (error: Error) => {
-				this.workerError = error;
-				for (const pending of this.pendingMessages.values()) {
-					pending.reject(error);
-				}
-				this.pendingMessages.clear();
-				this.worker?.terminate();
-				this.worker = null;
-			};
-
-			if (this.worker.addEventListener) {
-				this.worker.addEventListener('message', event => onMessage(event.data as WorkerResponse));
-				this.worker.addEventListener('error', (event) => {
-					onError(new Error(event.message || 'FLAC encoder worker failed to load or crashed.'));
-				});
+			this.pendingMessages.delete(data.id);
+			if (data.success) {
+				pending.resolve(data.data);
 			} else {
-				const nodeWorker = this.worker as unknown as {
-					on: (event: string, listener: (data: never) => void) => void;
-				};
-				nodeWorker.on('message', onMessage);
-				nodeWorker.on('error', onError);
+				pending.reject(data.error);
 			}
-		})();
+		};
+
+		// Treats any worker error (like CSP errors) as fatal, rejecting pending and future commands
+		const onError = (error: Error) => {
+			this.workerError = error;
+			for (const pending of this.pendingMessages.values()) {
+				pending.reject(error);
+			}
+			this.pendingMessages.clear();
+			this.worker?.terminate();
+			this.worker = null;
+		};
+
+		if (this.worker.addEventListener) {
+			this.worker.addEventListener('message', event => onMessage(event.data as WorkerResponse));
+			this.worker.addEventListener('error', (event) => {
+				onError(new Error(event.message || 'FLAC encoder worker failed to load or crashed.'));
+			});
+		} else {
+			const nodeWorker = this.worker as unknown as {
+				on: (event: string, listener: (data: never) => void) => void;
+			};
+			nodeWorker.on('message', onMessage);
+			nodeWorker.on('error', onError);
+		}
 	}
 
 	private resetInternalState() {
@@ -175,12 +172,7 @@ class FlacEncoder extends CustomAudioEncoder {
 		this.resetInternalState();
 	}
 
-	async close() {
-		// We can get closed while still initializing (when canceled early on), so let that settle first. Otherwise, the
-		// worker it's creating would outlive us.
-		assert(this.initPromise);
-		await this.initPromise.catch(() => {});
-
+	close() {
 		this.worker?.terminate();
 	}
 

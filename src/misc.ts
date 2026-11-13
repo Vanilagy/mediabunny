@@ -223,7 +223,7 @@ export const toDataView = (source: AllowSharedBufferSource): DataView => {
 };
 
 // Include a polyfill for environments that don't have TextEncoder (like AudioWorkletGlobalScope)
-export const TextEncoder = typeof globalThis.TextEncoder !== 'undefined'
+export const TextEncoder = /* #__PURE__ */ (() => typeof globalThis.TextEncoder !== 'undefined'
 	? globalThis.TextEncoder
 	: class TextEncoder {
 		readonly encoding = 'utf-8';
@@ -263,10 +263,10 @@ export const TextEncoder = typeof globalThis.TextEncoder !== 'undefined'
 
 			return bytes.slice(0, n);
 		}
-	};
+	})();
 
 // Include a polyfill for environments that don't have TextEncoder (like AudioWorkletGlobalScope)
-export const TextDecoder = typeof globalThis.TextDecoder !== 'undefined'
+export const TextDecoder = /* #__PURE__ */ (() => typeof globalThis.TextDecoder !== 'undefined'
 	? globalThis.TextDecoder
 	: class TextDecoder {
 		readonly encoding: 'utf-8' | 'utf-16le' | 'utf-16be';
@@ -386,7 +386,7 @@ export const TextDecoder = typeof globalThis.TextDecoder !== 'undefined'
 
 			return result;
 		}
-	};
+	})();
 
 export const textDecoder = /* #__PURE__ */ new TextDecoder();
 export const strictTextDecoder = /* #__PURE__ */ new TextDecoder('utf-8', { fatal: true });
@@ -1079,7 +1079,7 @@ export const isCodecReclaimedError = (error: unknown) => {
  */
 export type MaybePromise<T> = T | Promise<T>;
 
-const NativePromiseConstructor = /* #__PURE__ */ (async () => {})().constructor as PromiseConstructor;
+const NativePromiseConstructor = /* #__PURE__ */ (() => (async () => {})().constructor as PromiseConstructor)();
 
 /**
  * Needed to properly deal with custom Promise implementations and because this is closer to how the JS spec does it.

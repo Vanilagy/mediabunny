@@ -2952,37 +2952,34 @@ describe('Audio', async () => {
 		expect(sampleCount).toBeGreaterThan(0);
 	};
 
-	test('AAC ADTS is only claimed for channel layouts ADTS can describe', () => {
-		const supportsAdts = (numberOfChannels: number) => NodeAvAudioEncoder.supports('aac', {
-			codec: 'mp4a.40.2',
-			numberOfChannels,
-			sampleRate: 48000,
-			// @ts-expect-error Not in the types
-			aac: { format: 'adts' },
-		});
-
-		expect(supportsAdts(6)).toBe(true);
-		expect(supportsAdts(4)).toBe(true);
-		expect(supportsAdts(8)).toBe(false);
+	test('AAC ADTS with a program config element', async () => {
+		await testAdtsChannelAmplitudes(4);
 	});
 
-	test('AAC ADTS with a program config element', async () => {
-		// Quad, which FFmpeg's encoder describes with a PCE that the ADTS headers have to carry
-		const amplitudes = [0.1, 0.2, 0.4, 0.8];
+	test('AAC ADTS with 7.1', async () => {
+		await testAdtsChannelAmplitudes(8);
+	});
+
+	const testAdtsChannelAmplitudes = async (numberOfChannels: number) => {
+		const amplitudes = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
 		const length = 48000;
-		const input = new Float32Array(4 * length);
+		const input = new Float32Array(numberOfChannels * length);
 		for (let i = 0; i < length; i++) {
-			for (let channel = 0; channel < 4; channel++) {
-				input[4 * i + channel] = amplitudes[channel]! * Math.sin(2 * Math.PI * 440 * i / 48000);
+			for (let channel = 0; channel < numberOfChannels; channel++) {
+				// 7.1's LFE channel only keeps low frequencies
+				const frequency = numberOfChannels === 8 && channel === 3 ? 60 : 440;
+				input[numberOfChannels * i + channel]
+					= amplitudes[channel]! * Math.sin(2 * Math.PI * frequency * i / 48000);
 			}
 		}
 
-		const decoded = await encodeAndDecodeAudio('aac', 4, input, {
+		const decoded = await encodeAndDecodeAudio('aac', numberOfChannels, input, {
+			bitrate: 64000 * numberOfChannels,
 			// @ts-expect-error Not in the types
 			aac: { format: 'adts' },
 		});
 
-		for (let channel = 0; channel < 4; channel++) {
+		for (let channel = 0; channel < numberOfChannels; channel++) {
 			let sumOfSquares = 0;
 			for (let i = 4000; i < 44000; i++) {
 				sumOfSquares += decoded(channel, i) ** 2;
@@ -2991,7 +2988,7 @@ describe('Audio', async () => {
 			const rms = Math.sqrt(sumOfSquares / 40000);
 			expect(rms).toBeCloseTo(amplitudes[channel]! / Math.SQRT2, 1);
 		}
-	});
+	};
 
 	test('Vorbis is not claimed past eight channels', () => {
 		// Encoding would succeed, but with every channel past the eighth silent

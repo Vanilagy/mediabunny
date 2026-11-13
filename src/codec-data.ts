@@ -2695,7 +2695,7 @@ export const determineVideoPacketType = (
 	}
 };
 
-// Comput how many frames a packet produces when decoded. Hidden frames (like VP8/VP9 alt-ref frames) don't produce any.
+// Computes how many frames a packet produces when decoded. Hidden frames (like VP8/VP9 alt-ref frames) produce none.
 export const countShownVideoFrames = (codec: VideoCodec, packetData: Uint8Array) => {
 	if (codec === 'vp8') {
 		// The frame tag's show_frame flag

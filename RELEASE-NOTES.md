@@ -12,9 +12,11 @@
 - Added support for reading Ogg start trimming
 - Added support for VBRI headers in MP3 files
 - Added support for AAC with a program config element (channel configuration 0) in ADTS and MPEG-TS
+- Added support for writing 6.1 and 7.1 AAC to ADTS and MPEG-TS
 - Added detection of ADTS and MP3 files holding just a single frame
 - Added support for ADTS files with junk before or between frames
 - Improved input format detection
+- Improved tree shaking
 - Added support for ID3v2.2 `TXX` frames
 - Added support for `fLaC` in HLS `CODECS` attributes
 - Fixed MOV output writing sample rates of 65536 Hz and above as 0
@@ -359,13 +361,11 @@
 - `@mediabunny/truehd`: Fixed wrong decoded timestamps when the stream's sample rate differs from the track's
 - `@mediabunny/truehd`: Fixed wrong decoded timestamps for packets holding several access units
 - `@mediabunny/truehd`: Fixed float audio being truncated instead of rounded to 24 bits when encoding
-- `@mediabunny/aac-encoder`: 7- and 8-channel audio is now encoded with channel configurations 11 and 12 instead of a program config element, which QuickTime silently dropped. As ADTS can't hold these, it's no longer supported for 7 and 8 channels.
+- `@mediabunny/aac-encoder`: 7- and 8-channel audio is now encoded with channel configurations 11 and 12 instead of a program config element, which QuickTime silently dropped
 - `@mediabunny/aac-encoder`: Fixed 3 channels being encoded as 2.1, losing the third channel
 - `@mediabunny/aac-encoder`: Fixed 4 channels being encoded as 4.0 instead of quad
-- `@mediabunny/aac-encoder`: Fixed closing the encoder during initialization leaking its worker or hanging
 - `@mediabunny/aac-encoder`: Fixed the encoder not being reusable after a flush
 - `@mediabunny/aac-encoder`: Fixed slow encoding of very large samples
-- `@mediabunny/flac-encoder`: Fixed closing the encoder during initialization leaking its worker
 - `@mediabunny/flac-encoder`: Fixed the encoder not being reusable after a flush
 - `@mediabunny/flac-encoder`: Fixed float audio being truncated instead of rounded to 24 bits
 - `@mediabunny/mp3-encoder`: Fixed packet timestamps drifting for large start timestamps
@@ -389,7 +389,7 @@
 - `@mediabunny/server`: Fixed an AVC quantizer of 0 switching to lossless encoding, which could break decoding
 - `@mediabunny/server`: Fixed precise video timestamps being lost or wrong after flushing
 - `@mediabunny/server`: Fixed some AV1 streams that browsers can decode failing to decode
-- `@mediabunny/server`: Fixed support being claimed for AAC, Opus, E-AC-3 and Vorbis channel counts and sample rates the encoders reject, and for 8-channel AAC in ADTS
+- `@mediabunny/server`: Fixed support being claimed for AAC, Opus, E-AC-3 and Vorbis channel counts and sample rates the encoders reject
 - `@mediabunny/server`: Fixed 3- and 5-channel AAC, AC-3 and E-AC-3 encoding failing
 - `@mediabunny/server`: Fixed 3- and 4-channel TrueHD being remixed instead of encoded losslessly
 - `@mediabunny/server`: Fixed encoded DTS being 512 samples late

@@ -112,7 +112,10 @@ class TrueHdEncoder extends CustomAudioEncoder {
 
 		// The encoder writes no major sync at all for streams shorter than one major sync interval, leaving them
 		// undecodable, so pad these with silence
-		if (Math.ceil(this.receivedFrames / this.encoderFrameSize) < MAJOR_SYNC_INTERVAL) {
+		if (
+			this.nextSampleTimestampInSamples !== null
+			&& Math.ceil(this.receivedFrames / this.encoderFrameSize) < MAJOR_SYNC_INTERVAL
+		) {
 			const channels = this.numberOfChannels;
 			const paddedFrames = this.pendingFrames + MAJOR_SYNC_INTERVAL * this.encoderFrameSize - this.receivedFrames;
 

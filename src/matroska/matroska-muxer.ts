@@ -1103,9 +1103,9 @@ export class MatroskaMuxer extends Muxer {
 
 				if (adtsFrame.channelConfiguration === 0) {
 					// CodecPrivate already carries the PCE
-					const programConfigElement = readAdtsProgramConfigElement(packetData);
-					if (programConfigElement) {
-						packetData = packetData.subarray(programConfigElement.size);
+					const result = readAdtsProgramConfigElement(packetData);
+					if (result) {
+						packetData = packetData.subarray(result.size);
 					}
 				}
 			}

@@ -24,7 +24,7 @@ import { IsobmffMuxer } from './isobmff/isobmff-muxer';
 import { MatroskaMuxer } from './matroska/matroska-muxer';
 import { MediaSource } from './media-source';
 import { Mp3Muxer } from './mp3/mp3-muxer';
-import { Muxer } from './muxer';
+import { Muxer, NullMuxer } from './muxer';
 import { OggMuxer } from './ogg/ogg-muxer';
 import { Output, OutputTrack, TrackType } from './output';
 import { MpegTsMuxer } from './mpeg-ts/mpeg-ts-muxer';
@@ -1576,5 +1576,52 @@ export class HlsOutputFormat extends OutputFormat {
 		}
 
 		return ` Using different segment formats may grant support for this codec.`;
+	}
+}
+
+export class NullOutputFormat extends OutputFormat {
+	_createMuxer(output: Output) {
+		return new NullMuxer(output);
+	}
+
+	get _name() {
+		return 'Null';
+	}
+
+	getSupportedTrackCounts(): TrackCountLimits {
+		return {
+			video: { min: 0, max: Infinity },
+			audio: { min: 0, max: Infinity },
+			subtitle: { min: 0, max: Infinity },
+			total: { min: 0, max: Infinity },
+		};
+	}
+
+	get fileExtension() {
+		return '';
+	}
+
+	get mimeType() {
+		return 'application/x-black-hole';
+	}
+
+	getSupportedCodecs(): MediaCodec[] {
+		return [
+			...VIDEO_CODECS,
+			...AUDIO_CODECS,
+			...SUBTITLE_CODECS,
+		];
+	}
+
+	get supportsVideoTransformationMetadata() {
+		return true;
+	}
+
+	get supportsTimestampedMediaData() {
+		return true;
+	}
+
+	get negativeTimestampSupport() {
+		return 'full' as const;
 	}
 }

@@ -30,7 +30,6 @@ const AAC_SAMPLE_RATES = [
 
 class AacEncoder extends CustomAudioEncoder {
 	private worker: Worker | null = null;
-	private initPromise: Promise<void> | null = null;
 	private workerError: Error | null = null;
 	private nextMessageId = 0;
 	private pendingMessages = new Map<number, {
@@ -54,88 +53,82 @@ class AacEncoder extends CustomAudioEncoder {
 	private inFlightEncode: Promise<void> | null = null;
 
 	static override supports(codec: AudioCodec, config: AudioEncoderConfig): boolean {
-		const aacConfig = (config as { aac?: { format?: 'aac' | 'adts' } }).aac;
-
 		return codec === 'aac'
 			&& config.numberOfChannels >= 1
 			&& config.numberOfChannels <= 8
 			&& AAC_SAMPLE_RATES.includes(config.sampleRate)
-			&& config.bitrate !== undefined
-			// These are encoded with a PCE or channel configurations 11 and 12, none of which fit into an ADTS header
-			&& !(aacConfig?.format === 'adts' && (config.numberOfChannels === 4 || config.numberOfChannels >= 7));
+			&& config.bitrate !== undefined;
 	}
 
-	init() {
-		return this.initPromise = (async () => {
-			// eslint-disable-next-line @typescript-eslint/no-unsafe-call
-			this.worker = (await createWorker()) as Worker;
+	async init() {
+		// eslint-disable-next-line @typescript-eslint/no-unsafe-call
+		this.worker = (await createWorker()) as Worker;
 
-			const onMessage = (data: WorkerResponse) => {
-				const pending = this.pendingMessages.get(data.id);
-				assert(pending !== undefined);
+		const onMessage = (data: WorkerResponse) => {
+			const pending = this.pendingMessages.get(data.id);
+			assert(pending !== undefined);
 
-				this.pendingMessages.delete(data.id);
-				if (data.success) {
-					pending.resolve(data.data);
-				} else {
-					pending.reject(data.error);
-				}
-			};
-
-			// Treats any worker error (like CSP errors) as fatal, rejecting pending and future commands
-			const onError = (error: Error) => {
-				this.workerError = error;
-				for (const pending of this.pendingMessages.values()) {
-					pending.reject(error);
-				}
-				this.pendingMessages.clear();
-				this.worker?.terminate();
-				this.worker = null;
-			};
-
-			if (this.worker.addEventListener) {
-				this.worker.addEventListener('message', event => onMessage(event.data as WorkerResponse));
-				this.worker.addEventListener('error', (event) => {
-					onError(new Error(event.message || 'AAC encoder worker failed to load or crashed.'));
-				});
+			this.pendingMessages.delete(data.id);
+			if (data.success) {
+				pending.resolve(data.data);
 			} else {
-				const nodeWorker = this.worker as unknown as {
-					on: (event: string, listener: (data: never) => void) => void;
-				};
-				nodeWorker.on('message', onMessage);
-				nodeWorker.on('error', onError);
+				pending.reject(data.error);
 			}
+		};
 
-			assert(this.config.bitrate !== undefined);
-			this.sampleRate = this.config.sampleRate;
-			this.numberOfChannels = this.config.numberOfChannels;
+		// Treats any worker error (like CSP errors) as fatal, rejecting pending and future commands
+		const onError = (error: Error) => {
+			this.workerError = error;
+			for (const pending of this.pendingMessages.values()) {
+				pending.reject(error);
+			}
+			this.pendingMessages.clear();
+			this.worker?.terminate();
+			this.worker = null;
+		};
 
-			const result = await this.sendCommand({
-				type: 'init',
-				data: {
-					numberOfChannels: this.config.numberOfChannels,
-					sampleRate: this.config.sampleRate,
-					bitrate: this.config.bitrate,
-				},
+		if (this.worker.addEventListener) {
+			this.worker.addEventListener('message', event => onMessage(event.data as WorkerResponse));
+			this.worker.addEventListener('error', (event) => {
+				onError(new Error(event.message || 'AAC encoder worker failed to load or crashed.'));
 			});
+		} else {
+			const nodeWorker = this.worker as unknown as {
+				on: (event: string, listener: (data: never) => void) => void;
+			};
+			nodeWorker.on('message', onMessage);
+			nodeWorker.on('error', onError);
+		}
 
-			this.ctx = result.ctx;
-			this.encoderFrameSize = result.frameSize;
+		assert(this.config.bitrate !== undefined);
+		this.sampleRate = this.config.sampleRate;
+		this.numberOfChannels = this.config.numberOfChannels;
 
-			// The ffmpeg encoder provides an AudioSpecificConfig as extradata after init
-			const description = new Uint8Array(result.extradata);
+		const result = await this.sendCommand({
+			type: 'init',
+			data: {
+				numberOfChannels: this.config.numberOfChannels,
+				sampleRate: this.config.sampleRate,
+				bitrate: this.config.bitrate,
+			},
+		});
 
-			const aacConfig = (this.config as { aac?: { format?: 'aac' | 'adts' } }).aac;
-			this.useAdts = aacConfig?.format === 'adts';
+		this.ctx = result.ctx;
+		this.encoderFrameSize = result.frameSize;
 
-			if (this.useAdts) {
-				const audioSpecificConfig = parseAacAudioSpecificConfig(description);
-				this.adtsHeaderTemplate = buildAdtsHeaderTemplate(audioSpecificConfig);
-			}
+		// The ffmpeg encoder provides an AudioSpecificConfig as extradata after init
+		const description = new Uint8Array(result.extradata);
 
-			this.description = this.useAdts ? null : description;
-			this.resetInternalState();
-		})();
+		const aacConfig = (this.config as { aac?: { format?: 'aac' | 'adts' } }).aac;
+		this.useAdts = aacConfig?.format === 'adts';
+
+		if (this.useAdts) {
+			const audioSpecificConfig = parseAacAudioSpecificConfig(description);
+			this.adtsHeaderTemplate = buildAdtsHeaderTemplate(audioSpecificConfig);
+		}
+
+		this.description = this.useAdts ? null : description;
+		this.resetInternalState();
 	}
 
 	private resetInternalState() {
@@ -212,10 +205,7 @@ class AacEncoder extends CustomAudioEncoder {
 		this.resetInternalState();
 	}
 
-	async close() {
-		assert(this.initPromise);
-		await this.initPromise.catch(() => {});
-
+	close() {
 		this.worker?.terminate();
 	}
 
