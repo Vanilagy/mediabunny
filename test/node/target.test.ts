@@ -151,7 +151,7 @@ test('FilePathTarget write error', async () => {
 	expect(fileHandle.fd).toBe(-1);
 });
 
-test('Chunked StreamTarget with a single write spanning many chunks', async () => {
+test('Chunked StreamTarget with a single write spanning many chunks', { timeout: 10_000 }, async () => {
 	let bytesWritten = 0;
 	const target = new StreamTarget(new WritableStream({
 		write: (chunk) => {

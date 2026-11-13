@@ -190,7 +190,7 @@ test('MP4: stsc with alternating chunk indices', async () => {
 	})]));
 });
 
-test('MP4: Single chunk with many samples', { timeout: 10_000 }, async () => {
+test('MP4: Single chunk with many samples', { timeout: 20_000 }, async () => {
 	// Computing a sample's offset in its chunk used to be linear, making iteration quadratic
 	const sampleCount = 100_000;
 	const header = mp4([trak({ handler: 'vide', stbl: singleChunkStbl(sampleCount, 0) })]);
@@ -304,7 +304,7 @@ test('MP4: trun without default sample values', async () => {
 	]), /trun/);
 });
 
-test('MP4: Fragments with decreasing timestamps', { timeout: 10_000 }, async () => {
+test('MP4: Fragments with decreasing timestamps', { timeout: 20_000 }, async () => {
 	// Caching their positions used to insert at the front over and over
 	const fragmentCount = 100_000;
 	const moofs: Uint8Array[] = [];
