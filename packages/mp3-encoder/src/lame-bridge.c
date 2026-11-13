@@ -12,6 +12,9 @@
 EMSCRIPTEN_KEEPALIVE
 lame_global_flags *init_lame(int number_of_channels, int sample_rate, int bitrate) {
 	lame_global_flags *gfp = lame_init();
+	if (!gfp) {
+		return NULL;
+	}
 
 	lame_set_num_channels(gfp, number_of_channels);
 	lame_set_in_samplerate(gfp, sample_rate);
@@ -19,7 +22,10 @@ lame_global_flags *init_lame(int number_of_channels, int sample_rate, int bitrat
 	lame_set_brate(gfp, bitrate / 1000); // MP3 wants "kilobitrate"
 	lame_set_bWriteVbrTag(gfp, 0);
 
-	int ret_code = lame_init_params(gfp);
+	if (lame_init_params(gfp) < 0) {
+		lame_close(gfp);
+		return NULL;
+	}
 
 	return gfp;
 }

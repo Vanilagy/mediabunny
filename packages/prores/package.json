@@ -34,7 +34,7 @@
     "url": "https://github.com/sponsors/Vanilagy"
   },
   "dependencies": {
-    "turbores": "^1.2.4"
+    "turbores": "^1.2.5"
   },
   "peerDependencies": {
     "mediabunny": "^1.49.0"

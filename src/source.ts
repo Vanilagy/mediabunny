@@ -62,13 +62,6 @@ export type SourceEvents = {
 	};
 };
 
-let sourceFinalizationRegistry: FinalizationRegistry<() => unknown> | null = null;
-if (typeof FinalizationRegistry !== 'undefined') {
-	sourceFinalizationRegistry = new FinalizationRegistry((cleanup) => {
-		cleanup();
-	});
-}
-
 /**
  * The source base class, representing a resource from which bytes can be read.
  * @group Input sources
@@ -365,6 +358,8 @@ export class CustomPathedSource extends PathedSource {
 	_root: SourceRef | null = null;
 	/** @internal */
 	_rootRequest: Promise<SourceRef> | null = null;
+	/** @internal */
+	_removeRootReadListener: (() => void) | null = null;
 
 	/** @internal */
 	override _read(
@@ -384,6 +379,9 @@ export class CustomPathedSource extends PathedSource {
 
 					this._root = ref;
 					this._rootRequest = null;
+					this._removeRootReadListener = ref.source.on('read', ({ start, end }) => {
+						this._dispatchRead(start, end);
+					});
 
 					return ref;
 				};
@@ -397,11 +395,17 @@ export class CustomPathedSource extends PathedSource {
 			}
 
 			if (this._rootRequest) {
-				return this._rootRequest.then(ref => ref.source._read(start, end, minReadPosition, maxReadPosition));
+				return this._rootRequest.then(() => this._read(start, end, minReadPosition, maxReadPosition));
 			}
 		}
 
-		return this._root!.source._read(start, end, minReadPosition, maxReadPosition);
+		// Our size is unknown until the root is resolved, meaning the first read skipped the reader's bounds check
+		const root = this._root!.source;
+		if (end > (root._getFileSize() ?? Infinity)) {
+			return null;
+		}
+
+		return root._read(start, end, minReadPosition, maxReadPosition);
 	}
 
 	/** @internal */
@@ -416,10 +420,14 @@ export class CustomPathedSource extends PathedSource {
 	/** @internal */
 	override _dispose(): void {
 		if (this._root) {
+			this._removeRootReadListener!();
 			this._root.free();
 		} else if (this._rootRequest) {
 			void this._rootRequest
-				.then(ref => ref.free())
+				.then((ref) => {
+					this._removeRootReadListener!();
+					ref.free();
+				})
 				.catch(() => {});
 		}
 	}
@@ -835,19 +843,23 @@ export class UrlSource extends PathedSource {
 
 		super(
 			urlString,
-			request => new UrlSource(request.path, this._options),
+			request => new UrlSource(request.path, {
+				...this._options,
+				// Gets rid of any Range headers in the original options (since we remove them from the init). The
+				// range only made sense for the root!
+				requestInit: this._requestInit,
+			}),
 		);
 
 		this._url = url;
 		this._options = options;
 		this._getRetryDelay = options.getRetryDelay ?? DEFAULT_RETRY_DELAY;
 
-		// A user-supplied Range header is interpreted as a byte offset (and optional length) into the resource. We
-		// pull it out of the request and remember it for subsequent requests.
 		this._requestInit = { ...options.requestInit };
 
+		// A user-supplied Range header is interpreted as a byte offset (and optional length) into the resource. We
+		// pull it out of the request and remember it for subsequent requests.
 		let rangeHeaderValue: string | null = null;
-
 		if (options.requestInit?.headers) {
 			const headers = { ...normalizeHeaders(options.requestInit.headers) };
 			const rangeKey = Object.keys(headers).find(key => key.toLowerCase() === 'range');
@@ -859,15 +871,33 @@ export class UrlSource extends PathedSource {
 		}
 
 		if (url instanceof Request) {
+			let request = url;
+
 			const requestRange = url.headers.get('Range');
 			if (requestRange !== null) {
 				rangeHeaderValue ??= requestRange;
 
 				// Clone the request so we don't mutate the user's object, then strip the Range header
-				const strippedRequest = new Request(url);
-				strippedRequest.headers.delete('Range');
-				this._url = strippedRequest;
+				request = new Request(url);
+				request.headers.delete('Range');
+				this._url = request;
 			}
+
+			// Carried over so that the child requests made for other paths (like HLS segments) are made the same way
+			this._requestInit = {
+				cache: request.cache,
+				credentials: request.credentials,
+				integrity: request.integrity,
+				keepalive: request.keepalive,
+				mode: request.mode === 'navigate' ? undefined : request.mode, // navigate makes no sense here
+				redirect: request.redirect,
+				referrer: request.referrer,
+				referrerPolicy: request.referrerPolicy,
+				...this._requestInit,
+			};
+
+			// Headers passed to fetch() replace those of the request instead of merging with them
+			this._requestInit.headers = mergeRequestInit({ headers: request.headers }, this._requestInit).headers;
 		}
 
 		if (rangeHeaderValue !== null) {
@@ -886,7 +916,11 @@ export class UrlSource extends PathedSource {
 			maxCacheSize: options.maxCacheSize ?? (64 * 2 ** 20 /* 64 MiB */),
 			maxWorkerCount: options.parallelism ?? DEFAULT_PARALLELISM,
 			runWorker: this._runWorker.bind(this),
-			onIdleWorkerRemoved: worker => this._abortControllers.delete(worker),
+			onIdleWorkerRemoved: (worker) => {
+				// The worker may have died while still holding a response, such as after an error
+				this._abortControllers.get(worker)?.abort();
+				this._abortControllers.delete(worker);
+			},
 			prefetchProfile: PREFETCH_PROFILES.network,
 			handleUnhandledError: options.handleUnhandledError,
 		});
@@ -947,7 +981,7 @@ export class UrlSource extends PathedSource {
 
 	/** @internal */
 	private async _runWorker(worker: ReadWorker) {
-		let consecutiveEmptyResponses = 0;
+		let consecutiveReadFailures = 0;
 
 		// The outer loop is for resuming a request if it dies mid-response
 		while (true) {
@@ -974,9 +1008,33 @@ export class UrlSource extends PathedSource {
 				() => abortController.signal.aborted,
 			);
 
+			// Our ranges are always open-ended, so a 416 means the start lies past the end of the resource. If the
+			// response doesn't state the size, the end is right here when this worker has read its way up to it.
+			const unsatisfiedRangeMatch = response.status === 416
+				? /^bytes \*\/(\d+)$/.exec(response.headers.get('Content-Range') ?? '')
+				: null;
+			let unsatisfiedRangeSize: number | null = null;
+			if (unsatisfiedRangeMatch) {
+				unsatisfiedRangeSize = Number(unsatisfiedRangeMatch[1]);
+			} else if (response.status === 416 && worker.currentPos > worker.startPos) {
+				unsatisfiedRangeSize = worker.currentPos;
+			}
+
+			if (unsatisfiedRangeSize !== null && unsatisfiedRangeSize <= worker.currentPos) {
+				void response.body?.cancel().catch(() => {});
+
+				if (this._orchestrator.fileSize === null) {
+					this._orchestrator.supplyFileSize(unsatisfiedRangeSize);
+				}
+				this._fileSizeDetermined = true;
+				this._orchestrator.onWorkerFinished(worker);
+
+				return;
+			}
+
 			if (!response.ok) {
-				// eslint-disable-next-line @typescript-eslint/no-base-to-string
-				throw new Error(`Error fetching ${String(this._url)}: ${response.status} ${response.statusText}`);
+				void response.body?.cancel().catch(() => {}); // Don't care about the response body
+				throw new Error(`Error fetching ${this.rootPath}: ${response.status} ${response.statusText}`);
 			}
 
 			if (response.redirected) {
@@ -1035,7 +1093,7 @@ export class UrlSource extends PathedSource {
 
 				if (!this._usedForHls) {
 					const url = new URL(
-						this._url instanceof Request ? this._url.url : this._url,
+						response.url || (this._url instanceof Request ? this._url.url : this._url),
 						typeof window !== 'undefined' ? window.location.href : undefined,
 					);
 
@@ -1084,7 +1142,7 @@ export class UrlSource extends PathedSource {
 						throw error;
 					}
 
-					const retryDelayInSeconds = this._getRetryDelay(1, error, this._url);
+					const retryDelayInSeconds = this._getRetryDelay(++consecutiveReadFailures, error, this._url);
 					if (retryDelayInSeconds !== null) {
 						Logging._error('Error while reading response stream. Attempting to resume.', error);
 						await wait(1000 * retryDelayInSeconds);
@@ -1108,37 +1166,40 @@ export class UrlSource extends PathedSource {
 						return;
 					}
 
-					if (worker.strictTarget) {
-						// The response stopped early, before the target. This can happen if server decides to cap range
-						// requests arbitrarily, even if the request had an uncapped end. In this case, let's fetch the
-						// rest of the data using a new request.
-
-						if (worker.currentPos > responseStartPos) {
-							// Response still moved us forward; keep going immediately
-							consecutiveEmptyResponses = 0;
-							break;
-						}
-
-						// The response didn't get us any further, so back off instead of hammering the server
-						consecutiveEmptyResponses++;
-						const error = new Error('Range response ended without delivering any data.');
-						const retryDelayInSeconds = this._getRetryDelay(consecutiveEmptyResponses, error, this._url);
-						if (retryDelayInSeconds === null) {
-							throw error;
-						}
-
-						Logging._error('Retrying range request that ended without delivering any data.');
-						await wait(1000 * retryDelayInSeconds);
-
-						break;
-					} else {
-						// Assume we have simply reached the end of the resource
+					if (
+						!worker.strictTarget
+						&& (worker.currentPos === responseStartPos || response.headers.has('Content-Encoding'))
+					) {
+						// The target was only speculative, and either nothing was left at all, or the response was
+						// encoded, meaning its byte positions don't line up with ours and it can't be continued anyway
 						this._orchestrator.onWorkerFinished(worker);
 						return;
 					}
+
+					// The response stopped early, before the target. This can happen if server decides to cap range
+					// requests arbitrarily, even if the request had an uncapped end, so it says nothing about where the
+					// resource ends. Let's fetch the rest of the data using a new request.
+					if (worker.currentPos > responseStartPos) {
+						// Response still moved us forward; keep going immediately
+						break;
+					}
+
+					// The response didn't get us any further, so back off instead of hammering the server
+					consecutiveReadFailures++;
+					const error = new Error('Range response ended without delivering any data.');
+					const retryDelayInSeconds = this._getRetryDelay(consecutiveReadFailures, error, this._url);
+					if (retryDelayInSeconds === null) {
+						throw error;
+					}
+
+					Logging._error('Retrying range request that ended without delivering any data.');
+					await wait(1000 * retryDelayInSeconds);
+
+					break;
 				}
 
-				this._dispatchRead(worker.currentPos, worker.currentPos + value.length);
+				consecutiveReadFailures = 0;
+				this._dispatchResourceRead(worker.currentPos, worker.currentPos + value.length);
 				this._orchestrator.supplyWorkerData(worker, value);
 			}
 		}
@@ -1160,6 +1221,7 @@ export class UrlSource extends PathedSource {
 		let currentReader = body.getReader();
 		let streamPosition = 0;
 		let skipRemaining = 0;
+		let consecutiveReadFailures = 0;
 
 		const wrappedStream = new ReadableStream<Uint8Array>({
 			pull: async (controller) => {
@@ -1173,7 +1235,7 @@ export class UrlSource extends PathedSource {
 							throw error;
 						}
 
-						const retryDelayInSeconds = this._getRetryDelay(1, error, this._url);
+						const retryDelayInSeconds = this._getRetryDelay(++consecutiveReadFailures, error, this._url);
 						if (retryDelayInSeconds === null) {
 							throw error;
 						}
@@ -1201,10 +1263,9 @@ export class UrlSource extends PathedSource {
 						);
 
 						if (!newResponse.ok) {
+							void newResponse.body?.cancel().catch(() => {});
 							throw new Error(
-								// eslint-disable-next-line @typescript-eslint/no-base-to-string
-								`Error fetching ${String(this._url)}:`
-								+ ` ${newResponse.status} ${newResponse.statusText}`,
+								`Error fetching ${this.rootPath}: ${newResponse.status} ${newResponse.statusText}`,
 							);
 						}
 
@@ -1234,7 +1295,13 @@ export class UrlSource extends PathedSource {
 						const skippedAmount = Math.min(skipRemaining, chunk.length);
 						skipRemaining -= skippedAmount;
 						chunk = chunk.subarray(skippedAmount);
+
+						if (chunk.length === 0) {
+							continue; // Replaying what was already delivered doesn't count as a successful read
+						}
 					}
+
+					consecutiveReadFailures = 0;
 
 					if (chunk.length === 0) {
 						continue;
@@ -1259,7 +1326,7 @@ export class UrlSource extends PathedSource {
 			+ ' evicted from the cache. To fix this issue, either ensure your server responds to range requests with'
 			+ ' 206 Partial Content, or set maxCacheSize to Infinity in the UrlSource options. Note that the latter'
 			+ ' will store the entire file in the cache if needed, no matter how large.';
-		backing.on('read', ({ start, end }) => this._dispatchRead(start, end));
+		backing.on('read', ({ start, end }) => this._dispatchResourceRead(start, end));
 
 		this._sequentialBacking = backing;
 
@@ -1314,6 +1381,15 @@ export class UrlSource extends PathedSource {
 	}
 
 	/** @internal */
+	private _dispatchResourceRead(start: number, end: number) {
+		const sourceStart = Math.max(start - this._offset, 0);
+		const sourceEnd = Math.min(end - this._offset, this._length ?? Infinity);
+		if (sourceStart < sourceEnd) {
+			this._dispatchRead(sourceStart, sourceEnd);
+		}
+	}
+
+	/** @internal */
 	_dispose() {
 		this._orchestrator.dispose();
 
@@ -1363,6 +1439,14 @@ export type FilePathSourceOptions = {
 	handleUnhandledError?: (error: unknown) => unknown;
 };
 
+let filePathSourceFinalizationRegistry: FinalizationRegistry<FileHandle> | null = null;
+if (typeof FinalizationRegistry !== 'undefined') {
+	filePathSourceFinalizationRegistry = new FinalizationRegistry((fileHandle) => {
+		// If it's not closed, Node prints annoying warnings
+		void fileHandle.close();
+	});
+}
+
 /**
  * A source backed by a path to a file. Intended for server-side usage in Node, Bun, or Deno.
  *
@@ -1404,12 +1488,13 @@ export class FilePathSource extends PathedSource {
 		this._customSource = new CustomSource({
 			getSize: async () => {
 				const fileHandle = await node.fs.open(filePath, 'r');
-				this._fileHandle = fileHandle;
-
-				sourceFinalizationRegistry?.register(this, () => {
-					// If it's not closed, Node prints annoying warnings
+				if (this._disposed) {
 					void fileHandle.close();
-				}, this);
+					throw new InputDisposedError();
+				}
+
+				this._fileHandle = fileHandle;
+				filePathSourceFinalizationRegistry?.register(this, fileHandle, this);
 
 				const stats = await fileHandle.stat();
 				return stats.size;
@@ -1418,7 +1503,25 @@ export class FilePathSource extends PathedSource {
 				assert(this._fileHandle);
 
 				const buffer = new Uint8Array(end - start);
-				await this._fileHandle.read(buffer, 0, end - start, start);
+
+				// Reads may return fewer bytes than requested, so we gotta loop
+				let bytesRead = 0;
+				while (bytesRead < buffer.length) {
+					const result = await this._fileHandle.read(
+						buffer,
+						bytesRead,
+						buffer.length - bytesRead,
+						start + bytesRead,
+					);
+					if (result.bytesRead === 0) {
+						throw new Error(
+							`File ended at byte ${start + bytesRead}, before byte ${end} was read; it was likely`
+							+ ` truncated while being read.`,
+						);
+					}
+
+					bytesRead += result.bytesRead;
+				}
 
 				return buffer;
 			},
@@ -1426,6 +1529,7 @@ export class FilePathSource extends PathedSource {
 			prefetchProfile: 'fileSystem',
 			handleUnhandledError: options.handleUnhandledError,
 		});
+		this._customSource.on('read', ({ start, end }) => this._dispatchRead(start, end));
 	}
 
 	/** @internal */
@@ -1445,12 +1549,13 @@ export class FilePathSource extends PathedSource {
 
 	/** @internal */
 	_dispose() {
+		this._customSource._disposed = true;
 		this._customSource._dispose();
 
 		if (this._fileHandle) {
 			void this._fileHandle.close();
 			this._fileHandle = null;
-			sourceFinalizationRegistry?.unregister(this);
+			filePathSourceFinalizationRegistry?.unregister(this);
 		}
 	}
 }
@@ -1471,7 +1576,7 @@ export type CustomSourceOptions = {
 	 * Called when data is requested. Must return or resolve to the bytes from the specified byte range, or a stream
 	 * that yields these bytes.
 	 *
-	 * You are guaranteed that `0 <= start < end < fileSize`.
+	 * You are guaranteed that `0 <= start < end <= fileSize`.
 	 */
 	read: (start: number, end: number) => MaybePromise<Uint8Array | ReadableStream<Uint8Array>>;
 
@@ -1513,6 +1618,8 @@ export class CustomSource extends Source {
 	_orchestrator: ReadOrchestrator;
 	/** @internal */
 	_readers = new Set<ReadableStreamDefaultReader<Uint8Array>>();
+	/** @internal */
+	_pendingSize: Promise<number> | null = null;
 
 	/** Creates a new {@link CustomSource} whose behavior is specified by `options`.  */
 	constructor(options: CustomSourceOptions) {
@@ -1572,9 +1679,11 @@ export class CustomSource extends Source {
 			return this._orchestrator.read(start, end, minReadPosition, maxReadPosition);
 		}
 
-		const result = this._options.getSize();
+		const result = this._pendingSize ?? this._options.getSize();
 
 		if (isThenable(result)) {
+			this._pendingSize = result;
+
 			return result.then((size) => {
 				if (!Number.isInteger(size) || size < 0) {
 					throw new TypeError('options.getSize must return or resolve to a non-negative integer.');
@@ -1674,6 +1783,7 @@ export class CustomSource extends Source {
 					}
 				} finally {
 					this._readers.delete(reader);
+					void reader.cancel().catch(() => {}); // Signal our loss of interest
 					reader.releaseLock();
 				}
 			} else {
@@ -1997,7 +2107,7 @@ export class ReadableStreamSource extends Source {
 
 		this._pendingSlices.length = 0;
 		this._cache.length = 0;
-		void this._reader?.cancel().catch(() => {});
+		void (this._reader ?? this._stream).cancel().catch(() => {});
 	}
 }
 
@@ -2623,25 +2733,24 @@ class ReadOrchestrator {
 		// Trim the queued reads as well
 		for (let i = 0; i < this.queuedReads.length; i++) {
 			const queuedRead = this.queuedReads[i]!;
+
+			for (let j = 0; j < queuedRead.pendingSlices.length; j++) {
+				const slice = queuedRead.pendingSlices[j]!;
+				// If the slice itself is out of bounds, resolve it
+				if (slice.start + slice.bytes.length > size) {
+					slice.resolve(null);
+					queuedRead.pendingSlices.splice(j, 1);
+					j--;
+				}
+			}
+
 			if (queuedRead.hole.start >= size) {
 				// Entirely out of bounds
-				for (const slice of queuedRead.pendingSlices) slice.resolve(null);
 				this.queuedReads.splice(i, 1);
 				i--;
-			} else if (queuedRead.hole.end > size) {
-				// Partially out of bounds
-				queuedRead.hole.end = size;
+			} else {
+				queuedRead.hole.end = Math.min(queuedRead.hole.end, size);
 				queuedRead.strictTarget = true;
-
-				for (let j = 0; j < queuedRead.pendingSlices.length; j++) {
-					const slice = queuedRead.pendingSlices[j]!;
-					// If the slice itself is out of bounds, resolve it
-					if (slice.start >= size) {
-						slice.resolve(null);
-						queuedRead.pendingSlices.splice(j, 1);
-						j--;
-					}
-				}
 			}
 		}
 	}
@@ -2673,7 +2782,10 @@ class ReadOrchestrator {
 		}
 
 		for (const pendingSlice of worker.pendingSlices) {
-			pendingSlice.resolve(null);
+			// Slices ending before this point are still being filled by other workers
+			if (pendingSlice.start + pendingSlice.bytes.length > worker.currentPos) {
+				pendingSlice.resolve(null);
+			}
 		}
 	}
 
@@ -2831,6 +2943,8 @@ export class RangedSource extends Source {
 	_offset: number;
 	/** @internal */
 	_length: number | null;
+	/** @internal */
+	_removeReadListener: (() => void) | null = null;
 
 	/** @internal */
 	constructor(baseSource: Source, offset: number, length?: number) {
@@ -2847,22 +2961,16 @@ export class RangedSource extends Source {
 
 	/** @internal */
 	override _getFileSize(): number | null | undefined {
+		if (this._length !== null) {
+			return this._length;
+		}
+
 		const baseSize = this._baseSource._getFileSize();
-		if (baseSize === undefined) {
-			return this._length !== null
-				? this._length
-				: undefined;
+		if (baseSize === undefined || baseSize === null) {
+			return baseSize;
 		}
 
-		if (baseSize === null) {
-			if (this._length !== null) {
-				return this._length;
-			} else {
-				return null;
-			}
-		}
-
-		return clamp(baseSize - this._offset, 0, this._length ?? Infinity);
+		return Math.max(baseSize - this._offset, 0);
 	}
 
 	/** @internal */
@@ -2876,15 +2984,26 @@ export class RangedSource extends Source {
 			return null;
 		}
 
-		const result = this._baseSource._read(
-			this._offset + start,
-			this._offset + end,
-			this._offset + minReadPosition,
-			this._offset + maxReadPosition,
-		);
+		const baseSize = this._baseSource._getFileSize();
+		const result = typeof baseSize === 'number' && this._offset + end > baseSize
+			? null
+			: this._baseSource._read(
+					this._offset + start,
+					this._offset + end,
+					this._offset + minReadPosition,
+					this._offset + maxReadPosition,
+				);
 
 		const processResult = (result: ReadResult | null) => {
 			if (!result) {
+				if (this._length !== null) {
+					// We reported the specified length as our size, so the data is expected to be there
+					const expectedLength = this._offset + this._length;
+					throw new Error(
+						`Underlying data too short, expected a length of at least ${expectedLength} bytes.`,
+					);
+				}
+
 				return null;
 			}
 
@@ -2902,10 +3021,21 @@ export class RangedSource extends Source {
 	/** @internal */
 	override _dispose(): void {
 		this._ref?.free();
+		this._removeReadListener?.();
 	}
 
 	override ref() {
-		this._ref ??= this._baseSource.ref();
+		if (!this._ref) {
+			this._ref = this._baseSource.ref();
+			this._removeReadListener = this._baseSource.on('read', ({ start, end }) => {
+				const sliceStart = Math.max(start - this._offset, 0);
+				const sliceEnd = Math.min(end - this._offset, this._length ?? Infinity);
+				if (sliceStart < sliceEnd) {
+					this._dispatchRead(sliceStart, sliceEnd);
+				}
+			});
+		}
+
 		return super.ref();
 	}
 }

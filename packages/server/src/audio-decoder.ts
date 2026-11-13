@@ -46,6 +46,7 @@ export class NodeAvAudioDecoder extends CustomAudioDecoder {
 
 		const codecContext = new NodeAv.CodecContext();
 		codecContext.allocContext3(codec);
+		codecContext.threadCount = 0; // Auto
 
 		codecContext.sampleRate = this.config.sampleRate;
 		codecContext.channelLayout = getChannelLayout(this.config.numberOfChannels);

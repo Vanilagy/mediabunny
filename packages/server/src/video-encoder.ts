@@ -132,6 +132,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 
 		const codecContext = new NodeAv.CodecContext();
 		codecContext.allocContext3(this.avCodec);
+		codecContext.threadCount = 0; // Auto
 
 		let pixelFormat = NodeAv.AV_PIX_FMT_YUV420P;
 
@@ -151,6 +152,12 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 						NodeAv.AV_PIX_FMT_YUVA444P12LE,
 					);
 				}
+			} else if (
+				(this.config.codec === 'ap4h' || this.config.codec === 'ap4x')
+				&& this.avCodec.pixelFormats.includes(NodeAv.AV_PIX_FMT_YUV444P10LE)
+			) {
+				// ProRes 4444 has full-resolution chroma, but the encoder would subsample it given 4:2:2 input
+				pixelFormat = NodeAv.AV_PIX_FMT_YUV444P10LE;
 			}
 		}
 
@@ -189,6 +196,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 			}
 		} else if (this.avCodec.name === 'libx265') {
 			codecContext.setOption('x265-params', 'log-level=error');
+			codecContext.setOption('forced-idr', '1');
 
 			if (isRealtime) {
 				codecContext.setOption('tune', 'zerolatency');
@@ -200,6 +208,11 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 				codecContext.setOption('cpu-used', '8');
 			} else {
 				codecContext.setOption('cpu-used', '8');
+			}
+
+			if (this.config.alpha === 'keep') {
+				// libvpx refuses to encode VP8 transparency when alternate reference frames are enabled
+				codecContext.setOption('auto-alt-ref', '0');
 			}
 		} else if (this.avCodec.name === 'libvpx-vp9') {
 			codecContext.setOption('deadline', 'realtime');
@@ -236,6 +249,11 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 			) {
 				// Mediabunny uses the quantizer index (0-255), while these encoders expect the 0-63 quantizer scale
 				mapped = Math.round(this.quantizer / 4);
+			} else if (this.avCodec.name === 'libx264') {
+				// x264 makes qp 0 lossless, which switches to the High 4:4:4 Predictive profile. That's not what a
+				// quantizer of 0 means elsewhere, and a mid-stream quantizer change would swap profiles under the
+				// decoder.
+				mapped = Math.max(this.quantizer, 1);
 			} else {
 				// Everything else lines up with Mediabunny directly
 				mapped = this.quantizer;
@@ -546,6 +564,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 					colorSpace: null,
 					avcType: 1,
 					avcCodecInfo: null,
+					hevcType: this.config.codec.startsWith('hev1.') ? 'hev1' : 'hvc1',
 					hevcCodecInfo: null,
 					vp9CodecInfo: null,
 					av1CodecInfo: null,
@@ -622,6 +641,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 					colorSpace: null,
 					avcType: null,
 					avcCodecInfo: null,
+					hevcType: null,
 					hevcCodecInfo: null,
 					vp9CodecInfo: null,
 					av1CodecInfo: null,
@@ -640,6 +660,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 					colorSpace: null,
 					avcType: null,
 					avcCodecInfo: null,
+					hevcType: null,
 					hevcCodecInfo: null,
 					vp9CodecInfo,
 					av1CodecInfo: null,
@@ -658,6 +679,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 					colorSpace: null,
 					avcType: null,
 					avcCodecInfo: null,
+					hevcType: null,
 					hevcCodecInfo: null,
 					vp9CodecInfo: null,
 					av1CodecInfo,
@@ -674,6 +696,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 					colorSpace: null,
 					avcType: null,
 					avcCodecInfo: null,
+					hevcType: null,
 					hevcCodecInfo: null,
 					vp9CodecInfo: null,
 					av1CodecInfo: null,
@@ -750,6 +773,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 		}
 
 		this.packetEmitted = false;
+		this.preciseTimings.length = 0;
 	}
 
 	close(): MaybePromise<void> {

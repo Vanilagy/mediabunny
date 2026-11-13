@@ -17,9 +17,11 @@ import {
 } from '../../src/output-format.js';
 import { EncodedPacket } from '../../src/packet.js';
 import { Bitstream } from '../../shared/bitstream.js';
-import { BufferSource } from '../../src/source.js';
+import { BufferSource, FilePathSource } from '../../src/source.js';
 import { BufferTarget, PathedTarget } from '../../src/target.js';
 import { InputAudioTrack, InputVideoTrack } from '../../src/input-track.js';
+import { Conversion } from '../../src/conversion.js';
+import { assert } from '../../src/misc.js';
 
 type EmptyMediaVariant =
 	| { type: 'mp4'; fastStart: false | 'in-memory' | 'reserve' | 'fragmented' }
@@ -709,3 +711,128 @@ const createFormat = (variant: EmptyMediaVariant) => {
 		return new MkvOutputFormat();
 	}
 };
+
+test('Packet stats of a lone zero-duration packet', async () => {
+	using input = new Input({
+		source: new FilePathSource('./test/public/tags-after-clusters.webm'),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	expect(await videoTrack.computeDuration()).toBe(await videoTrack.getFirstTimestamp());
+	expect(await videoTrack.computePacketStats()).toEqual({
+		packetCount: 1,
+		averagePacketRate: Infinity,
+		averageBitrate: Infinity,
+	});
+});
+
+test('Packet stats beginning with a zero-duration packet', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const videoSource = new EncodedVideoPacketSource('vp8');
+	output.addVideoTrack(videoSource);
+	await output.start();
+
+	const meta = {
+		decoderConfig: {
+			codec: 'vp8',
+			codedWidth: 16,
+			codedHeight: 16,
+		},
+	};
+	await videoSource.add(new EncodedPacket(new Uint8Array(8), 'key', 0, 0), meta);
+	await videoSource.add(new EncodedPacket(new Uint8Array(8), 'key', 0, 0.5), meta);
+	await videoSource.add(new EncodedPacket(new Uint8Array(8), 'key', 0.5, 0.5), meta);
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	// The first packet alone spans no time, so the stats must look further than asked to get a finite rate
+	expect(await videoTrack.computePacketStats(1)).toEqual({
+		packetCount: 2,
+		averagePacketRate: 4,
+		averageBitrate: 256,
+	});
+});
+
+test('Reserved MP4 conversion of a lone zero-duration packet', async () => {
+	using input = new Input({
+		source: new FilePathSource('./test/public/tags-after-clusters.webm'),
+		formats: ALL_FORMATS,
+	});
+	const output = new Output({
+		format: new Mp4OutputFormat({ fastStart: 'reserve' }),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({
+		input,
+		output,
+	});
+	expect(conversion.isValid).toBe(true);
+	await conversion.execute();
+
+	const buffer = output.target.buffer;
+	assert(buffer);
+
+	using outputInput = new Input({
+		source: new BufferSource(buffer),
+		formats: ALL_FORMATS,
+	});
+	const videoTrack = await outputInput.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	expect((await videoTrack.computePacketStats()).packetCount).toBe(1);
+});
+
+test('Duration next to an empty track', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const videoSource = new EncodedVideoPacketSource('vp8');
+	output.addVideoTrack(videoSource);
+	output.addAudioTrack(new EncodedAudioPacketSource('opus'), {
+		decoderConfig: {
+			codec: 'opus',
+			sampleRate: 48000,
+			numberOfChannels: 2,
+		},
+	});
+	await output.start();
+
+	// The video lies entirely before zero
+	for (const timestamp of [-2, -1.5]) {
+		await videoSource.add(new EncodedPacket(new Uint8Array(8), 'key', timestamp, 0.5), {
+			decoderConfig: {
+				codec: 'vp8',
+				codedWidth: 16,
+				codedHeight: 16,
+			},
+		});
+	}
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	// The empty track has no end, so it mustn't count as ending at zero
+	expect(await audioTrack.computeDurationOrNull()).toBeNull();
+	expect(await input.computeDuration()).toBe(-1);
+});

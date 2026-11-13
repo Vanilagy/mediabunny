@@ -37,7 +37,9 @@
     "./src/node.ts": false,
     "node:fs/promises": false
   },
-  "sideEffects": false,
+  "sideEffects": [
+    "./dist/modules/src/index.js"
+  ],
   "scripts": {
     "build": "./scripts/build.sh",
     "watch": "tsx scripts/bundle.ts --watch",
@@ -87,10 +89,10 @@
     "@tailwindcss/vite": "^4.1.7",
     "@types/markdown-it-footnote": "^3.0.4",
     "@types/node": "^22.13.10",
+    "@vitest/browser-webdriverio": "4.1.12",
     "esbuild": "^0.25.1",
     "esbuild-plugin-external-global": "^1.0.1",
     "eslint": "^9.22.0",
-    "find-cache-dir": "^5.0.0",
     "markdown-it-footnote": "^4.0.0",
     "markdown-it-mathjax3": "^4.3.2",
     "mermaid": "^11.6.0",
@@ -103,7 +105,6 @@
     "vitepress-plugin-llms": "^1.5.1",
     "vitepress-plugin-mermaid": "^2.0.17",
     "vitest": "4.1.12",
-    "@vitest/browser-webdriverio": "4.1.12",
     "webdriverio": "10.1.0"
   },
   "allowScripts": {

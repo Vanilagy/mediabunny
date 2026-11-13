@@ -2,21 +2,25 @@ import { ALL_FORMATS } from '../../src/input-format.js';
 import { Input } from '../../src/input.js';
 import {
 	AdtsOutputFormat,
+	CmafOutputFormat,
+	FlacOutputFormat,
 	HlsOutputFormat,
 	MkvOutputFormat,
 	Mp4OutputFormat,
 	MpegTsOutputFormat,
+	OggOutputFormat,
 	OutputFormat,
 	WavOutputFormat,
 } from '../../src/output-format.js';
 import { Output, OutputTrackGroup } from '../../src/output.js';
-import { BufferSource, CustomPathedSource, UrlSource } from '../../src/source.js';
-import { expect, test } from 'vitest';
-import { BufferTarget, PathedTarget } from '../../src/target.js';
+import { BufferSource, CustomPathedSource, Source, UrlSource } from '../../src/source.js';
+import { expect, test, vi } from 'vitest';
+import { BufferTarget, PathedTarget, StreamTarget } from '../../src/target.js';
 import { Conversion, ConversionCanceledError, ConversionOptions } from '../../src/conversion.js';
-import { assert, uint8ArraysAreEqual } from '../../src/misc.js';
+import { assert, bytesToBase64, promiseWithResolvers, uint8ArraysAreEqual } from '../../src/misc.js';
 import { InputVideoTrack } from '../../src/input-track.js';
-import { CanvasSource, EncodedAudioPacketSource } from '../../src/media-source.js';
+import { CanvasSource, EncodedAudioPacketSource, EncodedVideoPacketSource } from '../../src/media-source.js';
+import { MetadataTags } from '../../src/metadata.js';
 import { Quality } from '../../src/encode.js';
 import { EncodedPacket } from '../../src/packet.js';
 import { EncodedPacketSink } from '../../src/media-sink.js';
@@ -1033,7 +1037,7 @@ test('Packet copy, whole file, Matroska', async () => {
 		},
 		expectedTimeOffset: -1024 / 48000,
 		videoStartTimestamp: 0 + 1024 / 48000,
-		videoEndTimestamp: 5 + 1024 / 48000 - 1 / 25,
+		videoEndTimestamp: 5 + 1024 / 48000,
 		audioStartTimestamp: 0,
 		audioEndTimestamp: 5 + 1024 / 48000,
 		precision: 0.001,
@@ -1050,7 +1054,7 @@ test('Packet copy, whole file, Matroska, forced', async () => {
 		},
 		expectedTimeOffset: 0,
 		videoStartTimestamp: 0,
-		videoEndTimestamp: 5 - 1 / 25,
+		videoEndTimestamp: 5,
 		audioStartTimestamp: -1024 / 48000,
 		audioEndTimestamp: 5,
 		precision: 0.001,
@@ -1071,7 +1075,7 @@ test('Packet copy, delta frame trim, Matroska', async () => {
 		},
 		expectedTimeOffset: 1,
 		videoStartTimestamp: 0,
-		videoEndTimestamp: 1.48,
+		videoEndTimestamp: 1.52,
 		audioStartTimestamp: 0.472,
 		audioEndTimestamp: 1.496 + 1024 / 48000,
 		precision: 0.001,
@@ -1459,4 +1463,428 @@ const testReservedFastStart = async (
 		expect(maximumPacketCount).toBeGreaterThanOrEqual(packetCount);
 		expect(maximumPacketCount).toBeLessThanOrEqual(2 * packetCount + 64);
 	}
+};
+
+test('Zero-duration frames are kept when transcoding', async () => {
+	using input = new Input({
+		source: new UrlSource('/annex-b-avc.mkv'),
+		formats: ALL_FORMATS,
+	});
+
+	// This frame closes its cluster and the file lacks a default duration, so it is left with a duration of zero
+	const inputTrack = await input.getPrimaryVideoTrack();
+	assert(inputTrack);
+	const zeroDurationPacket = await new EncodedPacketSink(inputTrack).getPacket(4.81);
+	assert(zeroDurationPacket);
+	expect(zeroDurationPacket.timestamp).toBe(4.81);
+	expect(zeroDurationPacket.duration).toBe(0);
+
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({
+		input,
+		output,
+		video: { forceTranscode: true },
+		audio: { discard: true },
+		trim: { start: 4.5, end: 5 },
+		showWarnings: false,
+	});
+	await conversion.execute();
+
+	using newInput = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const track = await newInput.getPrimaryVideoTrack();
+	assert(track);
+
+	const timestamps: number[] = [];
+	for await (const packet of new EncodedPacketSink(track).packets()) {
+		timestamps.push(packet.timestamp);
+	}
+
+	// The frame overlapping the trim start, the five frames following it, and the zero-duration frame
+	expect(timestamps).toHaveLength(7);
+	expect(timestamps.at(-1)).toBeCloseTo(4.81 - 4.5, 3);
+});
+
+test('Packet copy, trim, Ogg, forced', async () => {
+	using input = new Input({
+		source: new UrlSource('/preroll-test.opus'),
+		formats: ALL_FORMATS,
+	});
+	const output = new Output({
+		format: new OggOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({
+		input,
+		output,
+		trim: { start: 1 },
+		copy: { mode: 'forced' },
+	});
+	await conversion.execute();
+
+	using newInput = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const inputTrack = await input.getPrimaryAudioTrack();
+	const newTrack = await newInput.getPrimaryAudioTrack();
+	assert(inputTrack);
+	assert(newTrack);
+
+	const inputTimestamps: number[] = [];
+	for await (const packet of new EncodedPacketSink(inputTrack).packets()) {
+		inputTimestamps.push(Math.round(48000 * packet.timestamp));
+	}
+
+	const newTimestamps: number[] = [];
+	for await (const packet of new EncodedPacketSink(newTrack).packets()) {
+		newTimestamps.push(Math.round(48000 * packet.timestamp));
+	}
+
+	// The packets kept for decoder preroll lie before the trim start, which the output keeps as negative timestamps
+	// instead of shifting everything forward
+	expect(newTimestamps[0]).toBeLessThan(0);
+	expect(newTimestamps).toEqual(inputTimestamps.filter(x => x >= newTimestamps[0]! + 48000).map(x => x - 48000));
+});
+
+test('Output start failure', async () => {
+	using input = new Input({
+		source: new UrlSource('/video.mp4'),
+		formats: ALL_FORMATS,
+	});
+
+	// No initTarget, so starting the output throws
+	const output = new Output({
+		format: new CmafOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({ input, output, showWarnings: false });
+	await expect(conversion.execute()).rejects.toThrow(/initTarget/);
+
+	expect(conversion.state).toBe('canceled');
+	expect(output.state).toBe('canceled');
+	await expect(conversion.execute()).rejects.toBeInstanceOf(ConversionCanceledError);
+});
+
+test('Cancel during startup with progress', async () => {
+	using input = new Input({
+		source: new UrlSource('/video.mp4'),
+		formats: ALL_FORMATS,
+	});
+
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({ input, output, showWarnings: false });
+	conversion.onProgress = () => {};
+
+	const promise = conversion.execute();
+	void conversion.cancel();
+
+	await expect(promise).rejects.toBeInstanceOf(ConversionCanceledError);
+	expect(output.state).toBe('canceled');
+});
+
+test('Cancel from progress callback', async () => {
+	using input = new Input({
+		source: new UrlSource('/glitch-hop-is-dead.wav'),
+		formats: ALL_FORMATS,
+	});
+	const output = new Output({
+		format: new WavOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({ input, output });
+	conversion.onProgress = (progress) => {
+		if (progress > 0) {
+			void conversion.cancel();
+		}
+	};
+
+	await expect(conversion.execute()).rejects.toBeInstanceOf(ConversionCanceledError);
+});
+
+test('Progress for an empty trim range', async () => {
+	using input = new Input({
+		source: new UrlSource('/video.mp4'),
+		formats: ALL_FORMATS,
+	});
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({
+		input,
+		output,
+		trim: { start: await input.computeDuration() },
+	});
+	const progressValues: number[] = [];
+	conversion.onProgress = (progress) => {
+		progressValues.push(progress);
+	};
+	await conversion.execute();
+
+	expect(progressValues).toEqual([0, 1]);
+});
+
+test('Finalize failure', async () => {
+	using input = new Input({
+		source: new UrlSource('/video.mp4'),
+		formats: ALL_FORMATS,
+	});
+
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget({
+			onFinalize: () => {
+				throw new Error('Upload failed');
+			},
+		}),
+	});
+
+	const conversion = await Conversion.init({ input, output, showWarnings: false });
+	await expect(conversion.execute()).rejects.toThrow('Upload failed');
+
+	expect(conversion.state).toBe('canceled');
+	await expect(conversion.execute()).rejects.toBeInstanceOf(ConversionCanceledError);
+});
+
+test('Conversion state while finalizing', async () => {
+	using input = new Input({
+		source: new UrlSource('/video.mp4'),
+		formats: ALL_FORMATS,
+	});
+
+	const finalizeStarted = promiseWithResolvers();
+	const finalizeAllowed = promiseWithResolvers();
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget({
+			onFinalize: () => {
+				finalizeStarted.resolve();
+				return finalizeAllowed.promise;
+			},
+		}),
+	});
+
+	const conversion = await Conversion.init({ input, output, showWarnings: false });
+	const executePromise = conversion.execute();
+	await finalizeStarted.promise;
+
+	// The conversion is only done once the output is
+	expect(conversion.state).toBe('executing');
+	await expect(conversion.execute()).rejects.toThrow('still running');
+
+	finalizeAllowed.resolve();
+	await executePromise;
+	expect(conversion.state).toBe('done');
+});
+
+test('Stream target write failure', async () => {
+	using input = new Input({
+		source: new UrlSource('/video.mp4'),
+		formats: ALL_FORMATS,
+	});
+
+	const output = new Output({
+		format: new Mp4OutputFormat({ fastStart: false }),
+		target: new StreamTarget(new WritableStream({
+			write: () => {
+				throw new Error('Write failed');
+			},
+		})),
+	});
+
+	const unhandledRejections: unknown[] = [];
+	const onUnhandledRejection = (event: PromiseRejectionEvent) => unhandledRejections.push(event.reason);
+	window.addEventListener('unhandledrejection', onUnhandledRejection);
+
+	try {
+		const conversion = await Conversion.init({ input, output, showWarnings: false });
+		await expect(conversion.execute()).rejects.toThrow('Write failed');
+
+		// Let the cleanup run its course
+		await output._cancelPromise!.catch(() => {});
+		await new Promise(resolve => setTimeout(resolve));
+	} finally {
+		window.removeEventListener('unhandledrejection', onUnhandledRejection);
+	}
+
+	expect(unhandledRejections).toEqual([]);
+});
+
+test('PCM fallback when no compressed codec is encodable', async () => {
+	using input = new Input({
+		source: new UrlSource('/glitch-hop-is-dead.wav'),
+		formats: ALL_FORMATS,
+	});
+	const inputTrack = await input.getPrimaryAudioTrack();
+	assert(inputTrack);
+	expect(await inputTrack.getSampleRate()).toBe(44100);
+
+	const output = new Output({
+		format: new MkvOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	// Without WebCodecs, only PCM is encodable
+	vi.stubGlobal('AudioEncoder', undefined);
+	try {
+		const conversion = await Conversion.init({
+			input,
+			output,
+			audio: { forceTranscode: true },
+			trim: { end: 1 },
+			showWarnings: false,
+		});
+		expect(conversion.isValid).toBe(true);
+		await conversion.execute();
+	} finally {
+		vi.unstubAllGlobals();
+	}
+
+	using newInput = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const track = await newInput.getPrimaryAudioTrack();
+	assert(track);
+
+	expect(await track.getCodec()).toMatch(/^pcm-/);
+	expect(await track.getSampleRate()).toBe(44100);
+});
+
+test('Options callback index for a non-first primary track', async () => {
+	using input = new Input({
+		source: new BufferSource(await createTwoVideoTrackFile()),
+		formats: ALL_FORMATS,
+	});
+
+	const primaryTrack = await input.getPrimaryVideoTrack();
+	expect(primaryTrack!.number).toBe(2);
+
+	const output = new Output({
+		format: new MkvOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const seen: [number, number][] = [];
+	await Conversion.init({
+		input,
+		output,
+		tracks: 'primary',
+		video: (track, n) => {
+			seen.push([track.number, n]);
+			return { discard: true };
+		},
+		showWarnings: false,
+	});
+
+	expect(seen).toEqual([[2, 2]]);
+});
+
+const createTwoVideoTrackFile = async () => {
+	const output = new Output({
+		format: new MkvOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	// The first track is not the default one, making the second track the primary one
+	const sources = [new EncodedVideoPacketSource('avc'), new EncodedVideoPacketSource('avc')];
+	output.addVideoTrack(sources[0]!, { disposition: { default: false } });
+	output.addVideoTrack(sources[1]!);
+
+	await output.start();
+	for (const source of sources) {
+		await source.add(new EncodedPacket(new Uint8Array(1024), 'key', 0, 1), {
+			decoderConfig: {
+				codec: 'avc1.64001f',
+				codedWidth: 1280,
+				codedHeight: 720,
+			},
+		});
+	}
+	await output.finalize();
+
+	return output.target.buffer!;
+};
+
+test('Invalidity explanation for a codec the output format cannot contain', async () => {
+	using input = new Input({
+		source: new UrlSource('/glitch-hop-is-dead.wav'),
+		formats: ALL_FORMATS,
+	});
+	const output = new Output({
+		format: new WavOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({
+		input,
+		output,
+		audio: { codec: 'aac' },
+		showWarnings: false,
+	});
+	expect(conversion.isValid).toBe(false);
+	expect(conversion.discardedTracks[0]!.reason).toBe('no_encodable_target_codec');
+	await expect(conversion.execute()).rejects.toThrow(
+		/discarded because the output format cannot contain the requested codecs 'aac'\.$/,
+	);
+});
+
+test('FLAC to FLAC with a picture in the Vorbis comments', async () => {
+	// Some taggers put pictures into the comments the way Ogg does it, rather than into PICTURE blocks
+	const picture = new Uint8Array(45);
+	const pictureView = new DataView(picture.buffer);
+	pictureView.setUint32(0, 3); // Front cover
+	pictureView.setUint32(4, 9);
+	picture.set(new TextEncoder().encode('image/png'), 8);
+	pictureView.setUint32(37, 4);
+	picture.set([1, 2, 3, 4], 41);
+
+	const taggedFile = await convertFlac(new UrlSource('/sample.flac'), {
+		raw: { METADATA_BLOCK_PICTURE: bytesToBase64(picture) },
+	});
+	const convertedFile = await convertFlac(new BufferSource(taggedFile), undefined);
+
+	using input = new Input({
+		source: new BufferSource(convertedFile),
+		formats: ALL_FORMATS,
+	});
+	const { images } = await input.getMetadataTags();
+	expect(images).toHaveLength(1);
+	expect(images![0]!.data).toEqual(new Uint8Array([1, 2, 3, 4]));
+});
+
+const convertFlac = async (source: Source, tags: MetadataTags | undefined) => {
+	using input = new Input({
+		source,
+		formats: ALL_FORMATS,
+	});
+	const output = new Output({
+		format: new FlacOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({
+		input,
+		output,
+		tags,
+		trim: { end: 0.5 },
+	});
+	await conversion.execute();
+
+	return output.target.buffer!;
 };

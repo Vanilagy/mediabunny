@@ -28,9 +28,9 @@ type SubtitleParserOptions = {
 	output: (cue: SubtitleCue, metadata: SubtitleMetadata) => unknown;
 };
 
-const cueBlockHeaderRegex = /(?:(.+?)\n)?((?:\d{2}:)?\d{2}:\d{2}.\d{3})\s+-->\s+((?:\d{2}:)?\d{2}:\d{2}.\d{3})/g;
+const cueBlockHeaderRegex = /(?:(.+?)\n)?((?:\d{2,}:)?\d{2}:\d{2}.\d{3})\s+-->\s+((?:\d{2,}:)?\d{2}:\d{2}.\d{3})/g;
 const preambleStartRegex = /^WEBVTT(.|\n)*?\n{2}/;
-export const inlineTimestampRegex = /<(?:(\d{2}):)?(\d{2}):(\d{2}).(\d{3})>/g;
+export const inlineTimestampRegex = /<(?:(\d{2,}):)?(\d{2}):(\d{2}).(\d{3})>/g;
 
 export class SubtitleParser {
 	private options: SubtitleParserOptions;
@@ -48,6 +48,11 @@ export class SubtitleParser {
 		let match: RegExpMatchArray | null;
 
 		if (!this.preambleText) {
+			if (text.charCodeAt(0) === 0xFEFF) {
+				// Skip the byte order mark the file may start with
+				text = text.slice(1);
+			}
+
 			if (!preambleStartRegex.test(text)) {
 				throw new Error('WebVTT preamble incorrect.');
 			}
@@ -71,7 +76,8 @@ export class SubtitleParser {
 			const notes = text.slice(0, match.index);
 			const cueIdentifier = match[1];
 			const matchEnd = match.index! + match[0].length;
-			const bodyStart = text.indexOf('\n', matchEnd) + 1;
+			const lineEnd = text.indexOf('\n', matchEnd);
+			const bodyStart = lineEnd === -1 ? text.length : lineEnd + 1;
 			const cueSettings = text.slice(matchEnd, bodyStart).trim();
 			let bodyEnd = text.indexOf('\n\n', matchEnd);
 			if (bodyEnd === -1) bodyEnd = text.length;
@@ -107,7 +113,7 @@ export class SubtitleParser {
 	}
 }
 
-const timestampRegex = /(?:(\d{2}):)?(\d{2}):(\d{2}).(\d{3})/;
+const timestampRegex = /(?:(\d{2,}):)?(\d{2}):(\d{2}).(\d{3})/;
 export const parseSubtitleTimestamp = (string: string) => {
 	const match = timestampRegex.exec(string);
 	if (!match) throw new Error('Expected match.');

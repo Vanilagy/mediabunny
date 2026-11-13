@@ -17,6 +17,34 @@ export type AacAudioSpecificConfig = {
 	outputSampleRate: number | null;
 	outputNumberOfChannels: number | null;
 	frameLength: number; // In samples at the core sample rate
+	programConfigElement: AacProgramConfigElement | null;
+};
+
+export type AacProgramConfigElement = {
+	elementInstanceTag: number;
+	objectType: number;
+	samplingFrequencyIndex: number;
+	frontElements: AacPceChannelElement[];
+	sideElements: AacPceChannelElement[];
+	backElements: AacPceChannelElement[];
+	lfeElementTags: number[];
+	assocDataElementTags: number[];
+	ccElements: {
+		isIndependentlySwitched: boolean;
+		tagSelect: number;
+	}[];
+	monoMixdownElementNumber: number | null;
+	stereoMixdownElementNumber: number | null;
+	matrixMixdown: {
+		index: number;
+		pseudoSurroundEnabled: boolean;
+	} | null;
+	comment: Uint8Array;
+};
+
+type AacPceChannelElement = {
+	isCpe: boolean;
+	tagSelect: number;
 };
 
 export const aacFrequencyTable = [
@@ -63,8 +91,19 @@ export const parseAacAudioSpecificConfig = (bytes: Uint8Array | null): AacAudioS
 	}
 
 	let frameLength = 1024;
+	let programConfigElement: AacProgramConfigElement | null = null;
 	if (generalAudioObjectTypes.includes(coreObjectType)) {
 		frameLength = bitstream.readBits(1) ? 960 : 1024; // frameLengthFlag
+
+		if (channelConfiguration === 0) {
+			if (bitstream.readBits(1)) { // dependsOnCoreCoder
+				bitstream.skipBits(14); // coreCoderDelay
+			}
+			bitstream.skipBits(1); // extensionFlag
+
+			programConfigElement = readAacProgramConfigElement(bitstream);
+			numberOfChannels = getAacProgramConfigElementChannelCount(programConfigElement);
+		}
 	}
 
 	if (objectType !== 5 && objectType !== 29) {
@@ -106,6 +145,7 @@ export const parseAacAudioSpecificConfig = (bytes: Uint8Array | null): AacAudioS
 			? 2
 			: numberOfChannels,
 		frameLength,
+		programConfigElement,
 	};
 };
 
@@ -136,6 +176,7 @@ export const buildAacAudioSpecificConfig = (config: {
 	objectType: number;
 	outputSampleRate: number;
 	outputNumberOfChannels: number;
+	programConfigElement: AacProgramConfigElement | null;
 }) => {
 	const usesSbr = config.objectType === 5 || config.objectType === 29;
 	const usesPs = config.objectType === 29;
@@ -144,7 +185,7 @@ export const buildAacAudioSpecificConfig = (config: {
 	const coreSampleRate = usesSbr ? config.outputSampleRate / 2 : config.outputSampleRate;
 	const coreNumberOfChannels = usesPs ? 1 : config.outputNumberOfChannels;
 
-	const channelConfiguration = aacChannelMap.indexOf(coreNumberOfChannels);
+	const channelConfiguration = config.programConfigElement ? 0 : aacChannelMap.indexOf(coreNumberOfChannels);
 	if (channelConfiguration === -1) {
 		throw new TypeError(`Unsupported number of channels: ${config.outputNumberOfChannels}`);
 	}
@@ -164,7 +205,8 @@ export const buildAacAudioSpecificConfig = (config: {
 		}
 	}
 
-	const byteCount = Math.ceil(bitCount / 8);
+	const byteCount = Math.ceil(bitCount / 8)
+		+ (config.programConfigElement ? getMaxPceByteLength(config.programConfigElement) : 0);
 	const bytes = new Uint8Array(byteCount);
 	const bitstream = new Bitstream(bytes);
 
@@ -179,7 +221,11 @@ export const buildAacAudioSpecificConfig = (config: {
 
 	bitstream.writeBits(3, 0); // frameLengthFlag, dependsOnCoreCoder, extensionFlag
 
-	return bytes;
+	if (config.programConfigElement) {
+		writeAacProgramConfigElement(bitstream, config.programConfigElement);
+	}
+
+	return bytes.subarray(0, Math.ceil(bitstream.pos / 8));
 };
 
 const writeAacObjectType = (bitstream: Bitstream, objectType: number) => {
@@ -211,10 +257,74 @@ export type AdtsHeaderTemplate = {
 };
 
 export const buildAdtsHeaderTemplate = (config: AacAudioSpecificConfig): AdtsHeaderTemplate => {
-	const header = new Uint8Array(7);
+	const { coreObjectType, frequencyIndex, frameLength } = config;
+	let { channelConfiguration, programConfigElement } = config;
+
+	if (coreObjectType < 1 || coreObjectType > 4) {
+		throw new Error(`AAC object type ${coreObjectType} can't be stored in ADTS.`);
+	}
+	if (frequencyIndex >= aacFrequencyTable.length) {
+		// The explicit rate that index 15 escapes to has no room in the header, and 13 and 14 are reserved
+		throw new Error(`AAC sampling frequency index ${frequencyIndex} can't be stored in ADTS.`);
+	}
+
+	if (channelConfiguration === 11 || channelConfiguration === 12) {
+		// ADTS has no room for these configurations, but a PCE listing the same elements describes the same layout:
+		// 6.1 with back surround and a back center (11), or 7.1 with side and back surround (12)
+		const surroundPair = {
+			isCpe: true,
+			tagSelect: 1,
+		};
+		programConfigElement = {
+			elementInstanceTag: 0,
+			objectType: coreObjectType - 1,
+			samplingFrequencyIndex: frequencyIndex,
+			frontElements: [
+				{
+					isCpe: false,
+					tagSelect: 0,
+				},
+				{
+					isCpe: true,
+					tagSelect: 0,
+				},
+			],
+			sideElements: channelConfiguration === 12 ? [surroundPair] : [],
+			backElements: channelConfiguration === 11
+				? [
+						surroundPair,
+						{
+							isCpe: false,
+							tagSelect: 1,
+						},
+					]
+				: [{
+						isCpe: true,
+						tagSelect: 2,
+					}],
+			lfeElementTags: [0],
+			assocDataElementTags: [],
+			ccElements: [],
+			monoMixdownElementNumber: null,
+			stereoMixdownElementNumber: null,
+			matrixMixdown: null,
+			comment: new Uint8Array(0),
+		};
+		channelConfiguration = 0;
+	}
+
+	if (channelConfiguration > 7) {
+		throw new Error(`AAC channel configuration ${channelConfiguration} can't be stored in ADTS.`);
+	}
+	if (frameLength !== 1024) {
+		throw new Error(`AAC frame length ${frameLength} can't be stored in ADTS.`);
+	}
+
+	// With ADTS, a channel layout described by a PCE has to be inside the frames, so we stick it at the end
+	// of the header
+	let header = new Uint8Array(7 + (programConfigElement ? getMaxPceByteLength(programConfigElement) : 0));
 	const bitstream = new Bitstream(header);
 
-	const { coreObjectType, frequencyIndex, channelConfiguration } = config;
 	const profile = coreObjectType - 1;
 
 	bitstream.writeBits(12, 0b1111_11111111); // Syncword
@@ -234,10 +344,150 @@ export const buildAdtsHeaderTemplate = (config: AacAudioSpecificConfig): AdtsHea
 	bitstream.writeBits(2, 0); // Number of AAC frames minus 1
 	// Omit CRC check
 
+	if (programConfigElement) {
+		// The raw data block begins on a byte boundary
+		bitstream.pos = 8 * 7;
+		bitstream.writeBits(3, 5); // ID_PCE
+		writeAacProgramConfigElement(bitstream, programConfigElement);
+		header = header.subarray(0, bitstream.pos / 8);
+	}
+
 	return { header, bitstream };
 };
 
+const getMaxPceByteLength = (programConfigElement: AacProgramConfigElement) => {
+	return 64 + programConfigElement.comment.byteLength; // Generous
+};
+
+const writeAacProgramConfigElement = (bitstream: Bitstream, pce: AacProgramConfigElement) => {
+	bitstream.writeBits(4, pce.elementInstanceTag);
+	bitstream.writeBits(2, pce.objectType);
+	bitstream.writeBits(4, pce.samplingFrequencyIndex);
+	bitstream.writeBits(4, pce.frontElements.length);
+	bitstream.writeBits(4, pce.sideElements.length);
+	bitstream.writeBits(4, pce.backElements.length);
+	bitstream.writeBits(2, pce.lfeElementTags.length);
+	bitstream.writeBits(3, pce.assocDataElementTags.length);
+	bitstream.writeBits(4, pce.ccElements.length);
+
+	bitstream.writeBits(1, +(pce.monoMixdownElementNumber !== null));
+	if (pce.monoMixdownElementNumber !== null) {
+		bitstream.writeBits(4, pce.monoMixdownElementNumber);
+	}
+	bitstream.writeBits(1, +(pce.stereoMixdownElementNumber !== null));
+	if (pce.stereoMixdownElementNumber !== null) {
+		bitstream.writeBits(4, pce.stereoMixdownElementNumber);
+	}
+	bitstream.writeBits(1, +(pce.matrixMixdown !== null));
+	if (pce.matrixMixdown) {
+		bitstream.writeBits(2, pce.matrixMixdown.index);
+		bitstream.writeBits(1, +pce.matrixMixdown.pseudoSurroundEnabled);
+	}
+
+	for (const element of [...pce.frontElements, ...pce.sideElements, ...pce.backElements]) {
+		bitstream.writeBits(1, +element.isCpe);
+		bitstream.writeBits(4, element.tagSelect);
+	}
+	for (const tag of [...pce.lfeElementTags, ...pce.assocDataElementTags]) {
+		bitstream.writeBits(4, tag);
+	}
+	for (const element of pce.ccElements) {
+		bitstream.writeBits(1, +element.isIndependentlySwitched);
+		bitstream.writeBits(4, element.tagSelect);
+	}
+
+	bitstream.pos = 8 * Math.ceil(bitstream.pos / 8); // byte_alignment()
+	bitstream.writeBits(8, pce.comment.byteLength);
+	bitstream.bytes.set(pce.comment, bitstream.pos / 8);
+	bitstream.pos += 8 * pce.comment.byteLength;
+};
+
 export const writeAdtsFrameLength = (bitstream: Bitstream, frameLength: number) => {
+	if (frameLength >= 2 ** 13) {
+		throw new Error(`AAC frame too large for ADTS (${frameLength} bytes, at most ${2 ** 13 - 1} allowed).`);
+	}
+
 	bitstream.pos = 30;
 	bitstream.writeBits(13, frameLength);
+};
+
+// ADTS frames with channel configuration 0 describe their channel layout with a PCE in front of the raw data block
+export const readAdtsProgramConfigElement = (rawDataBlock: Uint8Array) => {
+	const bitstream = new Bitstream(rawDataBlock);
+	if (bitstream.readBits(3) !== 5) { // ID_PCE
+		return null;
+	}
+
+	const programConfigElement = readAacProgramConfigElement(bitstream);
+
+	const size = bitstream.pos / 8;
+	if (size > rawDataBlock.byteLength) {
+		throw new Error('Invalid ADTS frame: its program config element extends past the end of the frame.');
+	}
+
+	return {
+		programConfigElement,
+		size, // In bytes, within the raw data block
+	};
+};
+
+const readAacProgramConfigElement = (bitstream: Bitstream): AacProgramConfigElement => {
+	const elementInstanceTag = bitstream.readBits(4);
+	const objectType = bitstream.readBits(2);
+	const samplingFrequencyIndex = bitstream.readBits(4);
+	const frontElementCount = bitstream.readBits(4);
+	const sideElementCount = bitstream.readBits(4);
+	const backElementCount = bitstream.readBits(4);
+	const lfeElementCount = bitstream.readBits(2);
+	const assocDataElementCount = bitstream.readBits(3);
+	const ccElementCount = bitstream.readBits(4);
+
+	const monoMixdownElementNumber = bitstream.readBits(1) ? bitstream.readBits(4) : null;
+	const stereoMixdownElementNumber = bitstream.readBits(1) ? bitstream.readBits(4) : null;
+	const matrixMixdown = bitstream.readBits(1)
+		? {
+				index: bitstream.readBits(2),
+				pseudoSurroundEnabled: !!bitstream.readBits(1),
+			}
+		: null;
+
+	const readChannelElements = (count: number) => Array.from({ length: count }, () => ({
+		isCpe: !!bitstream.readBits(1),
+		tagSelect: bitstream.readBits(4),
+	}));
+	const frontElements = readChannelElements(frontElementCount);
+	const sideElements = readChannelElements(sideElementCount);
+	const backElements = readChannelElements(backElementCount);
+	const lfeElementTags = Array.from({ length: lfeElementCount }, () => bitstream.readBits(4));
+	const assocDataElementTags = Array.from({ length: assocDataElementCount }, () => bitstream.readBits(4));
+	const ccElements = Array.from({ length: ccElementCount }, () => ({
+		isIndependentlySwitched: !!bitstream.readBits(1),
+		tagSelect: bitstream.readBits(4),
+	}));
+
+	bitstream.pos = 8 * Math.ceil(bitstream.pos / 8); // byte_alignment()
+	const commentLength = bitstream.readBits(8);
+	const comment = bitstream.bytes.slice(bitstream.pos / 8, bitstream.pos / 8 + commentLength);
+	bitstream.pos += 8 * commentLength;
+
+	return {
+		elementInstanceTag,
+		objectType,
+		samplingFrequencyIndex,
+		frontElements,
+		sideElements,
+		backElements,
+		lfeElementTags,
+		assocDataElementTags,
+		ccElements,
+		monoMixdownElementNumber,
+		stereoMixdownElementNumber,
+		matrixMixdown,
+		comment,
+	};
+};
+
+export const getAacProgramConfigElementChannelCount = (pce: AacProgramConfigElement) => {
+	const elements = [...pce.frontElements, ...pce.sideElements, ...pce.backElements];
+	return elements.reduce((count, element) => count + (element.isCpe ? 2 : 1), pce.lfeElementTags.length);
 };

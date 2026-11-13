@@ -20,7 +20,7 @@ import {
 	VideoCodec,
 } from './codec';
 import { customAudioDecoders, customVideoDecoders } from './custom-coder';
-import { isAllowSharedBufferSource, SetOptional } from './misc';
+import { isAllowSharedBufferSource, SetOptional, toUint8Array } from './misc';
 
 export const canDecodeVideoMemo = new Map<string, Promise<boolean>>();
 export const canDecodeAudioMemo = new Map<string, Promise<boolean>>();
@@ -111,7 +111,7 @@ const validateAudioDecodingConfig = (
  * @group Decoding
  * @public
  */
-export const canDecode = (codec: MediaCodec) => {
+export const canDecode = async (codec: MediaCodec) => {
 	if ((VIDEO_CODECS as readonly string[]).includes(codec)) {
 		return canDecodeVideo(codec as VideoCodec);
 	} else if ((AUDIO_CODECS as readonly string[]).includes(codec)) {
@@ -136,15 +136,17 @@ export const canDecodeVideo = async (
 
 	validateVideoDecodingConfig(codec, options);
 
+	const codedWidth = options.codedWidth ?? 1280;
+	const codedHeight = options.codedHeight ?? 720;
 	const resolvedOptions: VideoDecoderConfig = {
 		...options,
-		codedWidth: options.codedWidth ?? 1280,
-		codedHeight: options.codedHeight ?? 720,
-		codec: options.codec ?? buildVideoCodecString(codec, 1280, 720, 1e6, false),
+		codedWidth,
+		codedHeight,
+		codec: options.codec ?? buildVideoCodecString(codec, codedWidth, codedHeight, 1e6, false),
 	};
 	resolvedOptions.description ??= guessDescriptionForVideo(resolvedOptions);
 
-	const key = JSON.stringify(resolvedOptions);
+	const key = getDecoderConfigMemoKey(resolvedOptions);
 	const memoized = canDecodeVideoMemo.get(key);
 	if (memoized) {
 		return memoized;
@@ -185,7 +187,7 @@ export const canDecodeAudio = async (
 		...options,
 		numberOfChannels: options.numberOfChannels ?? 2,
 		sampleRate: options.sampleRate ?? 48000,
-		codec: options.codec ?? buildAudioCodecString(codec, 2, 48000),
+		codec: options.codec ?? buildAudioCodecString(codec),
 	};
 
 	if (resolvedOptions.description === undefined) {
@@ -197,7 +199,7 @@ export const canDecodeAudio = async (
 		resolvedOptions.description = generatedDescription;
 	}
 
-	const key = JSON.stringify(resolvedOptions);
+	const key = getDecoderConfigMemoKey(resolvedOptions);
 	const memoized = canDecodeAudioMemo.get(key);
 	if (memoized) {
 		return memoized;
@@ -221,6 +223,11 @@ export const canDecodeAudio = async (
 
 	return promise;
 };
+
+const getDecoderConfigMemoKey = (config: VideoDecoderConfig | AudioDecoderConfig) => JSON.stringify({
+	...config,
+	description: config.description && [...toUint8Array(config.description)], // So it gets serialized properly
+});
 
 /**
  * Returns the list of all media codecs that can be decoded by the browser.

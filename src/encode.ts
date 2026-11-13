@@ -105,7 +105,7 @@ export type VideoTransformOptions = {
 	 * - `'cover'` will scale the image until the entire box is filled, while preserving aspect ratio.
 	 *
 	 * To avoid ambiguity, this field must not be set when `sizeChangeBehavior` is `'fill'`, `'contain'` or
-	 * `'deny'`, since `sizeChangeBehavior` already determines the fitting algorithm.
+	 * `'cover'`, since `sizeChangeBehavior` already determines the fitting algorithm.
 	 */
 	fit?: 'fill' | 'contain' | 'cover';
 	/**
@@ -236,6 +236,9 @@ export const validateVideoEncodingConfig = (config: VideoEncodingConfig) => {
 		}
 		if (config.transform.crop !== undefined) {
 			validateCropRectangle(config.transform.crop, 'config.transform.');
+		}
+		if (config.transform.alpha !== undefined && !['keep', 'discard'].includes(config.transform.alpha)) {
+			throw new TypeError('config.transform.alpha, when provided, must be \'keep\' or \'discard\'.');
 		}
 		if (config.transform.process !== undefined && typeof config.transform.process !== 'function') {
 			throw new TypeError('config.transform.process, when provided, must be a function.');
@@ -611,14 +614,10 @@ export const buildAudioEncoderConfig = (options: {
 	const fallbackBitrateMode = options.bitrateMode;
 
 	return {
-		codec: options.fullCodecString ?? buildAudioCodecString(
-			options.codec,
-			options.numberOfChannels,
-			options.sampleRate,
-		),
+		codec: options.fullCodecString ?? buildAudioCodecString(options.codec),
 		numberOfChannels: options.numberOfChannels,
 		sampleRate: options.sampleRate,
-		bitrate: options.quality?._toAudioBitrate(options.codec),
+		bitrate: options.quality?._toAudioBitrate(options.codec, options.numberOfChannels),
 		bitrateMode: options.quality?._bitrateMode ?? fallbackBitrateMode,
 		...getAudioEncoderConfigExtension(options.codec),
 	};
@@ -721,8 +720,8 @@ export class Quality {
 		if ('quality' in options) {
 			if (
 				typeof options.quality === 'string'
-					? !(options.quality in QUALITY_LEVELS)
-					: (typeof options.quality !== 'number' || Number.isNaN(options.quality))
+					? !Object.prototype.hasOwnProperty.call(QUALITY_LEVELS, options.quality)
+					: (typeof options.quality !== 'number' || Number.isNaN(options.quality)) // Infinities allowed
 			) {
 				throw new TypeError(
 					'options.quality must be a number, or one of \'very-low\', \'low\', \'medium\', \'high\''
@@ -846,7 +845,7 @@ export class Quality {
 	}
 
 	/** @internal */
-	_toAudioBitrate(codec: AudioCodec) {
+	_toAudioBitrate(codec: AudioCodec, numberOfChannels: number) {
 		if ((PCM_AUDIO_CODECS as readonly string[]).includes(codec) || codec === 'flac' || codec === 'truehd') {
 			return undefined;
 		}
@@ -880,6 +879,11 @@ export class Quality {
 		}
 
 		let finalBitrate = baseBitrate * factor;
+
+		if (codec === 'opus' || codec === 'vorbis') {
+			// The base rates are for stereo
+			finalBitrate *= numberOfChannels / 2;
+		}
 
 		if (codec === 'aac') {
 			// AAC only works with specific bitrates, let's find the closest
@@ -1167,11 +1171,12 @@ export const canEncodeVideo = async (
 
 			// eslint-disable-next-line @typescript-eslint/no-misused-promises, no-async-promise-executor
 			const success = await new Promise<boolean>(async (resolve) => {
+				const encoder = new VideoEncoder({
+					output: () => {},
+					error: () => resolve(false),
+				});
+
 				try {
-					const encoder = new VideoEncoder({
-						output: () => {},
-						error: () => resolve(false),
-					});
 					encoder.configure(config);
 
 					const frameData = new Uint8Array(width * height * 4);
@@ -1193,6 +1198,10 @@ export const canEncodeVideo = async (
 					resolve(true);
 				} catch {
 					resolve(false);
+				} finally {
+					if (encoder.state !== 'closed') {
+						encoder.close();
+					}
 				}
 			});
 

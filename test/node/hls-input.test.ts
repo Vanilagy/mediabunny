@@ -1,5 +1,25 @@
 /* eslint-disable @stylistic/max-len */
-import { ALL_FORMATS, BufferSource, EncodedPacketSink, Input, InputAudioTrack, InputVideoTrack, UrlSource } from 'mediabunny';
+import {
+	ALL_FORMATS,
+	BufferSource,
+	BufferTarget,
+	CmafOutputFormat,
+	EncodedAudioPacketSource,
+	EncodedPacket,
+	EncodedPacketSink,
+	EncodedVideoPacketSource,
+	HlsOutputFormat,
+	HlsOutputFormatOptions,
+	Input,
+	InputAudioTrack,
+	InputVideoTrack,
+	Mp4OutputFormat,
+	MpegTsOutputFormat,
+	Output,
+	OutputTrackGroup,
+	PathedTarget,
+	UrlSource,
+} from 'mediabunny';
 import { expect, test, vi } from 'vitest';
 import { HLS, HLS_FORMATS, HlsInputFormat, MP4 } from '../../src/input-format.js';
 import { assert, hexStringToBytes, rejectAfter } from '../../src/misc.js';
@@ -1075,6 +1095,25 @@ test.concurrent('Missing media tag codec', async () => {
 	expect([...new Set(await Promise.all(tracks.map(x => x.getCodec())))]).toEqual(['aac', 'avc']);
 });
 
+test.concurrent('fLaC in the CODECS attribute of a variant', async () => {
+	const text = `#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=1000000,CODECS="avc1.64001f,fLaC"
+variant.m3u8
+`;
+
+	using input = new Input({
+		formats: HLS_FORMATS,
+		source: new CustomPathedSource('master.m3u8', ({ path }) => {
+			assert(path === 'master.m3u8');
+			return new BufferSource(new TextEncoder().encode(text));
+		}),
+	});
+
+	const audioTracks = await input.getAudioTracks();
+	expect(audioTracks).toHaveLength(1);
+	expect(await audioTracks[0]!.getCodec()).toBe('flac');
+});
+
 test.concurrent('Circular/recursive HLS is forbidden', async () => {
 	const text = `#EXTM3U
 #EXT-X-VERSION=3
@@ -1425,4 +1464,603 @@ const stripId3V2Tags = (bytes: Uint8Array) => {
 	}
 
 	return bytes;
+};
+
+test.concurrent('Undefined media groups', async () => {
+	using input = createHlsInput({
+		'master.m3u8': `#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=1000000,CODECS="avc1.64001f,mp4a.40.2",VIDEO="video",AUDIO="audio"
+variant.m3u8
+`,
+		'variant.m3u8': `#EXTM3U
+#EXT-X-TARGETDURATION:5
+#EXTINF:5,
+0.ts
+#EXT-X-ENDLIST
+`,
+	});
+
+	// The groups don't exist, so both tracks come from the variant stream itself
+	const videoTrack = await input.getPrimaryVideoTrack();
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(videoTrack);
+	assert(audioTrack);
+
+	expect(videoTrack.canBePairedWith(audioTrack)).toBe(true);
+	expect(await videoTrack.getBitrate()).toBe(1000000);
+	expect(await audioTrack.getBitrate()).toBe(1000000);
+	expect(await audioTrack.getNumberOfChannels()).toBe(2);
+	expect(await videoTrack.getCodedWidth()).toBeGreaterThan(0);
+});
+
+test.concurrent('Channel count of object-based audio', async () => {
+	using input = createHlsInput({
+		'master.m3u8': `#EXTM3U
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="atmos",NAME="English",DEFAULT=YES,CHANNELS="16/JOC",URI="atmos.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=1000000,CODECS="ec-3",AUDIO="atmos"
+atmos.m3u8
+`,
+		'atmos.m3u8': `#EXTM3U
+#EXT-X-TARGETDURATION:2
+#EXTINF:2,
+eac3.ts
+#EXT-X-ENDLIST
+`,
+	});
+
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	// "16/JOC" doesn't describe the channels the media decodes to
+	expect(await audioTrack.getNumberOfChannels()).toBe(6);
+	expect((await audioTrack.getDecoderConfig())!.numberOfChannels).toBe(6);
+});
+
+test.concurrent('Master playlist with only I-frame variants', async () => {
+	const playlists = {
+		'master.m3u8': `#EXTM3U
+#EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=100000,CODECS="hvc1.1.6.L93.B0",URI="media.m3u8"
+`,
+		'media.m3u8': `#EXTM3U
+#EXT-X-TARGETDURATION:4
+#EXT-X-I-FRAMES-ONLY
+#EXTINF:4,
+entry24-segment3.ts
+#EXT-X-ENDLIST
+`,
+	};
+
+	using input = createHlsInput(playlists);
+	const track = (await input.getPrimaryVideoTrack())!;
+	expect(await track.hasOnlyKeyPackets()).toBe(true);
+
+	// There's no regular variant to align the timestamps with, so the I-frame variant has to do
+	const packet = await new EncodedPacketSink(track).getFirstPacket();
+	expect(packet!.timestamp).toBe(0);
+
+	// Loaded directly, the media playlist's own tag marks it as I-frames only
+	using mediaInput = createHlsInput(playlists, 'media.m3u8');
+	const mediaTrack = (await mediaInput.getPrimaryVideoTrack())!;
+	expect(await mediaTrack.hasOnlyKeyPackets()).toBe(true);
+});
+
+test.concurrent('Playlists without segments', { timeout: 10_000 }, async () => {
+	using input = createHlsInput({
+		'master.m3u8': `#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=1000000,CODECS="avc1.64001f"
+ended.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=2000000,CODECS="avc1.64001f"
+live.m3u8
+`,
+		'ended.m3u8': `#EXTM3U
+#EXT-X-TARGETDURATION:2
+#EXT-X-ENDLIST
+`,
+		'live.m3u8': `#EXTM3U
+#EXT-X-TARGETDURATION:2
+`,
+	});
+	const [endedTrack, liveTrack] = await input.getVideoTracks();
+	assert(endedTrack);
+	assert(liveTrack);
+
+	// Neither an ended playlist nor skipLiveWait warrant waiting for the playlist to be reloaded
+	const start = performance.now();
+	expect(await endedTrack.getDurationFromMetadata()).toBe(null);
+	expect(await endedTrack.getDurationFromMetadata()).toBe(null);
+	expect(await endedTrack.getUnixTimeForTimestamp(0)).toBe(null);
+	expect(await liveTrack.getDurationFromMetadata({ skipLiveWait: true })).toBe(null);
+	expect(await liveTrack.getDurationFromMetadata({ skipLiveWait: true })).toBe(null);
+	expect(performance.now() - start).toBeLessThan(1000);
+});
+
+test.concurrent('Renditions with different codecs in one group', async () => {
+	using input = createHlsInput({
+		'master.m3u8': `#EXTM3U
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="MP3",URI="mp3.m3u8"
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="AC-3",URI="ac3.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=1000000,CODECS="ac-3,mp4a.40.34",AUDIO="audio"
+mp3.m3u8
+`,
+		'mp3.m3u8': `#EXTM3U
+#EXT-X-TARGETDURATION:2
+#EXTINF:2,
+mp3.ts
+#EXT-X-ENDLIST
+`,
+		'ac3.m3u8': `#EXTM3U
+#EXT-X-TARGETDURATION:2
+#EXTINF:2,
+ac3.ts
+#EXT-X-ENDLIST
+`,
+	});
+
+	const audioTracks = await input.getAudioTracks();
+	expect(await Promise.all(audioTracks.map(x => x.getName()))).toEqual(['MP3', 'AC-3']);
+	expect(await Promise.all(audioTracks.map(x => x.getCodec()))).toEqual(['mp3', 'ac3']);
+});
+
+test.concurrent('Renditions with different codec strings of the same codec in one group', async () => {
+	using input = new Input({
+		source: new CustomPathedSource('master.m3u8', ({ path }) => {
+			// Only the master playlist may be read, since the codec is clear without looking at any media
+			assert(path === 'master.m3u8');
+
+			return new BufferSource(new TextEncoder().encode(`#EXTM3U
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",LANGUAGE="en",NAME="English",URI="en.m3u8"
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",LANGUAGE="es",NAME="Spanish",URI="es.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=1000000,CODECS="avc1.64001f,mp4a.40.2,mp4a.40.5",AUDIO="audio"
+video.m3u8
+`));
+		}),
+		formats: HLS_FORMATS,
+	});
+
+	const audioTracks = await input.getAudioTracks();
+	expect(await Promise.all(audioTracks.map(x => x.getCodec()))).toEqual(['aac', 'aac']);
+});
+
+test.concurrent('Variant listing several video codecs without renditions', async () => {
+	using input = createHlsInput({
+		'master.m3u8': `#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=1000000,CODECS="avc1.64001f,hvc1.1.6.L93.B0"
+media.m3u8
+`,
+		'media.m3u8': `#EXTM3U
+#EXT-X-TARGETDURATION:2
+#EXTINF:2,
+hevc.ts
+#EXT-X-ENDLIST
+`,
+	});
+
+	const videoTracks = await input.getVideoTracks();
+	expect(await Promise.all(videoTracks.map(x => x.getCodec()))).toEqual(['hevc']);
+});
+
+const createHlsInput = (playlists: Record<string, string>, rootPath = 'master.m3u8') => new Input({
+	source: new CustomPathedSource(rootPath, ({ path }) => {
+		const playlist = playlists[path];
+		if (playlist !== undefined) {
+			return new BufferSource(new TextEncoder().encode(playlist));
+		}
+
+		return new FilePathSource(`./test/public/${path}`);
+	}),
+	formats: HLS_FORMATS,
+});
+
+test.concurrent('Sparse muxed fMP4 segments with large timestamps', async () => {
+	const files = await writeHls({
+		segmentFormat: new Mp4OutputFormat({ fastStart: 'fragmented' }),
+		mediaTimestampBase: 50_000,
+	}, async (addVideo, addAudio) => {
+		// The last segment holds only audio
+		for (let i = 0; i < 8; i++) {
+			await addVideo(0.5 * i, i % 4 === 0);
+		}
+		for (let i = 0; i < 8; i++) {
+			await addAudio(2 + 0.5 * i);
+		}
+	});
+
+	using input = createInputFromFiles(files, 'master.m3u8');
+	const videoTrack = await input.getPrimaryVideoTrack();
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(videoTrack);
+	assert(audioTrack);
+
+	expect(await collectTimestamps(new EncodedPacketSink(videoTrack))).toEqual([0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5]);
+	expect(await collectTimestamps(new EncodedPacketSink(audioTrack))).toEqual([2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5]);
+});
+
+test.concurrent('Packet lookup before the first segment', async () => {
+	const files = await writeHls({
+		segmentFormat: new MpegTsOutputFormat(),
+	}, async (addVideo, addAudio) => {
+		// Video is the reference and lands at 0, so audio starts before the audio playlist's first segment
+		for (let i = 0; i < 8; i++) {
+			await addVideo(1 + 0.5 * i, i % 4 === 0);
+			await addAudio(0.5 + 0.5 * i);
+		}
+	}, true);
+
+	using input = createInputFromFiles(files, 'master.m3u8');
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+	expect(await audioTrack.getFirstTimestamp()).toBe(-0.5);
+
+	const sink = new EncodedPacketSink(audioTrack);
+	expect((await sink.getPacket(-0.25))?.timestamp).toBe(-0.5);
+	expect((await sink.getKeyPacket(-0.25))?.timestamp).toBe(-0.5);
+	expect(await sink.getPacket(-0.75)).toBe(null);
+});
+
+test.concurrent('Packet lookup at packet timestamps with a media offset that is a fraction of a tick', async () => {
+	using input = createHlsInput({
+		'audio.m3u8': `#EXTM3U
+#EXT-X-TARGETDURATION:10
+#EXT-X-PROGRAM-DATE-TIME:2026-01-01T00:00:00.123Z
+#EXTINF:10,
+sample3.aac
+#EXT-X-ENDLIST
+`,
+	}, 'audio.m3u8');
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	const sink = new EncodedPacketSink(audioTrack);
+	for await (const packet of sink.packets()) {
+		expect((await sink.getPacket(packet.timestamp))?.timestamp).toBe(packet.timestamp);
+		expect((await sink.getKeyPacket(packet.timestamp))?.timestamp).toBe(packet.timestamp);
+	}
+});
+
+test.concurrent('EXTINF and EXT-X-BYTERANGE before EXT-X-MAP', async () => {
+	const files = await writeHls({
+		segmentFormat: new CmafOutputFormat(),
+		singleFilePerPlaylist: true,
+	}, async (addVideo, addAudio) => {
+		for (let i = 0; i < 8; i++) {
+			await addVideo(0.5 * i, i % 4 === 0);
+			await addAudio(0.5 * i);
+		}
+	});
+
+	const playlist = new TextDecoder().decode(files.get('playlist-1.m3u8'));
+	const mapLine = playlist.split('\n').find(x => x.startsWith('#EXT-X-MAP:'));
+	assert(mapLine);
+
+	// Same playlist, but with the media segment tags of the first segment placed before the EXT-X-MAP tag
+	files.set('reordered.m3u8', new TextEncoder().encode(
+		playlist.replace(`${mapLine}\n`, '').replace(/(#EXT-X-BYTERANGE:.*\n)/, `$1${mapLine}\n`),
+	));
+
+	using input = createInputFromFiles(files, 'reordered.m3u8');
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	expect(await collectTimestamps(new EncodedPacketSink(videoTrack))).toEqual([0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5]);
+});
+
+const createInputFromFiles = (files: Map<string, Uint8Array>, rootPath: string) => {
+	return new Input({
+		source: new CustomPathedSource(rootPath, ({ path }) => {
+			const bytes = files.get(path);
+			assert(bytes);
+
+			return new BufferSource(bytes);
+		}),
+		formats: ALL_FORMATS,
+	});
+};
+
+test.concurrent('Live playlist moving past all known segments', { timeout: 10_000 }, async () => {
+	const files = await writeHls({
+		segmentFormat: new MpegTsOutputFormat(),
+		targetDuration: 1,
+	}, async (addVideo) => {
+		for (let i = 0; i < 24; i++) {
+			await addVideo(0.5 * i, i % 2 === 0);
+		}
+	});
+
+	// Segment n holds the media from n to n + 1. The playlist first lists segments 0 to 2, then gets reloaded only
+	// after segments 3 to 7 have already dropped out of it again, and then stalls.
+	let playlistRequestCount = 0;
+	using input = new Input({
+		source: new CustomPathedSource('live.m3u8', ({ path }) => {
+			if (path !== 'live.m3u8') {
+				const bytes = files.get(path);
+				assert(bytes);
+
+				return new BufferSource(bytes);
+			}
+
+			const firstSequenceNumber = playlistRequestCount++ === 0 ? 0 : 8;
+			let playlist = `#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:${firstSequenceNumber}\n`;
+			for (let i = firstSequenceNumber; i < firstSequenceNumber + 3; i++) {
+				playlist += `#EXTINF:1,\nsegment-1-${i + 1}.ts\n`;
+			}
+
+			return new BufferSource(new TextEncoder().encode(playlist));
+		}),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+	const sink = new EncodedPacketSink(videoTrack);
+
+	const lastKnownPacket = await sink.getPacket(2.5);
+	assert(lastKnownPacket);
+	expect((await sink.getNextPacket(lastKnownPacket))?.timestamp).toBe(8);
+	expect(playlistRequestCount).toBe(2);
+
+	const packet = await Promise.race([sink.getPacket(9.25), rejectAfter(3000) as Promise<never>]);
+	expect(packet?.timestamp).toBe(9);
+});
+
+test.concurrent('Live playlist reload with init data in the first segment', { timeout: 10_000 }, async () => {
+	const files = await writeHls({
+		segmentFormat: new CmafOutputFormat(),
+		targetDuration: 1,
+	}, async (addVideo) => {
+		for (let i = 0; i < 6; i++) {
+			await addVideo(0.5 * i, i % 2 === 0);
+		}
+	});
+
+	// No EXT-X-MAP; the first segment carries the init data and later segments rely on it
+	const initBytes = files.get('init-1.m4s');
+	const firstSegmentBytes = files.get('segment-1-1.m4s');
+	assert(initBytes);
+	assert(firstSegmentBytes);
+	files.set('first.m4s', new Uint8Array([...initBytes, ...firstSegmentBytes]));
+
+	// The live playlist starts out with a single segment, the rest is only seen after a reload
+	let playlistRequestCount = 0;
+	using input = new Input({
+		source: new CustomPathedSource('live.m3u8', ({ path }) => {
+			if (path !== 'live.m3u8') {
+				const bytes = files.get(path);
+				assert(bytes);
+
+				return new BufferSource(bytes);
+			}
+
+			let playlist = '#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\nfirst.m4s\n';
+			if (playlistRequestCount++ > 0) {
+				playlist += '#EXTINF:1,\nsegment-1-2.m4s\n#EXTINF:1,\nsegment-1-3.m4s\n#EXT-X-ENDLIST\n';
+			}
+
+			return new BufferSource(new TextEncoder().encode(playlist));
+		}),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	expect(await collectTimestamps(new EncodedPacketSink(videoTrack))).toEqual([0, 0.5, 1, 1.5, 2, 2.5]);
+	expect(playlistRequestCount).toBe(2);
+});
+
+test.concurrent('Live playlist reload past a discontinuity that dropped out', { timeout: 10_000 }, async () => {
+	const addPackets = async (
+		addVideo: (timestamp: number, isKey: boolean) => Promise<void>,
+		addAudio: (timestamp: number) => Promise<void>,
+	) => {
+		for (let i = 0; i < 4; i++) {
+			await addVideo(0.5 * i, i % 2 === 0);
+			await addAudio(0.5 * i);
+		}
+	};
+
+	const files48k = await writeHls({
+		segmentFormat: new MpegTsOutputFormat(),
+		targetDuration: 1,
+	}, addPackets);
+	// Same streams, but the audio is now 24 kHz
+	const files24k = await writeHls({
+		segmentFormat: new MpegTsOutputFormat(),
+		targetDuration: 1,
+	}, addPackets, false, {
+		sampleRate: 24000,
+		description: new Uint8Array([0x13, 0x08]),
+	});
+
+	// The reload jumps past a discontinuity whose segments we never saw, after which the audio is 24 kHz
+	let playlistRequestCount = 0;
+	using input = new Input({
+		source: new CustomPathedSource('live.m3u8', ({ path }) => {
+			if (path !== 'live.m3u8') {
+				const bytes = path.startsWith('b-') ? files24k.get(path.slice(2)) : files48k.get(path);
+				assert(bytes);
+
+				return new BufferSource(bytes);
+			}
+
+			const playlist = playlistRequestCount++ === 0
+				? '#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:0\n'
+				+ '#EXTINF:1,\nsegment-1-1.ts\n#EXTINF:1,\nsegment-1-2.ts\n'
+				: '#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:5\n#EXT-X-DISCONTINUITY-SEQUENCE:1\n'
+					+ '#EXTINF:1,\nb-segment-1-1.ts\n#EXTINF:1,\nb-segment-1-2.ts\n#EXT-X-ENDLIST\n';
+
+			return new BufferSource(new TextEncoder().encode(playlist));
+		}),
+		formats: ALL_FORMATS,
+	});
+
+	const audioTrack = await input.getPrimaryAudioTrack();
+	assert(audioTrack);
+
+	const durations: number[] = [];
+	for await (const packet of new EncodedPacketSink(audioTrack).packets()) {
+		durations.push(packet.duration);
+	}
+
+	// The last packet of each segment has no successor to derive its duration from, so it comes from the sample rate
+	expect(playlistRequestCount).toBe(2);
+	expect(durations).toEqual([0.5, 1024 / 48000, 0.5, 1024 / 48000, 0.5, 1024 / 24000, 0.5, 1024 / 24000]);
+});
+
+test.concurrent('Live playlist reload adding date-times', { timeout: 10_000 }, async () => {
+	const files = await writeHls({
+		segmentFormat: new MpegTsOutputFormat(),
+		targetDuration: 1,
+	}, async (addVideo) => {
+		for (let i = 0; i < 8; i++) {
+			await addVideo(0.5 * i, i % 2 === 0);
+		}
+	});
+
+	// The first playlist has no date-times, and the reload adds one for the new segments
+	let playlistRequestCount = 0;
+	using input = new Input({
+		source: new CustomPathedSource('live.m3u8', ({ path }) => {
+			if (path !== 'live.m3u8') {
+				const bytes = files.get(path);
+				assert(bytes);
+
+				return new BufferSource(bytes);
+			}
+
+			let playlist = '#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\nsegment-1-1.ts\n#EXTINF:1,\nsegment-1-2.ts\n';
+			if (playlistRequestCount++ > 0) {
+				playlist += '#EXT-X-PROGRAM-DATE-TIME:2026-01-01T00:00:00.000Z\n'
+					+ '#EXTINF:1,\nsegment-1-3.ts\n#EXTINF:1,\nsegment-1-4.ts\n#EXT-X-ENDLIST\n';
+			}
+
+			return new BufferSource(new TextEncoder().encode(playlist));
+		}),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	// The segments already in use keep their timeline, which the date-time only maps to Unix time
+	expect(await collectTimestamps(new EncodedPacketSink(videoTrack))).toEqual([0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5]);
+	expect(playlistRequestCount).toBe(2);
+	expect(await videoTrack.isRelativeToUnixEpoch()).toBe(false);
+	expect(await videoTrack.getUnixTimeForTimestamp(2.5)).toBe(Date.UTC(2026, 0, 1) / 1000 + 0.5);
+});
+
+test.concurrent('Unix time past the live edge', { timeout: 10_000 }, async () => {
+	const files = await writeHls({
+		segmentFormat: new MpegTsOutputFormat(),
+		targetDuration: 1,
+	}, async (addVideo) => {
+		for (let i = 0; i < 4; i++) {
+			await addVideo(0.5 * i, i % 2 === 0);
+		}
+	});
+
+	let playlistRequestCount = 0;
+	using input = new Input({
+		source: new CustomPathedSource('live.m3u8', ({ path }) => {
+			if (path !== 'live.m3u8') {
+				const bytes = files.get(path);
+				assert(bytes);
+
+				return new BufferSource(bytes);
+			}
+
+			playlistRequestCount++;
+			return new BufferSource(new TextEncoder().encode(
+				'#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXT-X-PROGRAM-DATE-TIME:2026-01-01T00:00:00.000Z\n'
+				+ '#EXTINF:1,\nsegment-1-1.ts\n#EXTINF:1,\nsegment-1-2.ts\n',
+			));
+		}),
+		formats: ALL_FORMATS,
+		formatOptions: { hls: { offsetTimestampsByDateTime: false } },
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+	expect(await videoTrack.getFirstTimestamp()).toBe(0);
+	const requestCountBefore = playlistRequestCount;
+
+	// The mapping extends past the known segments without waiting for the playlist to grow
+	const start = performance.now();
+	expect(await videoTrack.getUnixTimeForTimestamp(5)).toBe(Date.UTC(2026, 0, 1) / 1000 + 5);
+	expect(performance.now() - start).toBeLessThan(500);
+	expect(playlistRequestCount).toBe(requestCountBefore);
+});
+
+const writeHls = async (
+	hlsOptions: HlsOutputFormatOptions,
+	addPackets: (
+		addVideo: (timestamp: number, isKey: boolean) => Promise<void>,
+		addAudio: (timestamp: number) => Promise<void>,
+	) => Promise<void>,
+	separateGroups = false,
+	audioDecoderConfigOverrides: Partial<AudioDecoderConfig> = {},
+) => {
+	using demo = new Input({
+		source: new FilePathSource('./test/public/demo.mp4'),
+		formats: ALL_FORMATS,
+	});
+	const demoVideoTrack = await demo.getPrimaryVideoTrack();
+	const demoAudioTrack = await demo.getPrimaryAudioTrack();
+	assert(demoVideoTrack);
+	assert(demoAudioTrack);
+
+	const videoPacket = await new EncodedPacketSink(demoVideoTrack).getFirstPacket();
+	const audioPacket = await new EncodedPacketSink(demoAudioTrack).getFirstPacket();
+	assert(videoPacket);
+	assert(audioPacket);
+	const videoDecoderConfig = await demoVideoTrack.getDecoderConfig();
+	const audioDecoderConfig = await demoAudioTrack.getDecoderConfig();
+	assert(videoDecoderConfig);
+	assert(audioDecoderConfig);
+
+	const targets = new Map<string, BufferTarget>();
+	const output = new Output({
+		format: new HlsOutputFormat(hlsOptions),
+		target: new PathedTarget('master.m3u8', (request) => {
+			const target = new BufferTarget();
+			targets.set(request.path, target);
+
+			return target;
+		}),
+	});
+
+	const videoSource = new EncodedVideoPacketSource('avc');
+	const audioSource = new EncodedAudioPacketSource('aac');
+	output.addVideoTrack(videoSource, separateGroups ? { group: new OutputTrackGroup() } : {});
+	output.addAudioTrack(audioSource, separateGroups ? { group: new OutputTrackGroup() } : {});
+
+	await output.start();
+
+	await addPackets(
+		(timestamp, isKey) => videoSource.add(
+			new EncodedPacket(videoPacket.data, isKey ? 'key' : 'delta', timestamp, 0.5),
+			{ decoderConfig: videoDecoderConfig },
+		),
+		timestamp => audioSource.add(
+			new EncodedPacket(audioPacket.data, 'key', timestamp, 0.5),
+			{ decoderConfig: { ...audioDecoderConfig, ...audioDecoderConfigOverrides } },
+		),
+	);
+
+	await output.finalize();
+
+	const files = new Map<string, Uint8Array>();
+	for (const [path, target] of targets) {
+		files.set(path, new Uint8Array(target.buffer!));
+	}
+
+	return files;
+};
+
+const collectTimestamps = async (sink: EncodedPacketSink) => {
+	const timestamps: number[] = [];
+	for await (const packet of sink.packets()) {
+		timestamps.push(packet.timestamp);
+	}
+
+	return timestamps;
 };

@@ -1,16 +1,25 @@
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
+import { Worker } from 'node:worker_threads';
 import { Input } from '../../src/input.js';
 import { BufferSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { Output } from '../../src/output.js';
 import { BufferTarget } from '../../src/target.js';
-import { canEncode } from '../../src/encode.js';
+import { canEncode, Quality } from '../../src/encode.js';
 import { AudioSampleSource } from '../../src/media-source.js';
-import { EncodedPacketSink } from '../../src/media-sink.js';
+import { AudioSampleSink, EncodedPacketSink } from '../../src/media-sink.js';
 import { FlacOutputFormat, Mp4OutputFormat } from '../../src/output-format.js';
 import { AudioSample } from '../../src/sample.js';
+import { EncodedPacket } from '../../src/packet.js';
+import {
+	CustomAudioEncoder,
+	customAudioDecoders,
+	customAudioEncoders,
+	registerDecoder,
+} from '../../src/custom-coder.js';
 import { registerFlacEncoder } from '@mediabunny/flac-encoder';
-import { assert } from '../../src/misc.js';
+import { NodeAvAudioDecoder } from '../../packages/server/src/audio-decoder.js';
+import { assert, uint8ArraysAreEqual } from '../../src/misc.js';
 
 const createSineWave = (sampleRate: number, channels: number, durationSeconds: number) => {
 	const totalFrames = sampleRate * durationSeconds;
@@ -126,4 +135,135 @@ test('FLAC with huge timestamps', async () => {
 	assert(firstPacket);
 
 	expect(firstPacket.timestamp).toBe(timestamp);
+});
+
+test('FLAC canceled during worker creation', async () => {
+	registerFlacEncoder();
+
+	const onSpy = vi.spyOn(Worker.prototype, 'on');
+	const terminateSpy = vi.spyOn(Worker.prototype, 'terminate');
+
+	try {
+		const output = new Output({
+			format: new Mp4OutputFormat(),
+			target: new BufferTarget(),
+		});
+		const audioSource = new AudioSampleSource({ codec: 'flac', quality: new Quality({ bitrate: 128000 }) });
+		output.addAudioTrack(audioSource);
+		await output.start();
+
+		using sample = new AudioSample({
+			data: new Float32Array(4800),
+			format: 'f32',
+			numberOfChannels: 1,
+			sampleRate: 48000,
+			timestamp: 0,
+		});
+		const addPromise = audioSource.add(sample);
+
+		await output.cancel();
+		await addPromise;
+
+		const workers = [...new Set(onSpy.mock.contexts)];
+		expect(workers).toHaveLength(1);
+		expect(terminateSpy.mock.contexts).toContain(workers[0]);
+	} finally {
+		vi.restoreAllMocks();
+	}
+});
+
+test('FLAC encoding after a flush', async () => {
+	registerFlacEncoder();
+
+	const config: AudioEncoderConfig = {
+		codec: 'flac',
+		numberOfChannels: 1,
+		sampleRate: 48000,
+	};
+
+	const MatchingEncoder = customAudioEncoders.find(x => x.supports('flac', config));
+	assert(MatchingEncoder);
+	// @ts-expect-error Can't create an instance of an abstract class
+	const encoder = new MatchingEncoder() as CustomAudioEncoder;
+	// @ts-expect-error Readonly
+	encoder.codec = 'flac';
+	// @ts-expect-error Readonly
+	encoder.config = config;
+
+	const packets: EncodedPacket[] = [];
+	// @ts-expect-error Readonly
+	encoder.onPacket = (packet: EncodedPacket) => {
+		packets.push(packet);
+	};
+
+	await encoder.init();
+
+	let firstRunPacketCount = 0;
+	for (let run = 0; run < 2; run++) {
+		using sample = new AudioSample({
+			data: createSineWave(48000, 1, 0.25),
+			format: 'f32',
+			numberOfChannels: 1,
+			sampleRate: 48000,
+			timestamp: 0,
+		});
+		await encoder.encode(sample);
+		await encoder.flush();
+
+		firstRunPacketCount ||= packets.length;
+	}
+
+	await encoder.close();
+
+	// The second run should come out exactly like the first one, rather than with libFLAC's default configuration
+	const firstRun = packets.slice(0, firstRunPacketCount);
+	const secondRun = packets.slice(firstRunPacketCount);
+	expect(firstRun.length).toBeGreaterThan(0);
+	expect(secondRun.map(x => x.timestamp)).toEqual(firstRun.map(x => x.timestamp));
+	expect(secondRun.every((x, i) => uint8ArraysAreEqual(x.data, firstRun[i]!.data))).toBe(true);
+});
+
+test('Float input rounded to 24 bits', async () => {
+	registerFlacEncoder();
+
+	// The extension only encodes, so FFmpeg does the decoding
+	if (!customAudioDecoders.includes(NodeAvAudioDecoder)) {
+		registerDecoder(NodeAvAudioDecoder);
+	}
+
+	const output = new Output({
+		format: new FlacOutputFormat(),
+		target: new BufferTarget(),
+	});
+	const source = new AudioSampleSource({ codec: 'flac', quality: new Quality('high') });
+	output.addAudioTrack(source);
+	await output.start();
+
+	// Three quarters of the way from one 24-bit value to the next
+	const sample = new AudioSample({
+		data: new Float32Array(4096).fill(1000.75 / 2 ** 23),
+		format: 'f32',
+		numberOfChannels: 1,
+		sampleRate: 48000,
+		timestamp: 0,
+	});
+	await source.add(sample);
+	sample.close();
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	for await (using decoded of new AudioSampleSink(track).samples()) {
+		const values = new Int32Array(decoded.numberOfFrames);
+		decoded.copyTo(values, {
+			format: 's32',
+			planeIndex: 0,
+		});
+		expect(new Set(values)).toEqual(new Set([256 * 1001]));
+	}
 });

@@ -44,9 +44,12 @@ import { DurationMetadataRequestOptions } from './demuxer';
 export type PacketStats = {
 	/** The total number of packets. */
 	packetCount: number;
-	/** The average number of packets per second. For video tracks, this will equal the average frame rate (FPS). */
+	/**
+	 * The average number of packets per second. For video tracks, this will equal the average frame rate (FPS).
+	 * Infinite if all packets sit at a single instant.
+	 */
 	averagePacketRate: number;
-	/** The average number of bits per second. */
+	/** The average number of bits per second. Infinite if all packets sit at a single instant. */
 	averageBitrate: number;
 };
 
@@ -121,7 +124,6 @@ export type FrameRateMetricsOptions = {
 
 export interface InputTrackBacking {
 	getType(): TrackType;
-	getId(): number;
 	getNumber(): number;
 
 	getCodec(): MaybePromise<MediaCodec | null>;
@@ -199,9 +201,18 @@ export abstract class InputTrack {
 		return this instanceof InputAudioTrack;
 	}
 
-	/** The unique ID of this track in the input file. */
+	/**
+	 * The unique ID of this track in the input file, which is its 1-based index in the list of tracks returned by
+	 * {@link Input.getTracks}.
+	 */
 	get id() {
-		return this._backing.getId();
+		const backings = this.input._trackBackingsCache;
+		assert(backings);
+
+		const index = backings.indexOf(this._backing);
+		assert(index !== -1);
+
+		return index + 1;
 	}
 
 	/**
@@ -347,10 +358,20 @@ export abstract class InputTrack {
 	 * Returns the start timestamp of the first packet of this track, in seconds. While often near zero, this value
 	 * may be positive or even negative. A negative starting timestamp means the track's timing has been offset. Samples
 	 * with a negative timestamp should not be presented.
+	 *
+	 * Returns 0 if the track has no packets. Use {@link InputTrack.getFirstTimestampOrNull} to have it
+	 * return `null` instead.
 	 */
 	async getFirstTimestamp() {
+		return (await this.getFirstTimestampOrNull()) ?? 0;
+	}
+
+	/**
+	 * Like {@link InputTrack.getFirstTimestamp}, but returns `null` when the track has no packets.
+	 */
+	async getFirstTimestampOrNull() {
 		const firstPacket = await this._backing.getFirstPacket({ metadataOnly: true });
-		return firstPacket?.timestamp ?? 0;
+		return firstPacket?.timestamp ?? null;
 	}
 
 	/**
@@ -359,12 +380,24 @@ export abstract class InputTrack {
 	 * By default, when the underlying media is live, this method will only resolve once the live stream ends. If you
 	 * want to query the current end timestamp of the stream, set {@link PacketRetrievalOptions.skipLiveWait} to `true`
 	 * in the options.
+	 *
+	 * Returns 0 if the track has no packets. Use {@link InputTrack.computeDurationOrNull} to have it
+	 * return `null` instead.
 	 */
 	async computeDuration(options?: PacketRetrievalOptions) {
-		const lastPacket = await this._backing.getPacket(Infinity, { metadataOnly: true, ...options });
-		const result = (lastPacket?.timestamp ?? 0) + (lastPacket?.duration ?? 0);
+		return (await this.computeDurationOrNull(options)) ?? 0;
+	}
 
-		return roundToDivisor(result, await this.getTimeResolution());
+	/**
+	 * Like {@link InputTrack.computeDuration}, but returns `null` when the track has no packets.
+	 */
+	async computeDurationOrNull(options?: PacketRetrievalOptions) {
+		const lastPacket = await this._backing.getPacket(Infinity, { metadataOnly: true, ...options });
+		if (!lastPacket) {
+			return null;
+		}
+
+		return roundToDivisor(lastPacket.timestamp + lastPacket.duration, await this.getTimeResolution());
 	}
 
 	/**
@@ -406,6 +439,8 @@ export abstract class InputTrack {
 				packetCount >= targetPacketCount
 				// This additional condition is needed to produce correct results with out-of-presentation-order packets
 				&& packet.timestamp >= endTimestamp
+				// Rates over a zero time span would be infinite, so let's keep going until there's a span
+				&& endTimestamp > startTimestamp
 			) {
 				break;
 			}
@@ -417,13 +452,15 @@ export abstract class InputTrack {
 			totalPacketBytes += packet.byteLength;
 		}
 
+		const timeSpan = endTimestamp - startTimestamp;
+
 		return {
 			packetCount,
-			averagePacketRate: packetCount
-				? Number((packetCount / (endTimestamp - startTimestamp)).toPrecision(16))
+			averagePacketRate: packetCount > 0
+				? Number((packetCount / timeSpan).toPrecision(16)) // Intentionally Infinity if the span is 0
 				: 0,
-			averageBitrate: packetCount
-				? Number((8 * totalPacketBytes / (endTimestamp - startTimestamp)).toPrecision(16))
+			averageBitrate: totalPacketBytes > 0
+				? Number((8 * totalPacketBytes / timeSpan).toPrecision(16)) // Intentionally Infinity if the span is 0
 				: 0,
 		};
 	}
@@ -828,9 +865,8 @@ export class InputVideoTrack extends InputTrack {
 	async hasHighDynamicRange() {
 		const colorSpace = await this._backing.getColorSpace();
 
-		return (colorSpace.primaries as string) === 'bt2020' || (colorSpace.primaries as string) === 'smpte432'
-			|| (colorSpace.transfer as string) === 'pq' || (colorSpace.transfer as string) === 'hlg'
-			|| (colorSpace.matrix as string) === 'bt2020-ncl';
+		// Only the transfer function makes it HDR
+		return (colorSpace.transfer as string) === 'pq' || (colorSpace.transfer as string) === 'hlg';
 	}
 
 	/** Checks if this track may contain transparent samples with alpha data. */
@@ -1486,6 +1522,9 @@ export const findUnderlyingFrameRate = (
 	sortedGaps.sort();
 
 	let period = sortedGaps[Math.floor(sortedGaps.length * 0.05)]!;
+	// The period estimate is only accurate to about a tick across the frames it was measured over, and that error adds
+	// up for each frame a gap spans. Ignoring it turns gaps with a tick of jitter into outliers, biasing the estimate.
+	let periodUncertainty = 1;
 
 	// Repeatedly infer how many frame periods each gap spans and refine the underlying period from the locally
 	// consistent gaps.
@@ -1496,7 +1535,7 @@ export const findUnderlyingFrameRate = (
 		for (const gap of gaps) {
 			const multiple = Math.max(1, Math.round(gap / period));
 
-			if (Math.abs(gap - multiple * period) >= DELTA_TOLERANCE) {
+			if (Math.abs(gap - multiple * period) >= DELTA_TOLERANCE + multiple * periodUncertainty) {
 				continue;
 			}
 
@@ -1509,6 +1548,7 @@ export const findUnderlyingFrameRate = (
 		}
 
 		const refinedPeriod = totalTicks / totalFrames;
+		periodUncertainty = 1 / Math.min(totalFrames, MAX_EFFECTIVE_FRAME_SPAN);
 
 		if (
 			Math.abs(refinedPeriod - period)
@@ -1528,7 +1568,7 @@ export const findUnderlyingFrameRate = (
 	for (const gap of gaps) {
 		const multiple = Math.max(1, Math.round(gap / period));
 
-		if (Math.abs(gap - multiple * period) >= DELTA_TOLERANCE) {
+		if (Math.abs(gap - multiple * period) >= DELTA_TOLERANCE + multiple * periodUncertainty) {
 			continue;
 		}
 

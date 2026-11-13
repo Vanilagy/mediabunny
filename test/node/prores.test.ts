@@ -1,14 +1,20 @@
 import { expect, test } from 'vitest';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { registerProresDecoder } from '@mediabunny/prores';
 import { Input } from '../../src/input.js';
-import { BufferSource, UrlSource } from '../../src/source.js';
+import { BufferSource, FilePathSource, UrlSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { Output } from '../../src/output.js';
 import { MkvOutputFormat, MovOutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
 import { Conversion } from '../../src/conversion.js';
 import { EncodedPacketSink, VideoSampleSink } from '../../src/media-sink.js';
+import { CustomVideoDecoder, customVideoDecoders } from '../../src/custom-coder.js';
+import { VideoSample } from '../../src/sample.js';
 import { assert } from '../../src/misc.js';
+
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
 const SAMPLE_URL = 'https://pub-1ee78aacb848486482b20a72b55b3121.r2.dev/turbores-sample.mov';
 
@@ -167,4 +173,88 @@ test('ProRes decoding', { timeout: 20_000 }, async () => {
 	const pixels = new Uint8Array(allocationSize);
 	await sample.copyTo(pixels);
 	expect(pixels.some(byte => byte !== 0)).toBe(true);
+});
+
+test('Pixel aspect ratio signaled only by the container', async () => {
+	registerProresDecoder();
+
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '..', 'public/prores-container-metadata.mov')),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = (await input.getPrimaryVideoTrack())!;
+	expect(await videoTrack.getCodedWidth()).toBe(48);
+	expect(await videoTrack.getSquarePixelWidth()).toBe(64);
+
+	const sink = new VideoSampleSink(videoTrack);
+	using sample = (await sink.getSample(await videoTrack.getFirstTimestamp()))!;
+
+	expect(sample.squarePixelWidth).toBe(64);
+	expect(sample.squarePixelHeight).toBe(32);
+});
+
+test('Color space signaled only by the container', async () => {
+	registerProresDecoder();
+
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '..', 'public/prores-container-metadata.mov')),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = (await input.getPrimaryVideoTrack())!;
+	const expectedColorSpace = {
+		primaries: 'bt2020',
+		transfer: 'hlg',
+		matrix: 'bt2020-ncl',
+		fullRange: false,
+	};
+	expect(await videoTrack.getColorSpace()).toEqual(expectedColorSpace);
+
+	const sink = new VideoSampleSink(videoTrack);
+	using sample = (await sink.getSample(await videoTrack.getFirstTimestamp()))!;
+
+	// The ProRes frame headers say "unspecified", so this can only come from the colr box
+	expect(sample.colorSpace.toJSON()).toEqual(expectedColorSpace);
+});
+
+test('Flush with decodes in flight', async () => {
+	registerProresDecoder();
+
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '..', 'public/prores-container-metadata.mov')),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = (await input.getPrimaryVideoTrack())!;
+	const decoderConfig = (await videoTrack.getDecoderConfig())!;
+
+	const ProresDecoder = customVideoDecoders.find(x => x.supports('prores', decoderConfig));
+	assert(ProresDecoder);
+
+	// @ts-expect-error It's only abstract in the type system
+	const decoder = new ProresDecoder() as CustomVideoDecoder;
+	const samples: VideoSample[] = [];
+	Object.assign(decoder, {
+		codec: 'prores',
+		config: decoderConfig,
+		onSample: (sample: VideoSample) => samples.push(sample),
+		onError: (error: unknown) => {
+			throw error;
+		},
+	});
+	await decoder.init();
+
+	const packetSink = new EncodedPacketSink(videoTrack);
+	for await (const packet of packetSink.packets()) {
+		await decoder.decode(packet);
+	}
+	await decoder.flush();
+
+	expect(samples).toHaveLength(2);
+
+	for (const sample of samples) {
+		sample.close();
+	}
+	await decoder.close();
 });
