@@ -2398,6 +2398,8 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 	expectedFirstTimestamp: number | null = null;
 	timestampOffset = 0;
 
+	private codec: AudioCodec;
+
 	constructor(
 		onSample: (sample: AudioSample) => unknown,
 		onError: (error: unknown) => unknown,
@@ -2406,12 +2408,21 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 	) {
 		super(onSample, onError);
 
+		this.codec = codec;
+
 		// WebCodecs impls discards the preskip (correct) but doesn't advance the timestamp (incorrect)
 		const opusPreSkip = codec === 'opus' && decoderConfig.description
 			? parseOpusIdentificationHeader(toUint8Array(decoderConfig.description)).preSkip / OPUS_SAMPLE_RATE
 			: 0;
 
 		const sampleHandler = (sample: AudioSample) => {
+			if (sample.numberOfFrames === 0) {
+				// We skip zero-data (empty) AudioSamples. These are sometimes emitted, for example, by Firefox when it
+				// decodes Vorbis (at the start). Skip them before they can anchor the timestamp offset.
+				sample.close();
+				return;
+			}
+
 			let sampleTimestamp = sample.timestamp;
 
 			if (this.expectedFirstTimestamp !== null && this.currentTimestamp === null) {
@@ -2430,13 +2441,6 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 
 			const preciseTimestamp = this.currentTimestamp;
 			this.currentTimestamp += sample.duration;
-
-			if (sample.numberOfFrames === 0) {
-				// We skip zero-data (empty) AudioSamples. These are sometimes emitted, for example, by Firefox when it
-				// decodes Vorbis (at the start).
-				sample.close();
-				return;
-			}
 
 			// Round the timestamp to the sample rate
 			const sampleRate = decoderConfig.sampleRate;
@@ -2514,7 +2518,11 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 		} else {
 			assert(this.decoder);
 
-			this.expectedFirstTimestamp ??= packet.timestamp;
+			// A Vorbis decoder outputs nothing for the first packet it receives, as that packet only primes the overlap
+			// with the next one. The first decoded audio therefore begins where the first packet ends.
+			this.expectedFirstTimestamp ??= this.codec === 'vorbis'
+				? packet.timestamp + packet.duration
+				: packet.timestamp;
 			this.decoder.decode(packet.toEncodedAudioChunk());
 		}
 	}
