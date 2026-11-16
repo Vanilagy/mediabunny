@@ -124,6 +124,8 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 	/** @internal */
 	_disposed = false;
 	/** @internal */
+	_disposeCallbacks = new Set<() => void>();
+	/** @internal */
 	_nextSourceCacheAge = 0;
 	/** @internal */
 	_sourceRefs: SourceRef[] = [];
@@ -555,6 +557,11 @@ export class Input<S extends Source = Source> extends EventEmitter<InputEvents> 
 		}
 
 		this._disposed = true;
+
+		for (const callback of this._disposeCallbacks) {
+			callback();
+		}
+		this._disposeCallbacks.clear();
 
 		for (const ref of this._sourceRefs) {
 			ref.free();
