@@ -289,6 +289,7 @@ type ConversionAudioOptions = {
 	sampleRate?: number;
 	sampleFormat?: 'u8' | 's16' | 's32' | 'f32';
 	forceTranscode?: boolean;
+	padToVideoEnd?: boolean;
 	process?: (sample: AudioSample) => MaybePromise<
 		AudioSample | AudioSample[] | null
 	>;
@@ -333,6 +334,9 @@ Use the `codec` property to control the codec of the output track. This should b
 Use the `quality` property to control the quality of the output audio. For example, you can use this field to compress the audio track. See [Encoding quality](./media-sources#encoding-quality) for more. If this property is set, transcoding will always happen. If this property is not set but transcoding is still required, `new Quality('high')` will be used as the value.
 
 If you want to prevent direct copying of media data and force a transcoding step, use `forceTranscode: true`.
+
+Set `padToVideoEnd: true` to append silence to short audio tracks through the selected input video's end (or `trim.end`, whichever comes first). This can help players that end muxed HLS playback when audio ends before video. It defaults to `false` and forces audio transcoding; separate audio tracks remain separate, and longer audio is not shortened. Without a selected video track, no trailing silence is added. Live video requires a finite `trim.end`. The target uses input video timing, not duration changes from custom video processing.
+
 
 ### Processing audio
 

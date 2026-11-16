@@ -337,6 +337,12 @@ export type ConversionAudioOptions = {
 	/** When `true`, audio will always be re-encoded instead of directly copying over the encoded packets. */
 	forceTranscode?: boolean;
 	/**
+	 * Append silence through the end of the selected input video tracks, clipped to the trim end. Defaults to false.
+	 * Forces audio transcoding. Tracks remain separate; longer audio is not shortened. Live video requires a finite
+	 * trim end. Custom video processing that changes duration is not reflected in the padding target.
+	 */
+	padToVideoEnd?: boolean;
+	/**
 	 * Allows for custom user-defined processing of audio samples, e.g. for applying audio effects, transformations, or
 	 * timestamp modifications. Will be called for each input audio sample after remixing and resampling.
 	 *
@@ -594,6 +600,9 @@ const validateAudioOptions = (audioOptions: ConversionAudioOptions) => {
 		&& !['u8', 's16', 's32', 'f32'].includes(audioOptions.sampleFormat)
 	) {
 		throw new TypeError('options.audio.sampleFormat, when provided, must be one of: u8, s16, s32, f32.');
+	}
+	if (audioOptions?.padToVideoEnd !== undefined && typeof audioOptions.padToVideoEnd !== 'boolean') {
+		throw new TypeError('options.audio.padToVideoEnd, when provided, must be a boolean.');
 	}
 	if (audioOptions?.process !== undefined && typeof audioOptions.process !== 'function') {
 		throw new TypeError('options.audio.process, when provided, must be a function.');
@@ -2097,7 +2106,8 @@ export class Conversion {
 			|| !audioCodecs.includes(sourceCodec)
 			|| (!!trackOptions.codec && trackOptions.codec !== sourceCodec)
 			|| trackOptions.process !== undefined
-			|| trackOptions.sampleFormat !== undefined;
+			|| trackOptions.sampleFormat !== undefined
+			|| trackOptions.padToVideoEnd === true;
 
 		let copyStartPacket: EncodedPacket | null = null;
 
@@ -2373,6 +2383,13 @@ export class Conversion {
 
 			this._registerTrackPump(async (pump) => {
 				let paddingLengthInSamples: number | null = null;
+				let audioEndTimestamp = 0;
+				let paddingFormat: AudioSample['format'] = 'f32-planar';
+				let paddingSampleRate = originalSampleRate;
+				let paddingNumberOfChannels = originalNumberOfChannels;
+				const videoEnd = trackOptions.padToVideoEnd
+					? await this._getVideoPaddingEnd(this.utilizedTracks)
+					: 0;
 
 				const sink = new AudioSampleSink(track);
 				for await (using sample of sink.samples(this._startTimestamp, this._endTimestamp)) {
@@ -2416,6 +2433,10 @@ export class Conversion {
 
 					// Offset the timestamp as needed
 					finalSample.setTimestamp(finalSample.timestamp + this._timestampOffset);
+					audioEndTimestamp = Math.max(audioEndTimestamp, finalSample.timestamp + finalSample.duration);
+					paddingFormat = finalSample.format;
+					paddingSampleRate = finalSample.sampleRate;
+					paddingNumberOfChannels = finalSample.numberOfChannels;
 
 					if (paddingLengthInSamples === null) {
 						paddingLengthInSamples = this.output.format.supportsTimestampedMediaData
@@ -2460,6 +2481,31 @@ export class Conversion {
 					);
 				}
 
+				if (trackOptions.padToVideoEnd) {
+					const endFrame = Math.ceil((videoEnd + this._timestampOffset) * paddingSampleRate);
+					let nextFrame = Math.round(audioEndTimestamp * paddingSampleRate);
+					while (nextFrame < endFrame && this._state !== 'canceled') {
+						const frames = Math.min(16384, endFrame - nextFrame);
+						const data = new Uint8Array(
+							getBytesPerSample(paddingFormat) * frames * paddingNumberOfChannels,
+						);
+						if (paddingFormat === 'u8' || paddingFormat === 'u8-planar') {
+							data.fill(2 ** 7);
+						}
+						using silence = new AudioSample({
+							data,
+							format: paddingFormat,
+							numberOfChannels: paddingNumberOfChannels,
+							sampleRate: paddingSampleRate,
+							timestamp: nextFrame / paddingSampleRate,
+						});
+						await this._registerAudioSample(
+							pump, silence, source, outputTrackId, () => lastSampleTimestamp,
+						);
+						nextFrame += frames;
+					}
+				}
+
 				source.close(); // No-op if a cancel already force-closed it
 				this._closeTrack(outputTrackId);
 			});
@@ -2492,7 +2538,11 @@ export class Conversion {
 				? this._startTimestamp
 				: copyStartPacket?.timestamp ?? this._startTimestamp;
 
-			maximumPacketCount = await this._estimateMaximumPacketCount(track, startTimestamp, packetRate);
+			// Reserve enough space even if a later input video track has not been selected yet.
+			const paddingEnd = trackOptions.padToVideoEnd
+				? await this._getVideoPaddingEnd(await this.input.getVideoTracks())
+				: 0;
+			maximumPacketCount = await this._estimateMaximumPacketCount(track, startTimestamp, packetRate, paddingEnd);
 		}
 
 		this.output.addAudioTrack(audioSource, {
@@ -2514,7 +2564,12 @@ export class Conversion {
 	}
 
 	/** @internal */
-	async _estimateMaximumPacketCount(track: InputTrack, startTimestamp: number, packetRate: number | null) {
+	async _estimateMaximumPacketCount(
+		track: InputTrack,
+		startTimestamp: number,
+		packetRate: number | null,
+		minimumEndTimestamp = 0,
+	) {
 		if (packetRate === null) {
 			const stats = await track.computePacketStats(PACKET_STATS_PACKET_COUNT);
 			if (stats.averagePacketRate === Infinity) {
@@ -2525,11 +2580,24 @@ export class Conversion {
 			packetRate = stats.averagePacketRate;
 		}
 
-		const endTimestamp = Math.min(await this._getTrackDuration(track), this._endTimestamp);
+		const endTimestamp = Math.min(
+			Math.max(await this._getTrackDuration(track), minimumEndTimestamp), this._endTimestamp,
+		);
 		const duration = Math.max(endTimestamp - startTimestamp, 0);
 
 		// Let's give this a generous margin
 		return Math.ceil(1.5 * packetRate * duration) + 64;
+	}
+
+	/** @internal */
+	async _getVideoPaddingEnd(tracks: InputTrack[]) {
+		const ends = await Promise.all(tracks.filter(track => track.isVideoTrack())
+			.map(track => this._getTrackDuration(track)));
+		const end = Math.min(this._endTimestamp, Math.max(0, ...ends));
+		if (!Number.isFinite(end)) {
+			throw new Error('padToVideoEnd requires a finite video duration or trim.end.');
+		}
+		return end;
 	}
 
 	/** @internal */
