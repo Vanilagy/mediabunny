@@ -17,7 +17,7 @@ export type DecodedChunk = {
 	channels: number;
 	sampleRate: number;
 	sampleCount: number;
-	pts: number;
+	pts: number | null;
 };
 
 export type EncodedChunk = {

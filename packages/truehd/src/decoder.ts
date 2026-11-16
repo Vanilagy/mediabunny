@@ -14,12 +14,14 @@ import {
 	registerDecoder,
 } from 'mediabunny';
 import { sendCommand, refWorker, unrefWorker } from './worker-client';
-import { BATCH_SAMPLE_COUNT } from './shared';
+import { assert, BATCH_SAMPLE_COUNT } from './shared';
 
 class TrueHdDecoder extends CustomAudioDecoder {
-	private ctx = 0;
+	private ctx: number | null = null;
 	private samplesPerAccessUnit = 0;
 	private queuedPackets: EncodedPacket[] = [];
+	private nextTimestamp: number | null = null;
+	private inFlightDecode: Promise<void> | null = null;
 
 	static override supports(codec: AudioCodec): boolean {
 		return codec === 'truehd';
@@ -47,41 +49,68 @@ class TrueHdDecoder extends CustomAudioDecoder {
 	}
 
 	async flush() {
+		assert(this.ctx !== null);
+
 		if (this.queuedPackets.length > 0) {
 			await this.decodeQueuedPackets();
 		}
+
+		await this.inFlightDecode;
+		this.inFlightDecode = null;
 
 		await sendCommand({ type: 'flush-decoder', data: { ctx: this.ctx } });
 	}
 
 	async close() {
 		// Close shouldn't throw
-		sendCommand({ type: 'close-decoder', data: { ctx: this.ctx } }).catch(() => {});
+		if (this.ctx !== null) {
+			sendCommand({ type: 'close-decoder', data: { ctx: this.ctx } }).catch(() => {});
+		}
+
 		await unrefWorker();
 	}
 
 	private async decodeQueuedPackets() {
+		assert(this.ctx !== null);
+
 		const packets = this.queuedPackets.map(packet => ({
 			encodedData: packet.data.slice().buffer,
 			timestamp: Math.round(packet.timestamp * this.config.sampleRate),
 		}));
 		this.queuedPackets = [];
 
-		const result = await sendCommand({
+		const decode = sendCommand({
 			type: 'decode',
 			data: { ctx: this.ctx, packets },
-		}, packets.map(x => x.encodedData));
+		}, packets.map(x => x.encodedData)).then((result) => {
+			for (const chunk of result.chunks) {
+				// The access units following the first one of a packet come without a timestamp, but they simply pick
+				// up where the previous one left off
+				let timestamp: number;
+				if (chunk.pts !== null) {
+					timestamp = chunk.pts / this.config.sampleRate;
+				} else {
+					assert(this.nextTimestamp !== null);
+					timestamp = this.nextTimestamp;
+				}
 
-		for (const chunk of result.chunks) {
-			const sample = new AudioSample({
-				data: chunk.pcmData,
-				format: chunk.format,
-				numberOfChannels: chunk.channels,
-				sampleRate: chunk.sampleRate,
-				timestamp: chunk.pts / chunk.sampleRate,
-			});
-			this.onSample(sample);
-		}
+				const sample = new AudioSample({
+					data: chunk.pcmData,
+					format: chunk.format,
+					numberOfChannels: chunk.channels,
+					sampleRate: chunk.sampleRate,
+					timestamp,
+				});
+				this.nextTimestamp = timestamp + sample.duration;
+				this.onSample(sample);
+			}
+		});
+		decode.catch(() => {}); // Surfaces through whoever awaits it next
+
+		// Keep one batch in flight, so the worker already has the next one by the time it's done with the current one
+		const previousDecode = this.inFlightDecode;
+		this.inFlightDecode = decode;
+		await previousDecode;
 	}
 }
 

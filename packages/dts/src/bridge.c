@@ -7,6 +7,7 @@
  */
 
 #include <emscripten.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -90,7 +91,8 @@ int get_decoded_format(DecoderContext *ctx) {
 
 EMSCRIPTEN_KEEPALIVE
 uint8_t *get_decoded_plane_ptr(DecoderContext *ctx, int plane) {
-	return ctx->frame->data[plane];
+	// data only has room for 8 planes, but DTS:X can have more channels than that
+	return ctx->frame->extended_data[plane];
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -270,10 +272,9 @@ int encode_frame(EncoderContext *ctx, int64_t pts) {
 	float *input = ctx->input_buffer;
 	int32_t *output = (int32_t *)ctx->frame->data[0];
 	for (int i = 0; i < frame_size * channels; i++) {
-		float sample = input[i];
-		if (sample > 1.0f) sample = 1.0f;
-		if (sample < -1.0f) sample = -1.0f;
-		output[i] = (int32_t)(sample * 2147483647.0f);
+		// Round like Mediabunny's own sample conversions do
+		double sample = floor(2147483648.0 * input[i] + 0.5);
+		output[i] = (int32_t)fmin(fmax(sample, -2147483648.0), 2147483647.0);
 	}
 
 	int ret = avcodec_send_frame(ctx->codec_ctx, ctx->frame);
@@ -286,14 +287,6 @@ int encode_frame(EncoderContext *ctx, int64_t pts) {
 	ctx->encoded_duration = ctx->packet->duration;
 
 	return ctx->packet->size;
-}
-
-EMSCRIPTEN_KEEPALIVE
-void flush_encoder(EncoderContext *ctx) {
-	avcodec_send_frame(ctx->codec_ctx, NULL);
-	while (avcodec_receive_packet(ctx->codec_ctx, ctx->packet) == 0) {
-		av_packet_unref(ctx->packet);
-	}
 }
 
 EMSCRIPTEN_KEEPALIVE

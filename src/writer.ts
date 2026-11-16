@@ -20,6 +20,9 @@ export class Writer {
 		if (target._writerAcquired) {
 			throw new Error('Can\'t have multiple Writers for the same Target.');
 		}
+		if (target._closed) {
+			throw new Error('Can\'t create a Writer for a Target that has already been closed.');
+		}
 
 		this.target = target;
 		target._setMonotonicity(isMonotonic);
@@ -83,7 +86,7 @@ export class Writer {
 			}
 
 			data = data.subarray(this.trackedStart - pos);
-			pos = 0;
+			pos = this.trackedStart;
 		}
 
 		const neededSize = pos + data.byteLength - this.trackedStart;

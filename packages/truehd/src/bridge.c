@@ -7,6 +7,7 @@
  */
 
 #include <emscripten.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -284,10 +285,9 @@ int send_encode_frame(EncoderContext *ctx, int offset, int sample_count, int64_t
 	for (int ch = 0; ch < channels; ch++) {
 		int32_t *output = (int32_t *)ctx->frame->data[ch];
 		for (int i = 0; i < sample_count; i++) {
-			float sample = input[i * channels + ch];
-			if (sample > 1.0f) sample = 1.0f;
-			if (sample < -1.0f) sample = -1.0f;
-			output[i] = (int32_t)(sample * 2147483647.0f);
+			// The encoder only keeps the top 24 bits, so round to those, like Mediabunny's own sample conversions do
+			double sample = floor(8388608.0 * input[i * channels + ch] + 0.5);
+			output[i] = 256 * (int32_t)fmin(fmax(sample, -8388608.0), 8388607.0);
 		}
 	}
 

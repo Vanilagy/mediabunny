@@ -91,3 +91,7 @@ const convertVideo = async (quality: Quality, codec: VideoCodec, allowMissingQua
 
 	expect(conversion.utilizedTracks.some(x => x.isVideoTrack())).toBe(true);
 };
+
+test('Inherited property as a quality level', () => {
+	expect(() => new Quality('toString' as QualityLevel)).toThrow(TypeError);
+});

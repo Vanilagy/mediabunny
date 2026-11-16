@@ -311,12 +311,12 @@ const serverVariants = await createVariants(
 	{
 		platform: 'node',
 		packages: 'external',
-		external: ['mediabunny'],
+		external: ['mediabunny', '@mediabunny/prores'],
 	},
 	{
 		platform: 'node',
 		packages: 'external',
-		external: ['mediabunny'],
+		external: ['mediabunny', '@mediabunny/prores'],
 	},
 );
 

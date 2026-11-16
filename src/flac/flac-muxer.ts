@@ -31,6 +31,7 @@ import { Bitstream } from '../../shared/bitstream';
 const FLAC_HEADER = /* #__PURE__ */ new Uint8Array([0x66, 0x4c, 0x61, 0x43]); // 'fLaC'
 const STREAMINFO_SIZE = 38;
 const STREAMINFO_BLOCK_SIZE = 34;
+const MAX_METADATA_BLOCK_SIZE = 2 ** 24 - 1;
 
 export class FlacMuxer extends Muxer {
 	private writer!: Writer;
@@ -54,19 +55,21 @@ export class FlacMuxer extends Muxer {
 	async start() {
 		const release = await this.mutex.acquire();
 
-		this.writer = await this.output._getRootWriter(!!this.format._options.appendOnly);
-		this.writer.write(FLAC_HEADER);
+		try {
+			this.writer = await this.output._getRootWriter(!!this.format._options.appendOnly);
+			this.writer.write(FLAC_HEADER);
 
-		// If the track already tells us what the stream looks like, we can pin the stream info down right now
-		const track = this.output.tracks[0];
-		assert(track?.isAudioTrack());
+			// If the track already tells us what the stream looks like, we can pin the stream info down right now
+			const track = this.output.tracks[0];
+			assert(track?.isAudioTrack());
 
-		if (track.metadata.decoderConfig) {
-			validateAudioChunkMetadata({ decoderConfig: track.metadata.decoderConfig }, track.source._codec);
-			this.applyDecoderConfig(track.metadata.decoderConfig);
+			if (track.metadata.decoderConfig) {
+				validateAudioChunkMetadata({ decoderConfig: track.metadata.decoderConfig }, track.source._codec);
+				this.applyDecoderConfig(track.metadata.decoderConfig);
+			}
+		} finally {
+			release();
 		}
-
-		release();
 	}
 
 	applyDecoderConfig(decoderConfig: AudioDecoderConfig) {
@@ -145,17 +148,8 @@ export class FlacMuxer extends Muxer {
 		contentBitstream.writeBits(20, sampleRate);
 		contentBitstream.writeBits(3, channels - 1);
 		contentBitstream.writeBits(5, bitsPerSample - 1);
-
-		// Bitstream operations are only safe until 32bit, breaks when using 36 bits
-		// Splitting up into writing 4 0 bits and then 32 bits is safe
-		// This is safe for audio up to (2 ** 32 / 44100 / 3600) -> 27 hours
-		// Not implementing support for more than 32 bits now
-		if (totalSamples >= 2 ** 32) {
-			throw new Error('This muxer only supports writing up to 2 ** 32 samples');
-		}
-
-		contentBitstream.writeBits(4, 0);
-		contentBitstream.writeBits(32, totalSamples);
+		// 0 means unknown, which is also what libFLAC writes when the count doesn't fit
+		contentBitstream.writeBits(36, totalSamples < 2 ** 36 ? totalSamples : 0);
 		this.writer.write(contentBitstream.bytes);
 		// The MD5 hash is calculated from decoded audio data, but we do not have access
 		// to it here. We are allowed to set 0:
@@ -178,11 +172,20 @@ export class FlacMuxer extends Muxer {
 		// 4 bytes: picture data length
 		// z bytes: picture data
 		// Total: 20 + x + y + z
+		const mimeTypeBytes = textEncoder.encode(picture.mimeType);
+		const descriptionBytes = textEncoder.encode(picture.description ?? '');
 		const headerSize
 			= 32
-				+ picture.mimeType.length
-				+ (picture.description?.length ?? 0)
+				+ mimeTypeBytes.length
+				+ descriptionBytes.length
 				+ picture.data.length;
+
+		if (headerSize > MAX_METADATA_BLOCK_SIZE) {
+			throw new Error(
+				`Picture is too big for FLAC: its metadata block would take ${headerSize} bytes, but FLAC metadata`
+				+ ` blocks can take at most ${MAX_METADATA_BLOCK_SIZE} bytes.`,
+			);
+		}
 
 		const header = new Uint8Array(headerSize);
 
@@ -193,14 +196,14 @@ export class FlacMuxer extends Muxer {
 			picture.kind === 'coverFront' ? 3 : picture.kind === 'coverBack' ? 4 : 0,
 		);
 		offset += 4;
-		dataView.setUint32(offset, picture.mimeType.length);
+		dataView.setUint32(offset, mimeTypeBytes.length);
 		offset += 4;
-		header.set(textEncoder.encode(picture.mimeType), 8);
-		offset += picture.mimeType.length;
-		dataView.setUint32(offset, picture.description?.length ?? 0);
+		header.set(mimeTypeBytes, offset);
+		offset += mimeTypeBytes.length;
+		dataView.setUint32(offset, descriptionBytes.length);
 		offset += 4;
-		header.set(textEncoder.encode(picture.description ?? ''), offset);
-		offset += picture.description?.length ?? 0;
+		header.set(descriptionBytes, offset);
+		offset += descriptionBytes.length;
 		offset += 4 + 4 + 4 + 4; // setting width, height, color depth, number of indexed colors to 0
 		dataView.setUint32(offset, picture.data.length);
 		offset += 4;
@@ -235,6 +238,13 @@ export class FlacMuxer extends Muxer {
 			this.output._metadataTags,
 			false,
 		);
+
+		if (vorbisComment.length > MAX_METADATA_BLOCK_SIZE) {
+			throw new Error(
+				`Metadata tags are too big for FLAC: their Vorbis comment block would take ${vorbisComment.length}`
+				+ ` bytes, but FLAC metadata blocks can take at most ${MAX_METADATA_BLOCK_SIZE} bytes.`,
+			);
+		}
 
 		const headerBitstream = new Bitstream(new Uint8Array(4));
 		headerBitstream.writeBits(1, 1); // Last metadata block -> true
@@ -360,6 +370,11 @@ export class FlacMuxer extends Muxer {
 				maximumBlockSize = 65535;
 				minimumFrameSize = 0;
 				maximumFrameSize = 0;
+			} else if (this.blockSizes.length === 1) {
+				// The only block is also the last one, so it's a fixed block size stream. Being the last block, it may
+				// be shorter than 16 samples, which STREAMINFO's block sizes must never go below
+				maximumBlockSize = Math.max(maximumBlockSize, 16);
+				minimumBlockSize = maximumBlockSize;
 			}
 
 			assert(this.channels !== null);

@@ -15,10 +15,13 @@ import {
 } from 'mediabunny';
 import { sendCommand, refWorker, unrefWorker } from './worker-client';
 import { assert } from './shared';
-import { DTS_CHANNEL_COUNTS, DTS_SAMPLE_RATES, dtsBitrateFits } from '../../../shared/dts-misc';
+import { clampDtsBitrate, DTS_CHANNEL_COUNTS, DTS_SAMPLE_RATES } from '../../../shared/dts-misc';
+
+// FFmpeg's DTS encoder doesn't report it, but the decoded audio comes out this many samples late
+const CODEC_DELAY = 512;
 
 class DtsEncoder extends CustomAudioEncoder {
-	private ctx = 0;
+	private ctx: number | null = null;
 	private encoderFrameSize = 0;
 	private sampleRate = 0;
 	private numberOfChannels = 0;
@@ -28,13 +31,13 @@ class DtsEncoder extends CustomAudioEncoder {
 	private pendingBuffer = new Float32Array(2 ** 16);
 	private pendingFrames = 0;
 	private nextSampleTimestampInSamples: number | null = null;
+	private inFlightEncode: Promise<void> | null = null;
 
 	static override supports(codec: AudioCodec, config: AudioEncoderConfig): boolean {
 		return codec === 'dts'
 			&& DTS_CHANNEL_COUNTS.includes(config.numberOfChannels)
 			&& DTS_SAMPLE_RATES.includes(config.sampleRate)
-			&& config.bitrate !== undefined
-			&& dtsBitrateFits(config.bitrate, config.sampleRate, config.numberOfChannels);
+			&& config.bitrate !== undefined;
 	}
 
 	async init() {
@@ -49,7 +52,7 @@ class DtsEncoder extends CustomAudioEncoder {
 			data: {
 				numberOfChannels: this.config.numberOfChannels,
 				sampleRate: this.config.sampleRate,
-				bitrate: this.config.bitrate,
+				bitrate: clampDtsBitrate(this.config.bitrate, this.config.sampleRate, this.config.numberOfChannels),
 			},
 		});
 
@@ -99,77 +102,88 @@ class DtsEncoder extends CustomAudioEncoder {
 		this.pendingBuffer.set(incomingData, this.pendingFrames * channels);
 		this.pendingFrames += incomingFrames;
 
-		while (this.pendingFrames >= this.encoderFrameSize) {
-			await this.encodeOneFrame();
+		// Shift the remainder to the front only once at the end, as doing it per frame is quadratic for big samples
+		let encodedFrames = 0;
+		while (this.pendingFrames - encodedFrames >= this.encoderFrameSize) {
+			await this.encodeOneFrame(encodedFrames);
+			encodedFrames += this.encoderFrameSize;
 		}
+
+		this.pendingBuffer.copyWithin(0, encodedFrames * channels, this.pendingFrames * channels);
+		this.pendingFrames -= encodedFrames;
 	}
 
 	async flush() {
-		// Pad remaining samples with silence to fill a full frame
-		if (this.pendingFrames > 0) {
+		// Pad with enough silence to push the remaining samples through the codec delay and to fill up the last frame
+		if (this.nextSampleTimestampInSamples !== null) {
 			const channels = this.numberOfChannels;
 			const frameSize = this.encoderFrameSize;
-			const usedSamples = this.pendingFrames * channels;
-			const frameSamples = frameSize * channels;
+			const paddedFrames = Math.ceil((this.pendingFrames + CODEC_DELAY) / frameSize) * frameSize;
 
-			this.pendingBuffer.fill(0, usedSamples, frameSamples);
-			this.pendingFrames = frameSize;
+			this.pendingBuffer.fill(0, this.pendingFrames * channels, paddedFrames * channels);
 
-			await this.encodeOneFrame();
+			for (let startFrame = 0; startFrame < paddedFrames; startFrame += frameSize) {
+				await this.encodeOneFrame(startFrame);
+			}
 		}
 
-		await sendCommand({ type: 'flush-encoder', data: { ctx: this.ctx } });
+		// FFmpeg's DTS encoder doesn't hold back any frames, so there's nothing to flush out of it
+		await this.inFlightEncode;
+		this.inFlightEncode = null;
 
 		this.resetInternalState();
 	}
 
 	close() {
 		// Close shouldn't throw
-		sendCommand({ type: 'close-encoder', data: { ctx: this.ctx } }).catch(() => {});
+		if (this.ctx !== null) {
+			sendCommand({ type: 'close-encoder', data: { ctx: this.ctx } }).catch(() => {});
+		}
+
 		void unrefWorker();
 	}
 
-	private async encodeOneFrame() {
+	private async encodeOneFrame(startFrame: number) {
+		assert(this.ctx !== null);
 		assert(this.nextSampleTimestampInSamples !== null);
 
 		const channels = this.numberOfChannels;
 		const frameSize = this.encoderFrameSize;
-		const frameSamples = frameSize * channels;
-
-		const frameData = this.pendingBuffer.slice(0, frameSamples);
-
-		// Shift remaining using copyWithin
-		this.pendingFrames -= frameSize;
-		if (this.pendingFrames > 0) {
-			this.pendingBuffer.copyWithin(0, frameSamples, frameSamples + this.pendingFrames * channels);
-		}
+		const frameData = this.pendingBuffer.slice(startFrame * channels, (startFrame + frameSize) * channels);
 
 		const audioData = frameData.buffer;
-		const result = await sendCommand({
+		const encode = sendCommand({
 			type: 'encode',
 			data: {
 				ctx: this.ctx,
 				audioData,
-				timestamp: this.nextSampleTimestampInSamples,
+				// Shifted back by the codec delay so that the decoded audio lines up with the input
+				timestamp: this.nextSampleTimestampInSamples - CODEC_DELAY,
 			},
-		}, [audioData]);
+		}, [audioData]).then((result) => {
+			// We always get exactly one packet because we encode the correct frame size
+			const packet = new EncodedPacket(
+				new Uint8Array(result.encodedData),
+				'key',
+				result.pts / this.sampleRate,
+				result.duration / this.sampleRate,
+			);
+
+			this.onPacket(
+				packet,
+				this.chunkMetadata,
+			);
+
+			this.chunkMetadata = {};
+		});
+		encode.catch(() => {}); // Surfaces through whoever awaits it next
 
 		this.nextSampleTimestampInSamples += frameSize;
 
-		// We always get exactly one packet because we encode the correct frame size
-		const packet = new EncodedPacket(
-			new Uint8Array(result.encodedData),
-			'key',
-			result.pts / this.sampleRate,
-			result.duration / this.sampleRate,
-		);
-
-		this.onPacket(
-			packet,
-			this.chunkMetadata,
-		);
-
-		this.chunkMetadata = {};
+		// Keep one frame in flight, so the worker already has the next frame by the time it's done with the current one
+		const previousEncode = this.inFlightEncode;
+		this.inFlightEncode = encode;
+		await previousEncode;
 	}
 }
 

@@ -24,7 +24,7 @@ let getEncodeInputPtr: (ctx: number, size: number) => number;
 let sendFrameFn: (ctx: number, pts: bigint) => number;
 let receivePacketFn: (ctx: number) => number;
 let flushEncoderStartFn: (ctx: number) => void;
-let resetEncoderFn: (ctx: number) => void;
+let resetEncoderFn: (ctx: number) => number;
 let getEncodedData: (ctx: number) => number;
 let getEncodedPts: (ctx: number) => bigint;
 let getEncodedDuration: (ctx: number) => number;
@@ -46,7 +46,7 @@ const ensureModule = async () => {
 		sendFrameFn = module.cwrap('send_frame', 'number', ['number', 'number']) as unknown as typeof sendFrameFn;
 		receivePacketFn = module.cwrap('receive_packet', 'number', ['number']);
 		flushEncoderStartFn = module.cwrap('flush_encoder_start', null, ['number']);
-		resetEncoderFn = module.cwrap('reset_encoder', null, ['number']);
+		resetEncoderFn = module.cwrap('reset_encoder', 'number', ['number']);
 		getEncodedData = module.cwrap('get_encoded_data', 'number', ['number']);
 		getEncodedPts = module.cwrap('get_encoded_pts', 'number', ['number']) as unknown as typeof getEncodedPts;
 		getEncodedDuration = module.cwrap('get_encoded_duration', 'number', ['number']);
@@ -143,7 +143,9 @@ const onMessage = (data: { id: number; command: WorkerCommand }) => {
 					for (const p of packets) {
 						transferables.push(p.encodedData);
 					}
-					resetEncoderFn(command.data.ctx);
+					if (resetEncoderFn(command.data.ctx) < 0) {
+						throw new Error('Failed to reset AAC encoder.');
+					}
 					result = { type: command.type, packets };
 				}; break;
 			}

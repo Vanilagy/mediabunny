@@ -34,14 +34,16 @@ export class AdtsMuxer extends Muxer {
 	async start() {
 		const release = await this.mutex.acquire();
 
-		this.writer = await this.output._getRootWriter(true);
+		try {
+			this.writer = await this.output._getRootWriter(true);
 
-		if (!metadataTagsAreEmpty(this.output._metadataTags)) {
-			const id3Writer = new Id3V2Writer(this.writer);
-			id3Writer.writeId3V2Tag(this.output._metadataTags);
+			if (!metadataTagsAreEmpty(this.output._metadataTags)) {
+				const id3Writer = new Id3V2Writer(this.writer);
+				id3Writer.writeId3V2Tag(this.output._metadataTags);
+			}
+		} finally {
+			release();
 		}
-
-		release();
 	}
 
 	async getMimeType() {
@@ -68,15 +70,15 @@ export class AdtsMuxer extends Muxer {
 
 				const description = meta?.decoderConfig?.description;
 
-				// Follows from the Mediabunny Codec Registry:
-				this.inputIsAdts = !description;
-
-				if (!this.inputIsAdts) {
-					const config = parseAacAudioSpecificConfig(toUint8Array(description!));
+				if (description) {
+					const config = parseAacAudioSpecificConfig(toUint8Array(description));
 					const template = buildAdtsHeaderTemplate(config);
 					this.header = template.header;
 					this.headerBitstream = template.bitstream;
 				}
+
+				// Follows from the Mediabunny Codec Registry:
+				this.inputIsAdts = !description;
 			}
 
 			if (this.inputIsAdts) {

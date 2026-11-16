@@ -45,6 +45,7 @@ The following fully qualified codec strings are recognized:
 - `'mp4a.40.5'` — MPEG-4 HE-AAC v1 (AAC-LC + SBR)
 - `'mp4a.40.05'` — MPEG-4 HE-AAC v1 (leading zero for Aud-OTI compatibility)
 - `'mp4a.40.29'` — MPEG-4 HE-AAC v2 (AAC-LC + SBR + PS)
+- `'mp4a.40.42'` - Extended HE-AAC (xHE-AAC, MPEG-D USAC + MPEG-D DRC)
 - `'mp4a.67'` — MPEG-2 AAC-LC
 
 ## `AudioDecoderConfig` description

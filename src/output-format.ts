@@ -24,7 +24,7 @@ import { IsobmffMuxer } from './isobmff/isobmff-muxer';
 import { MatroskaMuxer } from './matroska/matroska-muxer';
 import { MediaSource } from './media-source';
 import { Mp3Muxer } from './mp3/mp3-muxer';
-import { Muxer } from './muxer';
+import { Muxer, NullMuxer } from './muxer';
 import { OggMuxer } from './ogg/ogg-muxer';
 import { Output, OutputTrack, TrackType } from './output';
 import { MpegTsMuxer } from './mpeg-ts/mpeg-ts-muxer';
@@ -137,6 +137,11 @@ export abstract class OutputFormat {
 	/** @internal */
 	_isFragmentedIsobmff() {
 		return false;
+	}
+
+	/** @internal */
+	_withoutXingHeader(): OutputFormat {
+		return this;
 	}
 }
 
@@ -554,7 +559,7 @@ export class MkvOutputFormat extends OutputFormat {
 			throw new TypeError('options.onEbmlHeader, when provided, must be a function.');
 		}
 		if (options.onSegmentHeader !== undefined && typeof options.onSegmentHeader !== 'function') {
-			throw new TypeError('options.onHeader, when provided, must be a function.');
+			throw new TypeError('options.onSegmentHeader, when provided, must be a function.');
 		}
 		if (options.onCluster !== undefined && typeof options.onCluster !== 'function') {
 			throw new TypeError('options.onCluster, when provided, must be a function.');
@@ -759,6 +764,14 @@ export class Mp3OutputFormat extends OutputFormat {
 	get negativeTimestampSupport() {
 		return null;
 	}
+
+	/** @internal */
+	override _withoutXingHeader() {
+		return new Mp3OutputFormat({
+			...this._options,
+			xingHeader: false,
+		});
+	}
 }
 
 /**
@@ -767,6 +780,12 @@ export class Mp3OutputFormat extends OutputFormat {
  * @public
  */
 export type WavOutputFormatOptions = {
+	/**
+	 * Configures the output to only append new data at the end, useful for live-streaming the file as it's being
+	 * created. When enabled, the header won't state the file's actual size.
+	 */
+	appendOnly?: boolean;
+
 	/**
 	 * When enabled, an RF64 file will be written, allowing for file sizes to exceed 4 GiB, which is otherwise not
 	 * possible for regular WAVE files.
@@ -785,7 +804,7 @@ export type WavOutputFormatOptions = {
 
 	/**
 	 * Will be called once the file header is written. The header consists of the RIFF header, the format chunk,
-	 * metadata chunks, and the start of the data chunk (with a placeholder size of 0).
+	 * metadata chunks, and the start of the data chunk (with placeholder sizes).
 	 */
 	onHeader?: (data: Uint8Array, position: number) => unknown;
 };
@@ -803,6 +822,9 @@ export class WavOutputFormat extends OutputFormat {
 	constructor(options: WavOutputFormatOptions = {}) {
 		if (!options || typeof options !== 'object') {
 			throw new TypeError('options must be an object.');
+		}
+		if (options.appendOnly !== undefined && typeof options.appendOnly !== 'boolean') {
+			throw new TypeError('options.appendOnly, when provided, must be a boolean.');
 		}
 		if (options.large !== undefined && typeof options.large !== 'boolean') {
 			throw new TypeError('options.large, when provided, must be a boolean.');
@@ -962,7 +984,7 @@ export class OggOutputFormat extends OutputFormat {
 	}
 
 	get negativeTimestampSupport() {
-		return 'none' as const;
+		return 'prefer-non-negative' as const;
 	}
 }
 
@@ -1086,6 +1108,9 @@ export class FlacOutputFormat extends OutputFormat {
 		}
 		if (options.appendOnly !== undefined && typeof options.appendOnly !== 'boolean') {
 			throw new TypeError('options.appendOnly, when provided, must be a boolean.');
+		}
+		if (options.onFrame !== undefined && typeof options.onFrame !== 'function') {
+			throw new TypeError('options.onFrame, when provided, must be a function.');
 		}
 
 		super();
@@ -1293,6 +1318,8 @@ export type HlsOutputFormatOptions = {
 	 * are provided with a longer period than the target duration. Therefore, make sure to encode a key frame at least
 	 * every `targetDuration` seconds to guarantee segment length, controllable via
 	 * {@link VideoEncodingConfig.keyFrameInterval}.
+	 *
+	 * Outside of live mode, this can be set to `Infinity` to give each playlist only a single segment.
 	 */
 	targetDuration?: number;
 	/**
@@ -1413,7 +1440,7 @@ export class HlsOutputFormat extends OutputFormat {
 		}
 		if (
 			options.targetDuration !== undefined
-			&& (typeof options.targetDuration !== 'number' || options.targetDuration <= 0)
+			&& (!isNumber(options.targetDuration) || options.targetDuration <= 0)
 		) {
 			throw new TypeError('options.targetDuration, when provided, must be a positive number.');
 		}
@@ -1423,9 +1450,13 @@ export class HlsOutputFormat extends OutputFormat {
 		if (options.live !== undefined && typeof options.live !== 'boolean') {
 			throw new TypeError('options.live, when provided, must be a boolean.');
 		}
+		if (options.live && options.targetDuration === Infinity) {
+			// Live playlists state the target duration before any segment exists
+			throw new TypeError('options.targetDuration must be finite in live mode.');
+		}
 		if (
 			options.maxLiveSegmentCount !== undefined
-			&& (typeof options.maxLiveSegmentCount !== 'number' || options.maxLiveSegmentCount < 1
+			&& (!isNumber(options.maxLiveSegmentCount) || options.maxLiveSegmentCount < 1
 				|| (Number.isFinite(options.maxLiveSegmentCount) && !Number.isInteger(options.maxLiveSegmentCount)))
 		) {
 			throw new TypeError('options.maxLiveSegmentCount, when provided, must be a positive integer or Infinity.');
@@ -1486,6 +1517,9 @@ export class HlsOutputFormat extends OutputFormat {
 		for (const codec of AUDIO_CODECS_WITH_DELTA_PACKETS) {
 			uniqueCodecs.delete(codec); // Only key-packet-only audio codecs are allowed
 		}
+		for (const codec of SUBTITLE_CODECS) {
+			uniqueCodecs.delete(codec); // Subtitles are currently disabled
+		}
 
 		return [...uniqueCodecs];
 	}
@@ -1536,8 +1570,58 @@ export class HlsOutputFormat extends OutputFormat {
 	}
 
 	/** @internal */
-	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	override _codecUnsupportedHint(codec: MediaCodec): string {
+		if ((AUDIO_CODECS_WITH_DELTA_PACKETS as readonly MediaCodec[]).includes(codec)) {
+			return '';
+		}
+
 		return ` Using different segment formats may grant support for this codec.`;
+	}
+}
+
+export class NullOutputFormat extends OutputFormat {
+	_createMuxer(output: Output) {
+		return new NullMuxer(output);
+	}
+
+	get _name() {
+		return 'Null';
+	}
+
+	getSupportedTrackCounts(): TrackCountLimits {
+		return {
+			video: { min: 0, max: Infinity },
+			audio: { min: 0, max: Infinity },
+			subtitle: { min: 0, max: Infinity },
+			total: { min: 0, max: Infinity },
+		};
+	}
+
+	get fileExtension() {
+		return '';
+	}
+
+	get mimeType() {
+		return 'application/x-black-hole';
+	}
+
+	getSupportedCodecs(): MediaCodec[] {
+		return [
+			...VIDEO_CODECS,
+			...AUDIO_CODECS,
+			...SUBTITLE_CODECS,
+		];
+	}
+
+	get supportsVideoTransformationMetadata() {
+		return true;
+	}
+
+	get supportsTimestampedMediaData() {
+		return true;
+	}
+
+	get negativeTimestampSupport() {
+		return 'full' as const;
 	}
 }

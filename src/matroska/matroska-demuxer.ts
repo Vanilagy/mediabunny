@@ -8,6 +8,7 @@
 
 import { TrackType } from '../output';
 import {
+	determineAudioPacketType,
 	extractAv1CodecInfoFromPacket,
 	extractDtsFourCcFromPacket,
 	extractAvcDecoderConfigurationRecord,
@@ -62,6 +63,7 @@ import {
 	toDataView,
 	TRANSFER_CHARACTERISTICS_MAP_INVERSE,
 	UNDETERMINED_LANGUAGE,
+	parseIsoSuffix,
 } from '../misc';
 import { EncodedPacket, EncodedPacketSideData, PLACEHOLDER_DATA } from '../packet';
 import {
@@ -69,13 +71,13 @@ import {
 	CODEC_STRING_MAP,
 	EBMLId,
 	LEVEL_0_AND_1_EBML_IDS,
+	LEVEL_0_EBML_IDS,
 	LEVEL_1_EBML_IDS,
 	MAX_HEADER_SIZE,
 	MIN_HEADER_SIZE,
 	readAsciiString,
 	readUnicodeString,
 	readElementHeader,
-	readElementId,
 	readFloat,
 	readUnsignedInt,
 	readVarInt,
@@ -86,6 +88,7 @@ import {
 	EBML_DATE_EPOCH,
 } from './ebml';
 import { buildMatroskaMimeType } from './matroska-misc';
+import { buildAacAudioSpecificConfig } from '../../shared/aac-misc';
 import { FileSlice, readBytes, Reader, readI16Be, readU8 } from '../reader';
 
 type Segment = {
@@ -236,7 +239,8 @@ type InternalTrack = {
 			height: number;
 			displayWidth: number | null;
 			displayHeight: number | null;
-			displayUnit: number | null;
+			displayUnit: number;
+			stereoMode: number;
 			squarePixelWidth: number;
 			squarePixelHeight: number;
 			horizontalScale: number;
@@ -252,6 +256,7 @@ type InternalTrack = {
 			type: 'audio';
 			numberOfChannels: number;
 			sampleRate: number;
+			outputSampleRate: number | null;
 			bitDepth: number;
 			codec: AudioCodec | null;
 			codecDescription: Uint8Array | null;
@@ -288,6 +293,13 @@ export class MatroskaDemuxer extends Demuxer {
 
 	currentCueTime: number | null = null;
 	currentDecodingInstruction: DecodingInstruction | null = null;
+	currentProjection: {
+		type: number;
+		yaw: number;
+		pitch: number;
+		roll: number;
+	} | null = null;
+
 	currentTagTargetIsMovie: boolean = true;
 	currentSimpleTagName: string | null = null;
 	currentAttachedFile: {
@@ -706,8 +718,8 @@ export class MatroskaDemuxer extends Demuxer {
 			size = nextElementPos.pos - dataStartPos;
 		}
 
-		// Load the entire cluster
-		let dataSlice = this.reader.requestSlice(dataStartPos, size);
+		// Load the entire cluster, or whatever's left of it in case the file got cut off
+		let dataSlice = this.reader.requestSliceRange(dataStartPos, 0, size);
 		if (isThenable(dataSlice)) dataSlice = await dataSlice;
 
 		const cluster: Cluster = {
@@ -755,10 +767,6 @@ export class MatroskaDemuxer extends Demuxer {
 				const currentEntry = trackData.presentationTimestamps[i]!;
 				const currentBlock = trackData.blocks[currentEntry.blockIndex]!;
 
-				if (trackData.firstKeyFrameTimestamp === null && currentBlock.isKeyFrame) {
-					trackData.firstKeyFrameTimestamp = currentBlock.timestamp;
-				}
-
 				if (i < trackData.presentationTimestamps.length - 1) {
 					// Update block durations based on presentation order
 					const nextEntry = trackData.presentationTimestamps[i + 1]!;
@@ -766,7 +774,7 @@ export class MatroskaDemuxer extends Demuxer {
 				} else if (currentBlock.duration === 0) {
 					if (track.defaultDuration != null) {
 						if (currentBlock.lacing === BlockLacing.None) {
-							currentBlock.duration = track.defaultDuration;
+							currentBlock.duration = Math.round(track.defaultDuration);
 						} else {
 							// Handled by the lace resolution code
 						}
@@ -784,6 +792,25 @@ export class MatroskaDemuxer extends Demuxer {
 				trackData.presentationTimestamps = trackData.blocks
 					.map((block, i) => ({ timestamp: block.timestamp, blockIndex: i }))
 					.sort((a, b) => a.timestamp - b.timestamp);
+			}
+
+			if (track.info?.type === 'audio' && track.info.codec) {
+				// The container's key flags can't be trusted for audio: some files don't mark their packets as key
+				// packets (I'm looking at you, Firefox, https://github.com/Vanilagy/mediabunny/issues/192), and laced
+				// frames all inherit their block's flag. So the frames decide themselves (unless they still need to
+				// be decoded).
+				const hasDeltaPackets = AUDIO_CODECS_WITH_DELTA_PACKETS.includes(track.info.codec);
+				for (const block of trackData.blocks) {
+					if (block.decoded || !hasDeltaPackets) {
+						block.isKeyFrame = determineAudioPacketType(track.info.codec, block.data) === 'key';
+					}
+				}
+			}
+
+			const firstKeyEntry = trackData.presentationTimestamps
+				.find(x => trackData.blocks[x.blockIndex]!.isKeyFrame);
+			if (firstKeyEntry) {
+				trackData.firstKeyFrameTimestamp = firstKeyEntry.timestamp;
 			}
 
 			const firstBlock = trackData.blocks[trackData.presentationTimestamps[0]!.blockIndex]!;
@@ -901,6 +928,12 @@ export class MatroskaDemuxer extends Demuxer {
 				}; break;
 
 				case BlockLacing.Ebml: {
+					if (frameCount === 1) {
+						// The only frame is also the last one, whose size is never coded
+						frameSizes.push(slice.length - slice.bufferPos);
+						break;
+					}
+
 					// EBML lacing: first size absolute, subsequent ones are coded as signed differences from the last
 					const firstResult = readVarInt(slice);
 					if (firstResult === null) {
@@ -942,20 +975,20 @@ export class MatroskaDemuxer extends Demuxer {
 				throw new Error('Invalid block lacing: frame sizes don\'t match the block.');
 			}
 
-			const blockDuration = originalBlock.duration || frameCount * (track.defaultDuration ?? 0);
+			const blockDuration = originalBlock.duration || Math.round(frameCount * (track.defaultDuration ?? 0));
 
 			// Now, let's replace the block with one block per frame
 			for (let i = 0; i < frameCount; i++) {
 				const frameSize = frameSizes[i]!;
 				const frameData = readBytes(slice, frameSize);
 
-				// Distribute timestamps evenly across the block duration
-				const frameTimestamp = originalBlock.timestamp + (blockDuration * i / frameCount);
-				const frameDuration = blockDuration / frameCount;
+				// Distribute timestamps evenly across the block duration while staying on the tick grid
+				const frameStart = Math.floor(blockDuration * i / frameCount);
+				const frameEnd = Math.floor(blockDuration * (i + 1) / frameCount);
 
 				expandedBlocks.push({
-					timestamp: frameTimestamp,
-					duration: frameDuration,
+					timestamp: originalBlock.timestamp + frameStart,
+					duration: frameEnd - frameStart,
 					isKeyFrame: originalBlock.isKeyFrame,
 					data: frameData,
 					lacing: BlockLacing.None,
@@ -1103,7 +1136,8 @@ export class MatroskaDemuxer extends Demuxer {
 			case EBMLId.TimestampScale: {
 				if (!this.currentSegment) break;
 
-				const timestampScale = readUnsignedInt(slice, size);
+				// Empty elements take their default value
+				const timestampScale = size === 0 ? 1e6 : readUnsignedInt(slice, size);
 				if (timestampScale === 0) {
 					throw new Error('Invalid TimestampScale element: must not be 0.');
 				}
@@ -1125,6 +1159,12 @@ export class MatroskaDemuxer extends Demuxer {
 				this.currentSegment.metadataTags.creationTime = new Date(
 					EBML_DATE_EPOCH + Number(nanoseconds / 1_000_000n),
 				);
+			}; break;
+
+			case EBMLId.Title: {
+				if (!this.currentSegment) break;
+
+				this.currentSegment.metadataTags.title ??= readUnicodeString(slice, size);
 			}; break;
 
 			case EBMLId.TrackEntry: {
@@ -1197,12 +1237,31 @@ export class MatroskaDemuxer extends Demuxer {
 						this.currentTrack.info.squarePixelWidth = this.currentTrack.info.width;
 						this.currentTrack.info.squarePixelHeight = this.currentTrack.info.height;
 
+						let displayWidth = this.currentTrack.info.displayWidth;
+						let displayHeight = this.currentTrack.info.displayHeight;
+
+						// With two views packed into one frame, the display size is that of a single view instead.
+						// See https://www.matroska.org/technical/notes.html#multi-planar-and-3d-videos
+						const stereoMode = this.currentTrack.info.stereoMode;
+						if (displayWidth !== null && [1, 8, 9, 11].includes(stereoMode)) {
+							displayWidth *= 2; // Side by side or column interleaved
+						}
+						if (displayHeight !== null && [2, 3, 6, 7].includes(stereoMode)) {
+							displayHeight *= 2; // Top-bottom or row interleaved
+						}
+
+						if (this.currentTrack.info.displayUnit === 0) {
+							displayWidth ??= this.currentTrack.info.width;
+							displayHeight ??= this.currentTrack.info.height;
+						}
+
 						if (
-							this.currentTrack.info.displayWidth !== null
-							&& this.currentTrack.info.displayHeight !== null
+							this.currentTrack.info.displayUnit !== 4 // "unknown"
+							&& displayWidth !== null
+							&& displayHeight !== null
 						) {
-							const num = this.currentTrack.info.displayWidth * this.currentTrack.info.height;
-							const den = this.currentTrack.info.displayHeight * this.currentTrack.info.width;
+							const num = displayWidth * this.currentTrack.info.height;
+							const den = displayHeight * this.currentTrack.info.width;
 
 							if (num > 0 && den > 0) {
 								if (num > den) {
@@ -1248,6 +1307,10 @@ export class MatroskaDemuxer extends Demuxer {
 						this.currentSegment.tracks.push(this.currentTrack);
 						this.currentSegment.idToTrack.set(this.currentTrack.id, this.currentTrack);
 					} else if (this.currentTrack.info.type === 'audio') {
+						if (this.currentTrack.info.outputSampleRate !== null) {
+							this.currentTrack.info.sampleRate = this.currentTrack.info.outputSampleRate;
+						}
+
 						if (codecIdWithoutSuffix === CODEC_STRING_MAP.aac) {
 							this.currentTrack.info.codec = 'aac';
 							this.currentTrack.info.aacCodecInfo = {
@@ -1255,6 +1318,30 @@ export class MatroskaDemuxer extends Demuxer {
 								objectType: null,
 							};
 							this.currentTrack.info.codecDescription = this.currentTrack.codecPrivate;
+
+							if (
+								!this.currentTrack.codecPrivate
+								&& this.currentTrack.codecId !== CODEC_STRING_MAP.aac
+							) {
+								// Legacy codec IDs like A_AAC/MPEG4/LC/SBR name the profile instead of a CodecPrivate
+								const profile = this.currentTrack.codecId.split('/')[2] ?? '';
+								const objectType = ['MAIN', 'LC', 'SSR', 'LTP'].indexOf(profile) + 1;
+								if (objectType === 0) {
+									throw new Error(`Unknown Matroska AAC codec ID '${this.currentTrack.codecId}'.`);
+								}
+
+								const usesSbr = this.currentTrack.codecId.endsWith('/SBR');
+								if (usesSbr && this.currentTrack.info.outputSampleRate === null) {
+									this.currentTrack.info.sampleRate *= 2;
+								}
+
+								this.currentTrack.info.codecDescription = buildAacAudioSpecificConfig({
+									objectType: usesSbr ? 5 : objectType,
+									outputSampleRate: this.currentTrack.info.sampleRate,
+									outputNumberOfChannels: this.currentTrack.info.numberOfChannels,
+									programConfigElement: null,
+								});
+							}
 						} else if (this.currentTrack.codecId === CODEC_STRING_MAP.mp3) {
 							this.currentTrack.info.codec = 'mp3';
 						} else if (codecIdWithoutSuffix === CODEC_STRING_MAP.opus) {
@@ -1338,7 +1425,8 @@ export class MatroskaDemuxer extends Demuxer {
 						height: -1,
 						displayWidth: null,
 						displayHeight: null,
-						displayUnit: null,
+						displayUnit: 0, // Pixels
+						stereoMode: 0, // Mono
 						squarePixelWidth: -1,
 						squarePixelHeight: -1,
 						horizontalScale: 1,
@@ -1355,6 +1443,7 @@ export class MatroskaDemuxer extends Demuxer {
 						type: 'audio',
 						numberOfChannels: 1, // Default value
 						sampleRate: 8000, // Default value
+						outputSampleRate: null,
 						bitDepth: -1,
 						codec: null,
 						codecDescription: null,
@@ -1367,7 +1456,7 @@ export class MatroskaDemuxer extends Demuxer {
 			case EBMLId.FlagEnabled: {
 				if (!this.currentTrack) break;
 
-				const enabled = readUnsignedInt(slice, size);
+				const enabled = size === 0 ? 1 : readUnsignedInt(slice, size);
 				if (!enabled) {
 					this.currentTrack = null;
 				}
@@ -1376,7 +1465,7 @@ export class MatroskaDemuxer extends Demuxer {
 			case EBMLId.FlagDefault: {
 				if (!this.currentTrack) break;
 
-				this.currentTrack.disposition.default = !!readUnsignedInt(slice, size);
+				this.currentTrack.disposition.default = size === 0 || !!readUnsignedInt(slice, size);
 			}; break;
 
 			case EBMLId.FlagForced: {
@@ -1444,7 +1533,7 @@ export class MatroskaDemuxer extends Demuxer {
 					break;
 				}
 
-				this.currentTrack.languageCode = readAsciiString(slice, size);
+				this.currentTrack.languageCode = size === 0 ? 'eng' : readAsciiString(slice, size);
 
 				if (!isIso639Dash2LanguageCode(this.currentTrack.languageCode)) {
 					this.currentTrack.languageCode = UNDETERMINED_LANGUAGE;
@@ -1506,6 +1595,12 @@ export class MatroskaDemuxer extends Demuxer {
 				this.currentTrack.info.displayUnit = readUnsignedInt(slice, size);
 			}; break;
 
+			case EBMLId.StereoMode: {
+				if (this.currentTrack?.info?.type !== 'video') break;
+
+				this.currentTrack.info.stereoMode = readUnsignedInt(slice, size);
+			}; break;
+
 			case EBMLId.AlphaMode: {
 				if (this.currentTrack?.info?.type !== 'video') break;
 
@@ -1521,7 +1616,7 @@ export class MatroskaDemuxer extends Demuxer {
 			case EBMLId.MatrixCoefficients: {
 				if (this.currentTrack?.info?.type !== 'video') break;
 
-				const matrixCoefficients = readUnsignedInt(slice, size);
+				const matrixCoefficients = size === 0 ? 2 : readUnsignedInt(slice, size);
 				const mapped = MATRIX_COEFFICIENTS_MAP_INVERSE[matrixCoefficients];
 				this.currentTrack.info.colorSpace.matrix = mapped as VideoColorSpaceInit['matrix'];
 			}; break;
@@ -1538,7 +1633,7 @@ export class MatroskaDemuxer extends Demuxer {
 			case EBMLId.TransferCharacteristics: {
 				if (this.currentTrack?.info?.type !== 'video') break;
 
-				const transferCharacteristics = readUnsignedInt(slice, size);
+				const transferCharacteristics = size === 0 ? 2 : readUnsignedInt(slice, size);
 				const mapped = TRANSFER_CHARACTERISTICS_MAP_INVERSE[transferCharacteristics];
 				this.currentTrack.info.colorSpace.transfer = mapped as VideoColorSpaceInit['transfer'];
 			}; break;
@@ -1546,7 +1641,7 @@ export class MatroskaDemuxer extends Demuxer {
 			case EBMLId.Primaries: {
 				if (this.currentTrack?.info?.type !== 'video') break;
 
-				const primaries = readUnsignedInt(slice, size);
+				const primaries = size === 0 ? 2 : readUnsignedInt(slice, size);
 				const mapped = COLOR_PRIMARIES_MAP_INVERSE[primaries];
 				this.currentTrack.info.colorSpace.primaries = mapped as VideoColorSpaceInit['primaries'];
 			}; break;
@@ -1554,48 +1649,63 @@ export class MatroskaDemuxer extends Demuxer {
 			case EBMLId.Projection: {
 				if (this.currentTrack?.info?.type !== 'video') break;
 
+				const info = this.currentTrack.info;
+				const projection = {
+					type: 0, // Rectangular
+					yaw: 0,
+					pitch: 0,
+					roll: 0,
+				};
+
+				this.currentProjection = projection;
 				this.readContiguousElements(slice.slice(dataStartPos, size));
-			}; break;
+				this.currentProjection = null;
 
-			// Yaw and pitch rotate the frame in 3D space about the vertical and horizontal axis respectively. When
-			// snapped to multiples of 90 degrees, that amounts to scaling each axis by the cosine, which models flips.
-			case EBMLId.ProjectionPoseYaw: {
-				if (this.currentTrack?.info?.type !== 'video') break;
+				if (projection.type !== 0) break;
 
-				const yaw = readFloat(slice, size);
+				// Yaw and pitch rotate the frame in 3D space about the vertical and horizontal axis respectively. When
+				// snapped to multiples of 90 degrees, that amounts to scaling each axis by the cosine, which models
+				// flips.
+				const angleToScale = (angle: number) => {
+					try {
+						return Math.round(Math.cos(normalizeRotation(angle) * DEG_TO_RAD));
+					} catch {
+						return 1; // It wasn't a valid rotation
+					}
+				};
+
+				info.horizontalScale = angleToScale(projection.yaw);
+				info.verticalScale = angleToScale(projection.pitch);
 
 				try {
-					const normalized = normalizeRotation(yaw);
-					this.currentTrack.info.horizontalScale = Math.round(Math.cos(normalized * DEG_TO_RAD));
+					info.rotation = normalizeRotation(-projection.roll); // Convert counter-clockwise to clockwise
 				} catch {
 					// It wasn't a valid rotation
 				}
+			}; break;
+
+			case EBMLId.ProjectionType: {
+				if (!this.currentProjection) break;
+
+				this.currentProjection.type = readUnsignedInt(slice, size);
+			}; break;
+
+			case EBMLId.ProjectionPoseYaw: {
+				if (!this.currentProjection) break;
+
+				this.currentProjection.yaw = readFloat(slice, size);
 			}; break;
 
 			case EBMLId.ProjectionPosePitch: {
-				if (this.currentTrack?.info?.type !== 'video') break;
+				if (!this.currentProjection) break;
 
-				const pitch = readFloat(slice, size);
-
-				try {
-					const normalized = normalizeRotation(pitch);
-					this.currentTrack.info.verticalScale = Math.round(Math.cos(normalized * DEG_TO_RAD));
-				} catch {
-					// It wasn't a valid rotation
-				}
+				this.currentProjection.pitch = readFloat(slice, size);
 			}; break;
 
 			case EBMLId.ProjectionPoseRoll: {
-				if (this.currentTrack?.info?.type !== 'video') break;
+				if (!this.currentProjection) break;
 
-				const rotation = readFloat(slice, size);
-				const flippedRotation = -rotation; // Convert counter-clockwise to clockwise
-
-				try {
-					this.currentTrack.info.rotation = normalizeRotation(flippedRotation);
-				} catch {
-					// It wasn't a valid rotation
-				}
+				this.currentProjection.roll = readFloat(slice, size);
 			}; break;
 
 			case EBMLId.Audio: {
@@ -1607,7 +1717,7 @@ export class MatroskaDemuxer extends Demuxer {
 			case EBMLId.SamplingFrequency: {
 				if (this.currentTrack?.info?.type !== 'audio') break;
 
-				const sampleRate = readFloat(slice, size);
+				const sampleRate = size === 0 ? 8000 : readFloat(slice, size);
 				if (!(sampleRate > 0) || !Number.isFinite(sampleRate)) {
 					throw new Error('Invalid SamplingFrequency element: must be a positive, finite number.');
 				}
@@ -1615,10 +1725,21 @@ export class MatroskaDemuxer extends Demuxer {
 				this.currentTrack.info.sampleRate = sampleRate;
 			}; break;
 
+			case EBMLId.OutputSamplingFrequency: {
+				if (this.currentTrack?.info?.type !== 'audio') break;
+
+				const outputSampleRate = readFloat(slice, size);
+				if (!(outputSampleRate > 0) || !Number.isFinite(outputSampleRate)) {
+					throw new Error('Invalid OutputSamplingFrequency element: must be a positive, finite number.');
+				}
+
+				this.currentTrack.info.outputSampleRate = outputSampleRate;
+			}; break;
+
 			case EBMLId.Channels: {
 				if (this.currentTrack?.info?.type !== 'audio') break;
 
-				const numberOfChannels = readUnsignedInt(slice, size);
+				const numberOfChannels = size === 0 ? 1 : readUnsignedInt(slice, size);
 				if (numberOfChannels === 0) {
 					throw new Error('Invalid Channels element: must not be 0.');
 				}
@@ -1692,19 +1813,7 @@ export class MatroskaDemuxer extends Demuxer {
 				const flags = readU8(blockSlice);
 				const lacing = (flags >> 1) & 0x3 as BlockLacing; // If the block is laced, we'll expand it later
 
-				let isKeyFrame = !!(flags & 0x80);
-				if (
-					trackData.track.info?.type === 'audio'
-					&& trackData.track.info.codec
-					&& !AUDIO_CODECS_WITH_DELTA_PACKETS.includes(trackData.track.info.codec)
-				) {
-					// Some files don't mark their audio packets as key packets (I'm looking at you, Firefox). But, we
-					// can fix this in most cases: if we recognize the codec of the track and it has no delta packets,
-					// then we know every packet is necessarily a key packet, no matter what the container says.
-					// https://github.com/Vanilagy/mediabunny/issues/192
-					isKeyFrame = true;
-				}
-
+				const isKeyFrame = !!(flags & 0x80);
 				const blockData = readBytes(blockSlice, blockSlice.remainingLength);
 				const hasDecodingInstructions = trackData.track.decodingInstructions.length > 0;
 
@@ -1792,7 +1901,7 @@ export class MatroskaDemuxer extends Demuxer {
 			case EBMLId.BlockAddID: {
 				if (!this.currentBlockAdditional) break;
 
-				this.currentBlockAdditional.addId = readUnsignedInt(slice, size);
+				this.currentBlockAdditional.addId = size === 0 ? 1 : readUnsignedInt(slice, size);
 			}; break;
 
 			case EBMLId.BlockDuration: {
@@ -1819,7 +1928,7 @@ export class MatroskaDemuxer extends Demuxer {
 			}; break;
 
 			case EBMLId.TargetTypeValue: {
-				const targetTypeValue = readUnsignedInt(slice, size);
+				const targetTypeValue = size === 0 ? 50 : readUnsignedInt(slice, size);
 				if (targetTypeValue !== 50) {
 					this.currentTagTargetIsMovie = false;
 				}
@@ -1980,7 +2089,9 @@ export class MatroskaDemuxer extends Demuxer {
 			case EBMLId.ContentEncodingScope: {
 				if (!this.currentDecodingInstruction) break;
 
-				this.currentDecodingInstruction.scope = readUnsignedInt(slice, size);
+				this.currentDecodingInstruction.scope = size === 0
+					? ContentEncodingScope.Block
+					: readUnsignedInt(slice, size);
 			}; break;
 
 			case EBMLId.ContentCompression: {
@@ -2107,8 +2218,8 @@ export class MatroskaDemuxer extends Demuxer {
 				}; break;
 
 				case 'date': {
-					const date = new Date(value);
-					if (!Number.isNaN(date.getTime())) {
+					const date = parseIsoSuffix(value);
+					if (date) {
 						metadataTags.date ??= date;
 					}
 				}; break;
@@ -2168,15 +2279,11 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 	abstract getType(): TrackType;
 	abstract getDecoderConfig(): Promise<VideoDecoderConfig | AudioDecoderConfig | null>;
 
-	getId() {
-		return this.internalTrack.id;
-	}
-
 	getNumber() {
 		const demuxer = this.internalTrack.demuxer;
 		const trackType = this.internalTrack.trackBacking!.getType();
-
 		let number = 0;
+
 		for (const segment of demuxer.segments) {
 			for (const track of segment.tracks) {
 				if (track.trackBacking!.getType() === trackType) {
@@ -2184,12 +2291,12 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 				}
 
 				if (track === this.internalTrack) {
-					break;
+					return number;
 				}
 			}
 		}
 
-		return number;
+		assert(false);
 	}
 
 	getCodec(): MediaCodec | null {
@@ -2593,6 +2700,14 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 				const elementStartPos = currentPos;
 				const elementHeader = readElementHeader(slice);
 
+				if (segment.elementEndPos === null && elementHeader && LEVEL_0_EBML_IDS.includes(elementHeader.id)) {
+					// A new file or segment begins here, so we now know where this segment ends. The new segment is
+					// just ignored, since we're likely in a livestreamed file and thus only care about the first
+					// segment.
+					segment.elementEndPos = elementStartPos;
+					break;
+				}
+
 				if (
 					!elementHeader
 					|| (!LEVEL_1_EBML_IDS.includes(elementHeader.id) && elementHeader.id !== EBMLId.Void)
@@ -2652,24 +2767,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 					size = nextElementPos.pos - dataStartPos;
 				}
 
-				const endPos = dataStartPos + size;
-				if (segment.elementEndPos === null) {
-					// Check the next element. If it's a new segment, we know this segment ends here. The new
-					// segment is just ignored, since we're likely in a livestreamed file and thus only care about
-					// the first segment.
-
-					let slice = demuxer.reader.requestSliceRange(endPos, MIN_HEADER_SIZE, MAX_HEADER_SIZE);
-					if (isThenable(slice)) slice = await slice;
-					if (!slice) break;
-
-					const elementId = readElementId(slice);
-					if (elementId === EBMLId.Segment) {
-						segment.elementEndPos = endPos; // We now know the segment's size
-						break;
-					}
-				}
-
-				currentPos = endPos;
+				currentPos = dataStartPos + size;
 			}
 
 			if (lookupEntryPosition === null || (bestCluster && bestCluster.elementStartPos >= lookupEntryPosition)) {
@@ -2768,10 +2866,18 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 		}
 
 		return this.decoderConfigPromise ??= (async (): Promise<VideoDecoderConfig> => {
+			const codecPrivate = this.internalTrack.codecPrivate;
+
+			// CodecPrivate holds 4 bytes like those of the AV1CodecConfigurationRecord, optionally followed by OBUs
+			// starting with the sequence header. Only that one has all the codec info, including the color.
+			let av1CodecInfo = this.internalTrack.info.codec === 'av1' && codecPrivate
+				? extractAv1CodecInfoFromPacket(codecPrivate.subarray(4))
+				: null;
+
 			let firstPacket: EncodedPacket | null = null;
 			const needsPacketForAdditionalInfo
 				= this.internalTrack.info.codec === 'vp9'
-					|| this.internalTrack.info.codec === 'av1'
+					|| (this.internalTrack.info.codec === 'av1' && !av1CodecInfo)
 					|| this.internalTrack.info.codec === 'prores'
 					// Packets are in Annex B format:
 					|| (this.internalTrack.info.codec === 'avc' && !this.internalTrack.info.codecDescription)
@@ -2780,6 +2886,10 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 
 			if (needsPacketForAdditionalInfo) {
 				firstPacket = await this.getFirstPacket({});
+			}
+
+			if (this.internalTrack.info.codec === 'av1' && firstPacket) {
+				av1CodecInfo = extractAv1CodecInfoFromPacket(firstPacket.data);
 			}
 
 			const codecInfo = {
@@ -2792,15 +2902,14 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 				avcCodecInfo: this.internalTrack.info.codec === 'avc' && firstPacket
 					? extractAvcDecoderConfigurationRecord(firstPacket.data)
 					: null,
+				hevcType: 'hev1' as const, // Matroska doesn't promise that parameter sets stay out of the blocks
 				hevcCodecInfo: this.internalTrack.info.codec === 'hevc' && firstPacket
 					? extractHevcDecoderConfigurationRecord(firstPacket.data)
 					: null,
 				vp9CodecInfo: this.internalTrack.info.codec === 'vp9' && firstPacket
 					? extractVp9CodecInfoFromPacket(firstPacket.data)
 					: null,
-				av1CodecInfo: this.internalTrack.info.codec === 'av1' && firstPacket
-					? extractAv1CodecInfoFromPacket(firstPacket.data)
-					: null,
+				av1CodecInfo,
 				proresCodecInfo: this.internalTrack.info.codec === 'prores' && firstPacket
 					? extractProresCodecInfoFromPacket(firstPacket.data)
 					: null,

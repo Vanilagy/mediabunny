@@ -12,10 +12,12 @@ import { EncodedPacketSink } from '../../src/media-sink.js';
 import { EncodedPacket } from '../../src/packet.js';
 import { assert, uint8ArraysAreEqual } from '../../src/misc.js';
 import { AudioSampleSink } from '../../src/media-sink.js';
-import { AudioSampleSource } from '../../src/media-source.js';
+import { AudioSampleSource, EncodedAudioPacketSource } from '../../src/media-source.js';
 import { AudioSample } from '../../src/sample.js';
 import { canEncode, Quality } from '../../src/encode.js';
+import { CustomAudioEncoder, customAudioEncoders } from '../../src/custom-coder.js';
 import { registerDtsDecoder, registerDtsEncoder } from '@mediabunny/dts';
+import { buildDtsSpecificBox, parseDtsFrame } from '../../src/codec-data.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
@@ -248,7 +250,8 @@ test('Encode with huge timestamps', async () => {
 	const firstPacket = await packetSink.getFirstPacket();
 	assert(firstPacket);
 
-	expect(firstPacket.timestamp).toBe(timestamp);
+	const codecDelay = 512 / 48000;
+	expect(firstPacket.timestamp).toBe(timestamp - codecDelay);
 
 	const sampleSink = new AudioSampleSink(track);
 	const firstSample = (await sampleSink.samples(timestamp).next()).value;
@@ -414,3 +417,251 @@ const sine440Score = (x: Float32Array, sampleRate: number, freq: number) => {
 
 	return fitEnergy / xx;
 };
+
+test('Track sample rate differing from the decoded sample rate', async () => {
+	registerDtsDecoder();
+
+	using originalInput = new Input({
+		source: new FilePathSource(path.join(__dirname, '..', 'public', DTSC_FILE)),
+		formats: ALL_FORMATS,
+	});
+	const originalTrack = await originalInput.getPrimaryAudioTrack();
+	assert(originalTrack);
+	expect(await originalTrack.getSampleRate()).toBe(24000);
+
+	// Declare twice the rate the stream decodes at, like a container reporting the 48 kHz core rate of a stream that
+	// decodes at 96 kHz
+	const output = new Output({
+		format: new MkvOutputFormat(),
+		target: new BufferTarget(),
+	});
+	const source = new EncodedAudioPacketSource('dts');
+	output.addAudioTrack(source);
+	await output.start();
+
+	let packetCount = 0;
+	for await (const packet of new EncodedPacketSink(originalTrack).packets()) {
+		await source.add(packet, {
+			decoderConfig: {
+				codec: 'dtsc',
+				numberOfChannels: 2,
+				sampleRate: 48000,
+			},
+		});
+
+		if (++packetCount === 20) {
+			break;
+		}
+	}
+
+	await output.finalize();
+	assert(output.target.buffer);
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+	expect(await track.getSampleRate()).toBe(48000);
+
+	const packetTimestamps: number[] = [];
+	for await (const packet of new EncodedPacketSink(track).packets()) {
+		packetTimestamps.push(packet.timestamp);
+	}
+
+	const sampleTimestamps: number[] = [];
+	for await (using sample of new AudioSampleSink(track).samples()) {
+		expect(sample.sampleRate).toBe(24000);
+		sampleTimestamps.push(sample.timestamp);
+	}
+
+	expect(sampleTimestamps.length).toBe(packetTimestamps.length);
+	for (let i = 0; i < packetTimestamps.length; i++) {
+		expect(sampleTimestamps[i]).toBeCloseTo(packetTimestamps[i]!, 3);
+	}
+});
+
+test('Codec delay when encoding', async () => {
+	registerDtsDecoder();
+	registerDtsEncoder();
+
+	const sampleRate = 48000;
+	const startTimestamp = 1;
+	const signal = new Float32Array(1000); // Not a multiple of the frame size
+	for (let i = 0; i < signal.length; i++) {
+		signal[i] = 0.5 * Math.sin(2 * Math.PI * 1000 * i / sampleRate);
+	}
+
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+	const source = new AudioSampleSource({
+		codec: 'dts',
+		quality: new Quality({ bitrate: 768000 }),
+	});
+	output.addAudioTrack(source);
+	await output.start();
+
+	const sample = new AudioSample({
+		data: signal,
+		format: 'f32',
+		numberOfChannels: 1,
+		sampleRate,
+		timestamp: startTimestamp,
+	});
+	await source.add(sample);
+	sample.close();
+	source.close();
+	await output.finalize();
+	assert(output.target.buffer);
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	// Lay the decoded audio out on the timeline to see what ended up where the signal was
+	const decoded = new Float32Array(signal.length);
+	for await (using sample of new AudioSampleSink(track).samples()) {
+		const plane = new Float32Array(sample.numberOfFrames);
+		sample.copyTo(plane, {
+			format: 'f32-planar',
+			planeIndex: 0,
+		});
+
+		const offset = Math.round((sample.timestamp - startTimestamp) * sampleRate);
+		for (let i = Math.max(0, -offset); i < Math.min(plane.length, decoded.length - offset); i++) {
+			decoded[offset + i] = plane[i]!;
+		}
+	}
+
+	let errorEnergy = 0;
+	let signalEnergy = 0;
+	for (let i = 0; i < signal.length; i++) {
+		errorEnergy += (decoded[i]! - signal[i]!) ** 2;
+		signalEnergy += signal[i]! ** 2;
+	}
+
+	expect(errorEnergy / signalEnergy).toBeLessThan(0.01);
+});
+
+test('Quality with a very low bitrate', async () => {
+	registerDtsEncoder();
+
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+	// Very low quality comes out at fewer bits than a 5.1 DTS frame needs, so the encoder goes as low as it can instead
+	const source = new AudioSampleSource({ codec: 'dts', quality: new Quality('very-low') });
+	output.addAudioTrack(source);
+	await output.start();
+
+	const sample = new AudioSample({
+		data: new Float32Array(6 * 4800),
+		format: 'f32',
+		numberOfChannels: 6,
+		sampleRate: 48000,
+		timestamp: 0,
+	});
+	await source.add(sample);
+	sample.close();
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+	expect(await track.getCodec()).toBe('dts');
+	expect(await track.getNumberOfChannels()).toBe(6);
+});
+
+test('Encoding after a flush', async () => {
+	registerDtsEncoder();
+
+	const config: AudioEncoderConfig = {
+		codec: 'dtsc',
+		numberOfChannels: 2,
+		sampleRate: 48000,
+		bitrate: 768000,
+	};
+
+	const MatchingEncoder = customAudioEncoders.find(x => x.supports('dts', config));
+	assert(MatchingEncoder);
+	// @ts-expect-error Can't create an instance of an abstract class
+	const encoder = new MatchingEncoder() as CustomAudioEncoder;
+	// @ts-expect-error Readonly
+	encoder.codec = 'dts';
+	// @ts-expect-error Readonly
+	encoder.config = config;
+
+	const packets: EncodedPacket[] = [];
+	// @ts-expect-error Readonly
+	encoder.onPacket = (packet: EncodedPacket) => {
+		packets.push(packet);
+	};
+
+	await encoder.init();
+
+	let firstRunPacketCount = 0;
+	for (let run = 0; run < 2; run++) {
+		const data = new Float32Array(2 * 4800);
+		for (let i = 0; i < data.length; i++) {
+			data[i] = 0.5 * Math.sin(2 * Math.PI * 440 * (i >> 1) / 48000);
+		}
+
+		using sample = new AudioSample({
+			data,
+			format: 'f32',
+			numberOfChannels: 2,
+			sampleRate: 48000,
+			timestamp: 0,
+		});
+		await encoder.encode(sample);
+		await encoder.flush();
+
+		firstRunPacketCount ||= packets.length;
+	}
+
+	await encoder.close();
+
+	// The second run should play out exactly like the first one did
+	const firstRun = packets.slice(0, firstRunPacketCount);
+	const secondRun = packets.slice(firstRunPacketCount);
+	expect(firstRun.length).toBeGreaterThan(0);
+	expect(secondRun.map(x => x.timestamp)).toEqual(firstRun.map(x => x.timestamp));
+	expect(secondRun.map(x => x.duration)).toEqual(firstRun.map(x => x.duration));
+	expect(secondRun.every((x, i) => uint8ArraysAreEqual(x.data, firstRun[i]!.data))).toBe(true);
+});
+
+test('ddts stream construction for extensions inside the core', async () => {
+	using input = new Input({
+		source: new FilePathSource(path.join(__dirname, '..', 'public', DTSC_FILE)),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+	const packet = await new EncodedPacketSink(track).getFirstPacket();
+	assert(packet);
+
+	const getStreamConstruction = (extAudioId: number | null) => {
+		// EXT_AUDIO_ID and EXT_AUDIO are the top four bits of the core header's 11th byte
+		const data = packet.data.slice();
+		data[10] = (data[10]! & 0x0f) | (extAudioId === null ? 0 : (extAudioId << 5) | 0x10);
+
+		const frameInfo = parseDtsFrame(data);
+		assert(frameInfo);
+		return (buildDtsSpecificBox(frameInfo)[13]! >> 1) & 0x1f;
+	};
+
+	expect(getStreamConstruction(null)).toBe(1); // Core
+	expect(getStreamConstruction(0)).toBe(2); // Core + XCh
+	expect(getStreamConstruction(6)).toBe(3); // Core + XXCh
+	expect(getStreamConstruction(2)).toBe(4); // Core + X96
+});

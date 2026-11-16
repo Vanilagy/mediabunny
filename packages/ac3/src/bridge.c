@@ -73,16 +73,28 @@ uint8_t *configure_decode_packet(DecoderContext *ctx, int size) {
 }
 
 EMSCRIPTEN_KEEPALIVE
-int decode_packet(DecoderContext *ctx, int64_t pts) {
+int send_decode_packet(DecoderContext *ctx, int64_t pts) {
 	ctx->packet->pts = pts;
 	int ret = avcodec_send_packet(ctx->codec_ctx, ctx->packet);
 	av_packet_unref(ctx->packet);
+
+	return ret;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int send_decode_flush(DecoderContext *ctx) {
+	return avcodec_send_packet(ctx->codec_ctx, NULL);
+}
+
+// A packet may hold several syncframes (like E-AC-3 in MP4 does with fewer than six blocks per syncframe), each of
+// which decodes to a frame of its own, so this is to be called until it returns 0
+EMSCRIPTEN_KEEPALIVE
+int receive_decoded_frame(DecoderContext *ctx) {
+	int ret = avcodec_receive_frame(ctx->codec_ctx, ctx->frame);
+	if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) return 0;
 	if (ret < 0) return ret;
 
-	ret = avcodec_receive_frame(ctx->codec_ctx, ctx->frame);
-	if (ret < 0) return ret;
-
-	return 0;
+	return 1;
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -92,7 +104,8 @@ int get_decoded_format(DecoderContext *ctx) {
 
 EMSCRIPTEN_KEEPALIVE
 uint8_t *get_decoded_plane_ptr(DecoderContext *ctx, int plane) {
-	return ctx->frame->data[plane];
+	// data only has room for 8 planes, but E-AC-3 can have more channels than that
+	return ctx->frame->extended_data[plane];
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -116,9 +129,7 @@ int64_t get_decoded_pts(DecoderContext *ctx) {
 }
 
 EMSCRIPTEN_KEEPALIVE
-void flush_decoder(DecoderContext *ctx) {
-	avcodec_send_packet(ctx->codec_ctx, NULL);
-	while (avcodec_receive_frame(ctx->codec_ctx, ctx->frame) == 0) {}
+void reset_decoder(DecoderContext *ctx) {
 	avcodec_flush_buffers(ctx->codec_ctx);
 }
 
@@ -140,6 +151,38 @@ typedef struct {
 	int encoded_duration;
 } EncoderContext;
 
+// av_channel_layout_default would make 3 channels 2.1 (turning the third one into LFE) and 4 channels 4.0, not quad
+static int set_ac3_channel_layout(AVChannelLayout *layout, int channels) {
+	switch (channels) {
+		case 1: {
+			AVChannelLayout mono = AV_CHANNEL_LAYOUT_MONO;
+			return av_channel_layout_copy(layout, &mono);
+		}
+		case 2: {
+			AVChannelLayout stereo = AV_CHANNEL_LAYOUT_STEREO;
+			return av_channel_layout_copy(layout, &stereo);
+		}
+		case 3: {
+			AVChannelLayout surround = AV_CHANNEL_LAYOUT_SURROUND;
+			return av_channel_layout_copy(layout, &surround);
+		}
+		case 4: {
+			AVChannelLayout quad = AV_CHANNEL_LAYOUT_QUAD;
+			return av_channel_layout_copy(layout, &quad);
+		}
+		case 5: {
+			AVChannelLayout five_zero = AV_CHANNEL_LAYOUT_5POINT0_BACK;
+			return av_channel_layout_copy(layout, &five_zero);
+		}
+		case 6: {
+			AVChannelLayout five_one = AV_CHANNEL_LAYOUT_5POINT1_BACK;
+			return av_channel_layout_copy(layout, &five_one);
+		}
+		default:
+			return -1;
+	}
+}
+
 EMSCRIPTEN_KEEPALIVE
 EncoderContext *init_encoder(int codec_id, int channels, int sample_rate, int bitrate) {
 	enum AVCodecID av_codec_id = codec_id == 0 ? AV_CODEC_ID_AC3 : AV_CODEC_ID_EAC3;
@@ -155,10 +198,10 @@ EncoderContext *init_encoder(int codec_id, int channels, int sample_rate, int bi
 	codec_ctx->bit_rate = bitrate;
 	codec_ctx->time_base = (AVRational){1, sample_rate};
 
-	AVChannelLayout layout;
-	av_channel_layout_default(&layout, channels);
-	av_channel_layout_copy(&codec_ctx->ch_layout, &layout);
-	av_channel_layout_uninit(&layout);
+	if (set_ac3_channel_layout(&codec_ctx->ch_layout, channels) < 0) {
+		avcodec_free_context(&codec_ctx);
+		return NULL;
+	}
 
 	if (avcodec_open2(codec_ctx, codec, NULL) < 0) {
 		avcodec_free_context(&codec_ctx);

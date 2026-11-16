@@ -106,7 +106,7 @@ export const buildOggMimeType = (info: {
 }) => {
 	let string = 'audio/ogg';
 
-	if (info.codecStrings) {
+	if (info.codecStrings.length > 0) {
 		const uniqueCodecMimeTypes = [...new Set(info.codecStrings)];
 		string += `; codecs="${uniqueCodecMimeTypes.join(', ')}"`;
 	}

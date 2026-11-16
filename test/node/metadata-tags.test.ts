@@ -55,7 +55,7 @@ const createDummyAudioTrack = (codec: AudioCodec, output: Output) => {
 				new EncodedPacket(data, 'key', 0, 1),
 				{
 					decoderConfig: {
-						codec: buildAudioCodecString(codec, 2, 44100),
+						codec: buildAudioCodecString(codec),
 						numberOfChannels: 2,
 						sampleRate: 44100,
 						description,
@@ -82,7 +82,7 @@ const songMetadata: MetadataTags = {
 	discNumber: 1,
 	discsTotal: 1,
 	beatsPerMinute: 128,
-	date: new Date(2021, 3, 23),
+	date: new Date('2021-04-23'),
 	images: [{
 		data: coverArt,
 		kind: 'coverFront',
@@ -130,7 +130,7 @@ test('Read and write metadata, MP4', async () => {
 	expect(readTags.tracksTotal).toBe(songMetadata.tracksTotal);
 	expect(readTags.discNumber).toBe(songMetadata.discNumber);
 	expect(readTags.discsTotal).toBe(songMetadata.discsTotal);
-	expect(readTags.date).toEqual(readTags.date);
+	expect(readTags.date).toEqual(songMetadata.date);
 	expect(readTags.images).toHaveLength(1);
 	expect(readTags.images![0]!.data).toEqual(coverArt);
 	expect(readTags.images![0]!.mimeType).toEqual('image/jpeg');
@@ -181,7 +181,7 @@ test('Read and write metadata, QuickTime', async () => {
 	expect(readTags.tracksTotal).toBeUndefined();
 	expect(readTags.discNumber).toBeUndefined();
 	expect(readTags.discsTotal).toBeUndefined();
-	expect(readTags.date).toEqual(readTags.date);
+	expect(readTags.date).toEqual(songMetadata.date);
 	expect(readTags.images).toBeUndefined();
 
 	expect(readTags.raw!['©nam']).toBe(songMetadata.title);
@@ -232,7 +232,7 @@ test('Read and write metadata, MP4 with mdta format', async () => {
 	expect(readTags.tracksTotal).toBe(songMetadata.tracksTotal);
 	expect(readTags.discNumber).toBeUndefined(); // Not written
 	expect(readTags.discsTotal).toBeUndefined();
-	expect(readTags.date).toEqual(readTags.date);
+	expect(readTags.date).toEqual(songMetadata.date);
 	expect(readTags.images).toHaveLength(1);
 	expect(readTags.images![0]!.data).toEqual(coverArt);
 	expect(readTags.images![0]!.mimeType).toEqual('image/jpeg');
@@ -344,7 +344,7 @@ test('Read and write metadata, Matroska', async () => {
 	expect(readTags.tracksTotal).toBe(songMetadata.tracksTotal);
 	expect(readTags.discNumber).toBe(songMetadata.discNumber);
 	expect(readTags.discsTotal).toBe(songMetadata.discsTotal);
-	expect(readTags.date).toEqual(readTags.date);
+	expect(readTags.date).toEqual(songMetadata.date);
 	expect(readTags.images).toHaveLength(1);
 	expect(readTags.images![0]!.data).toEqual(coverArt);
 	expect(readTags.images![0]!.mimeType).toEqual('image/jpeg');
@@ -415,7 +415,7 @@ test('Read and write metadata, MP3', async () => {
 	expect(readTags.tracksTotal).toBe(songMetadata.tracksTotal);
 	expect(readTags.discNumber).toBe(songMetadata.discNumber);
 	expect(readTags.discsTotal).toBe(songMetadata.discsTotal);
-	expect(readTags.date).toEqual(readTags.date);
+	expect(readTags.date).toEqual(songMetadata.date);
 	expect(readTags.images).toHaveLength(1);
 	expect(readTags.images![0]!.data).toEqual(coverArt);
 	expect(readTags.images![0]!.mimeType).toEqual('image/jpeg');
@@ -473,7 +473,7 @@ test('Read and write metadata, Ogg', async () => {
 	expect(readTags.tracksTotal).toBe(songMetadata.tracksTotal);
 	expect(readTags.discNumber).toBe(songMetadata.discNumber);
 	expect(readTags.discsTotal).toBe(songMetadata.discsTotal);
-	expect(readTags.date).toEqual(readTags.date);
+	expect(readTags.date).toEqual(songMetadata.date);
 	expect(readTags.images).toHaveLength(1);
 	expect(readTags.images![0]!.data).toEqual(coverArt);
 	expect(readTags.images![0]!.mimeType).toEqual('image/jpeg');
@@ -524,7 +524,7 @@ test('Read and write metadata, FLAC', async () => {
 	expect(readTags.tracksTotal).toBe(songMetadata.tracksTotal);
 	expect(readTags.discNumber).toBe(songMetadata.discNumber);
 	expect(readTags.discsTotal).toBe(songMetadata.discsTotal);
-	expect(readTags.date).toEqual(readTags.date);
+	expect(readTags.date).toEqual(songMetadata.date);
 	expect(readTags.images).toHaveLength(1);
 	expect(readTags.images![0]!.data).toEqual(coverArt);
 	expect(readTags.images![0]!.mimeType).toEqual('image/jpeg');
@@ -579,7 +579,7 @@ test('Read and write metadata, ADTS', async () => {
 	expect(readTags.tracksTotal).toBe(songMetadata.tracksTotal);
 	expect(readTags.discNumber).toBe(songMetadata.discNumber);
 	expect(readTags.discsTotal).toBe(songMetadata.discsTotal);
-	expect(readTags.date).toEqual(readTags.date);
+	expect(readTags.date).toEqual(songMetadata.date);
 	expect(readTags.images).toHaveLength(1);
 	expect(readTags.images![0]!.data).toEqual(coverArt);
 	expect(readTags.images![0]!.mimeType).toEqual('image/jpeg');
@@ -630,7 +630,7 @@ test('Read and write metadata, WAVE', async () => {
 	expect(readTags.tracksTotal).toBe(songMetadata.tracksTotal);
 	expect(readTags.discNumber).toBeUndefined();
 	expect(readTags.discsTotal).toBeUndefined();
-	expect(readTags.date).toEqual(readTags.date);
+	expect(readTags.date).toEqual(songMetadata.date);
 	expect(readTags.images).toBeUndefined();
 
 	expect(readTags.raw!['INAM']).toBe(songMetadata.title);
@@ -683,7 +683,7 @@ test('Conversion metadata tags, default case', async () => {
 	expect(readTags.tracksTotal).toBe(songMetadata.tracksTotal);
 	expect(readTags.discNumber).toBe(songMetadata.discNumber);
 	expect(readTags.discsTotal).toBe(songMetadata.discsTotal);
-	expect(readTags.date).toEqual(readTags.date);
+	expect(readTags.date).toEqual(songMetadata.date);
 	expect(readTags.images).toHaveLength(1);
 	expect(readTags.images![0]!.data).toEqual(coverArt);
 });
@@ -1085,4 +1085,429 @@ test('Creation time override in conversion', async () => {
 	const nullReadTags = await nullInput.getMetadataTags();
 
 	expect(nullReadTags.creationTime).toBeUndefined();
+});
+
+test('ID3v2.3 unsynchronisation', async () => {
+	const image = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0xff, 0x00, 0xff]);
+	const body = concat([
+		frame('APIC', concat([latin1('\x00image/jpeg\x00\x03\x00'), image])),
+		frame('TIT2', latin1('\x00Title')),
+	]);
+	const tags = await readId3V2Tag(3, 0x80, unsynchronize(body));
+
+	expect(tags.images![0]!.data).toEqual(image);
+	expect(tags.title).toBe('Title');
+});
+
+test('ID3v2.2 unsynchronisation', async () => {
+	const image = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0xff, 0x00, 0xff]);
+	const body = concat([
+		frame('PIC', concat([latin1('\x00JPG\x03\x00'), image])),
+		frame('TT2', latin1('\x00Title')),
+	]);
+	const tags = await readId3V2Tag(2, 0x80, unsynchronize(body));
+
+	expect(tags.images![0]!.data).toEqual(image);
+	expect(tags.title).toBe('Title');
+});
+
+const unsynchronize = (bytes: Uint8Array) => {
+	const result: number[] = [];
+	for (const byte of bytes) {
+		result.push(byte);
+		if (byte === 0xff) {
+			result.push(0x00);
+		}
+	}
+
+	return new Uint8Array(result);
+};
+
+test('ID3v2.4 non-synchsafe frame sizes', async () => {
+	// Old iTunes versions wrote plain frame sizes into ID3v2.4 tags
+	const image = new Uint8Array(300).fill(1);
+	const body = concat([
+		frame('APIC', concat([latin1('\x00image/png\x00\x03\x00'), image])),
+		frame('TIT2', latin1('\x00Title')),
+	]);
+	const tags = await readId3V2Tag(4, 0, body);
+
+	expect(tags.images![0]!.data).toEqual(image);
+	expect(tags.title).toBe('Title');
+});
+
+test('ID3v2.4 data length indicator', async () => {
+	const tags = await readId3V2Tag(4, 0, frame('TIT2', latin1('\x00\x00\x00\x06\x00Title'), 0x0001));
+	expect(tags.title).toBe('Title');
+});
+
+test('Empty UTF-16 strings without BOM', async () => {
+	const image = new Uint8Array([0xff, 0xd8, 0xff, 0xdb]);
+	const body = concat([
+		frame('COMM', latin1('\x01eng\x00\x00\xff\xfeH\x00i\x00\x00\x00')),
+		frame('APIC', concat([latin1('\x01image/jpeg\x00\x03\x00\x00'), image])),
+	]);
+	const tags = await readId3V2Tag(3, 0, body);
+
+	expect(tags.comment).toBe('Hi');
+	expect(tags.images![0]!.data).toEqual(image);
+});
+
+test('APIC with UTF-16BE description', async () => {
+	const image = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+	const tags = await readId3V2Tag(4, 0, frame('APIC', concat([latin1('\x02image/png\x00\x03\x00C\x00\x00'), image])));
+
+	expect(tags.images![0]!.mimeType).toBe('image/png');
+	expect(tags.images![0]!.description).toBe('C');
+	expect(tags.images![0]!.data).toEqual(image);
+});
+
+test('Described COMM frame ahead of plain one', async () => {
+	// iTunes keeps its own data in COMM frames with a description
+	const body = concat([
+		frame('COMM', latin1('\x00engiTunNORM\x00 00000A3B 00000A3B')),
+		frame('COMM', latin1('\x00eng\x00Comment')),
+	]);
+	const tags = await readId3V2Tag(3, 0, body);
+
+	expect(tags.comment).toBe('Comment');
+});
+
+test('Described COMM frame only', async () => {
+	const tags = await readId3V2Tag(3, 0, frame('COMM', latin1('\x00engiTunNORM\x00 00000A3B 00000A3B')));
+	expect(tags.comment).toBeUndefined();
+});
+
+test('TDAT ahead of TYER', async () => {
+	// Mutagen writes the frames in this order
+	const body = concat([
+		frame('TDAT', latin1('\x002304')),
+		frame('TYER', latin1('\x002021')),
+	]);
+	const tags = await readId3V2Tag(3, 0, body);
+
+	expect(tags.date).toEqual(new Date('2021-04-23'));
+});
+
+test('TYER holding a full date', async () => {
+	// As found in oversized-id3.wav
+	const tags = await readId3V2Tag(3, 0, frame('TYER', latin1('\x0020190103')));
+	expect(tags.date).toBeUndefined();
+});
+
+test('ID3v1 year below 100', async () => {
+	const id3V1Tag = new Uint8Array(128);
+	id3V1Tag.set(latin1('TAG'));
+	id3V1Tag.set(latin1('13'), 93);
+
+	const tags = await readMetadataTags(concat([mp3Frame(), mp3Frame(), id3V1Tag]));
+	expect(tags.date).toEqual(new Date('0013-01-01T00:00:00Z'));
+});
+
+test('Zero BPM', async () => {
+	const tags = await readId3V2Tag(4, 0, frame('TBPM', latin1('\x000')));
+	expect(tags.beatsPerMinute).toBeUndefined();
+});
+
+test('ID3v2.2 compression flag', async () => {
+	// No compression scheme was ever defined, so the tag can't be read - even if its data looks like an extended header
+	const tags = await readId3V2Tag(2, 0x40, concat([new Uint8Array([0, 0, 0, 4]), frame('TT2', latin1('\x00Title'))]));
+	expect(tags.title).toBeUndefined();
+});
+
+test('ID3v2.3 footer flag', async () => {
+	// Footers only exist since ID3v2.4, so the flag mustn't make us skip into the audio data
+	using input = new Input({
+		source: new BufferSource(concat([
+			createId3V2Tag(3, 0x10, frame('TIT2', latin1('\x00Title'))),
+			mp3Frame(),
+			mp3Frame(),
+		])),
+		formats: ALL_FORMATS,
+	});
+	const track = (await input.getPrimaryAudioTrack())!;
+
+	expect(await track.computeDuration()).toBe(2 * 1152 / 44100);
+	expect((await input.getMetadataTags()).title).toBe('Title');
+});
+
+test('Grouping identity', async () => {
+	const v3Tags = await readId3V2Tag(3, 0, frame('TIT2', latin1('\x07\x00Title'), 0x0020));
+	expect(v3Tags.title).toBe('Title');
+
+	// The group byte comes before the data length indicator
+	const v4Tags = await readId3V2Tag(4, 0, frame('TIT2', latin1('\x07\x00\x00\x00\x06\x00Title'), 0x0041));
+	expect(v4Tags.title).toBe('Title');
+});
+
+test('ID3v2.2 TXX', async () => {
+	const tags = await readId3V2Tag(2, 0, frame('TXX', latin1('\x00Description\x00Value')));
+	expect(tags.raw!['TXX']).toEqual({ Description: 'Value' });
+});
+
+test('TDRC with a time', async () => {
+	// ID3v2.4 timestamps are always UTC, so the local time zone mustn't matter
+	vi.stubEnv('TZ', 'America/New_York');
+	onTestFinished(() => {
+		vi.unstubAllEnvs();
+	});
+
+	const tags = await readId3V2Tag(4, 0, frame('TDRC', latin1('\x002021-04-23T12:00')));
+	expect(tags.date).toEqual(new Date('2021-04-23T12:00:00Z'));
+});
+
+test('Malformed TDRC', async () => {
+	const tags = await readId3V2Tag(4, 0, frame('TDRC', latin1('\x0012')));
+	expect(tags.date).toBeUndefined();
+});
+
+test('TDAT past the end of the month', async () => {
+	const body = concat([
+		frame('TYER', latin1('\x002021')),
+		frame('TDAT', latin1('\x003102')),
+	]);
+	const tags = await readId3V2Tag(3, 0, body);
+
+	expect(tags.date).toEqual(new Date('2021-01-01T00:00:00Z'));
+});
+
+test('ID3v2.4 non-synchsafe frame size with high bits', async () => {
+	// A size of 0x180 can't be synchsafe, but read as one, it would point at the zeros
+	const image = new Uint8Array(0x180 - 13).fill(1);
+	image.fill(0, 0x80 - 13, 0x80 - 13 + 4);
+	const body = concat([
+		frame('APIC', concat([latin1('\x00image/png\x00\x03\x00'), image])),
+		frame('TIT2', latin1('\x00Title')),
+	]);
+	const tags = await readId3V2Tag(4, 0, body);
+
+	expect(tags.images![0]!.data).toEqual(image);
+	expect(tags.title).toBe('Title');
+});
+
+test('ID3v2.4 extended header', async () => {
+	const extendedHeader = new Uint8Array(200);
+	new DataView(extendedHeader.buffer).setUint32(0, synchsafe(extendedHeader.length));
+	extendedHeader[4] = 1; // Number of flag bytes
+
+	const tags = await readId3V2Tag(4, 0x40, concat([extendedHeader, frame('TIT2', latin1('\x00Title'))]));
+	expect(tags.title).toBe('Title');
+});
+
+const readId3V2Tag = async (majorVersion: number, flags: number, body: Uint8Array) => {
+	return readMetadataTags(concat([createId3V2Tag(majorVersion, flags, body), mp3Frame(), mp3Frame()]));
+};
+
+const createId3V2Tag = (majorVersion: number, flags: number, body: Uint8Array) => {
+	const header = new Uint8Array(10);
+	header.set(latin1('ID3'));
+	header[3] = majorVersion;
+	header[5] = flags;
+	new DataView(header.buffer).setUint32(6, synchsafe(body.length));
+
+	return concat([header, body]);
+};
+
+const synchsafe = (value: number) => {
+	return (value & 0x7f)
+		| ((value << 1) & 0x7f00)
+		| ((value << 2) & 0x7f0000)
+		| ((value << 3) & 0x7f000000);
+};
+
+const frame = (id: string, data: Uint8Array, flags = 0) => {
+	if (id.length === 3) {
+		const size = data.length;
+		return concat([latin1(id), new Uint8Array([size >> 16, (size >> 8) & 0xff, size & 0xff]), data]);
+	}
+
+	const header = new Uint8Array(10);
+	header.set(latin1(id));
+	const view = new DataView(header.buffer);
+	view.setUint32(4, data.length);
+	view.setUint16(8, flags);
+
+	return concat([header, data]);
+};
+
+const concat = (parts: Uint8Array[]) => {
+	const result = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
+	let offset = 0;
+	for (const part of parts) {
+		result.set(part, offset);
+		offset += part.length;
+	}
+
+	return result;
+};
+
+const latin1 = (text: string) => {
+	return Uint8Array.from(text, char => char.charCodeAt(0));
+};
+
+const mp3Frame = () => {
+	// MPEG-1 Layer III, 128 kbps, 44.1 kHz
+	const bytes = new Uint8Array(417);
+	bytes.set([0xff, 0xfb, 0x90, 0x64]);
+	return bytes;
+};
+
+test('Non-Latin-1 lyrics', async () => {
+	const lyrics = String.fromCharCode(0x6b4c, 0x8a5e);
+	const tags = await readMetadataTags(await writeMp3({
+		lyrics,
+		comment: 'Comment',
+	}));
+
+	expect(tags.lyrics).toBe(lyrics);
+	expect(tags.comment).toBe('Comment');
+});
+
+test('MP3 to MP3 conversion with images', async () => {
+	using input = new Input({
+		source: new BufferSource(await writeMp3({
+			images: [{
+				data: new Uint8Array([1, 2, 3]),
+				mimeType: 'image/png',
+				kind: 'coverFront',
+			}],
+		})),
+		formats: ALL_FORMATS,
+	});
+	const output = new Output({
+		format: new Mp3OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({
+		input,
+		output,
+	});
+	await conversion.execute();
+
+	const tags = await readMetadataTags(new Uint8Array(output.target.buffer!));
+	expect(tags.images).toHaveLength(1);
+});
+
+test('APIC with non-ASCII MIME type and non-Latin-1 description', async () => {
+	// Both strings then get written as UTF-8, where the MIME type takes up more bytes than characters
+	const data = new Uint8Array([1, 2, 3]);
+	const tags = await readMetadataTags(await writeMp3({
+		images: [{
+			data,
+			mimeType: 'image/pég',
+			kind: 'coverFront',
+			description: String.fromCharCode(0x6b4c),
+		}],
+		title: 'Title',
+	}));
+
+	expect(tags.images![0]!.data).toEqual(data);
+	expect(tags.title).toBe('Title');
+});
+
+const writeMp3 = async (tags: MetadataTags) => {
+	const output = new Output({
+		format: new Mp3OutputFormat(),
+		target: new BufferTarget(),
+	});
+	output.setMetadataTags(tags);
+
+	const dummyTrack = createDummyAudioTrack('mp3', output);
+
+	await output.start();
+	await dummyTrack.addPacket();
+	await output.finalize();
+
+	return new Uint8Array(output.target.buffer!);
+};
+
+const readMetadataTags = async (bytes: Uint8Array) => {
+	using input = new Input({
+		source: new BufferSource(bytes),
+		formats: ALL_FORMATS,
+	});
+	return await input.getMetadataTags();
+};
+
+test('Image with non-string name or description', () => {
+	const output = new Output({
+		format: new Mp3OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	expect(() => output.setMetadataTags({
+		images: [{
+			data: new Uint8Array([1, 2, 3]),
+			mimeType: 'image/png',
+			kind: 'coverFront',
+			name: 5 as unknown as string,
+		}],
+	})).toThrow(TypeError);
+	expect(() => output.setMetadataTags({
+		images: [{
+			data: new Uint8Array([1, 2, 3]),
+			mimeType: 'image/png',
+			kind: 'coverFront',
+			description: 5 as unknown as string,
+		}],
+	})).toThrow(TypeError);
+});
+
+test('ID3v2 year below 100', async () => {
+	await testWaveFileDate(
+		new WavOutputFormat({ metadataFormat: 'id3' }),
+		{ TYER: '12' },
+		new Date('0012-01-01T00:00:00Z'),
+	);
+});
+
+test('RIFF INFO year', async () => {
+	// Jan 1 in UTC, like any other year-only date, regardless of the local time zone
+	await testWaveFileDate(new WavOutputFormat(), { YEAR: '2013' }, new Date('2013-01-01T00:00:00Z'));
+});
+
+const testWaveFileDate = async (format: WavOutputFormat, rawTags: MetadataTags['raw'], expectedDate: Date) => {
+	const output = new Output({
+		format,
+		target: new BufferTarget(),
+	});
+	output.setMetadataTags({ raw: rawTags });
+
+	const dummyTrack = createDummyAudioTrack('pcm-s16', output);
+
+	await output.start();
+	await dummyTrack.addPacket();
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	expect((await input.getMetadataTags()).date).toEqual(expectedDate);
+};
+
+test('RIFF INFO strings in UTF-8 and Latin-1', async () => {
+	const output = new Output({
+		format: new WavOutputFormat(),
+		target: new BufferTarget(),
+	});
+	output.setMetadataTags({
+		title: String.fromCharCode(...new TextEncoder().encode('Café ☕')),
+		artist: 'Motörhead',
+	});
+
+	const dummyTrack = createDummyAudioTrack('pcm-s16', output);
+
+	await output.start();
+	await dummyTrack.addPacket();
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const tags = await input.getMetadataTags();
+	expect(tags.title).toBe('Café ☕');
+	expect(tags.artist).toBe('Motörhead');
 });

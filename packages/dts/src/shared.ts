@@ -41,11 +41,6 @@ export type WorkerCommand = {
 		timestamp: number;
 	};
 } | {
-	type: 'flush-encoder';
-	data: {
-		ctx: number;
-	};
-} | {
 	type: 'close-encoder';
 	data: {
 		ctx: number;
@@ -77,8 +72,6 @@ export type WorkerResponseData = {
 	encodedData: ArrayBuffer;
 	pts: number;
 	duration: number;
-} | {
-	type: 'flush-encoder';
 } | {
 	type: 'close-encoder';
 };

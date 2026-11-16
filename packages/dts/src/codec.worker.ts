@@ -32,7 +32,6 @@ let initEncoderFn: (channels: number, sampleRate: number, bitrate: number) => nu
 let getEncoderFrameSize: (ctx: number) => number;
 let getEncodeInputPtr: (ctx: number, size: number) => number;
 let encodeFrameFn: (ctx: number, pts: bigint) => number;
-let flushEncoderFn: (ctx: number) => void;
 let getEncodedData: (ctx: number) => number;
 let getEncodedPts: (ctx: number) => bigint;
 let getEncodedDuration: (ctx: number) => number;
@@ -65,7 +64,6 @@ const ensureModule = async () => {
 		getEncoderFrameSize = module.cwrap('get_encoder_frame_size', 'number', ['number']);
 		getEncodeInputPtr = module.cwrap('get_encode_input_ptr', 'number', ['number', 'number']);
 		encodeFrameFn = module.cwrap('encode_frame', 'number', ['number', 'number']) as unknown as typeof encodeFrameFn;
-		flushEncoderFn = module.cwrap('flush_encoder', null, ['number']);
 		getEncodedData = module.cwrap('get_encoded_data', 'number', ['number']);
 		getEncodedPts = module.cwrap('get_encoded_pts', 'number', ['number']) as unknown as typeof getEncodedPts;
 		getEncodedDuration = module.cwrap('get_encoded_duration', 'number', ['number']);
@@ -179,10 +177,6 @@ const encode = (ctx: number, audioData: ArrayBuffer, timestamp: number) => {
 	return { encodedData, pts, duration };
 };
 
-const flushEncoder = (ctx: number) => {
-	flushEncoderFn(ctx);
-};
-
 const onMessage = (data: { id: number; command: WorkerCommand }) => {
 	const { id, command } = data;
 
@@ -243,11 +237,6 @@ const onMessage = (data: { id: number; command: WorkerCommand }) => {
 						duration: encoded.duration,
 					};
 					transferables.push(encoded.encodedData);
-				}; break;
-
-				case 'flush-encoder': {
-					flushEncoder(command.data.ctx);
-					result = { type: command.type };
 				}; break;
 
 				case 'close-encoder': {

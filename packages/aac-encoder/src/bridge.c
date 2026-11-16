@@ -25,10 +25,50 @@ typedef struct {
 	int encoded_duration;
 } EncoderContext;
 
-EMSCRIPTEN_KEEPALIVE
-EncoderContext *init_encoder(int channels, int sample_rate, int bitrate) {
-	av_log_set_level(AV_LOG_ERROR);
+// Layouts AAC has a channel configuration for, as anything else needs a PCE, which not every player supports (and
+// av_channel_layout_default's 2.1 for 3 channels even turns the third one into LFE). 7.1 gets configuration 12: 7 is
+// 7.1(wide) by the spec, but decoders like FFmpeg's take it for a mislabeled 7.1 and swap channels around. Quad is the
+// exception: it has no channel configuration, but 4.0 would move its rear channels to the center, so it gets a PCE.
+static int set_aac_channel_layout(AVChannelLayout *layout, int channels) {
+	switch (channels) {
+		case 1: {
+			AVChannelLayout mono = AV_CHANNEL_LAYOUT_MONO;
+			return av_channel_layout_copy(layout, &mono);
+		}
+		case 2: {
+			AVChannelLayout stereo = AV_CHANNEL_LAYOUT_STEREO;
+			return av_channel_layout_copy(layout, &stereo);
+		}
+		case 3: {
+			AVChannelLayout surround = AV_CHANNEL_LAYOUT_SURROUND;
+			return av_channel_layout_copy(layout, &surround);
+		}
+		case 4: {
+			AVChannelLayout quad = AV_CHANNEL_LAYOUT_QUAD;
+			return av_channel_layout_copy(layout, &quad);
+		}
+		case 5: {
+			AVChannelLayout five_zero = AV_CHANNEL_LAYOUT_5POINT0_BACK;
+			return av_channel_layout_copy(layout, &five_zero);
+		}
+		case 6: {
+			AVChannelLayout five_one = AV_CHANNEL_LAYOUT_5POINT1_BACK;
+			return av_channel_layout_copy(layout, &five_one);
+		}
+		case 7: {
+			AVChannelLayout six_one = AV_CHANNEL_LAYOUT_6POINT1_BACK;
+			return av_channel_layout_copy(layout, &six_one);
+		}
+		case 8: {
+			AVChannelLayout seven_one = AV_CHANNEL_LAYOUT_7POINT1;
+			return av_channel_layout_copy(layout, &seven_one);
+		}
+		default:
+			return -1;
+	}
+}
 
+static AVCodecContext *open_codec_context(int channels, int sample_rate, int bitrate) {
 	const AVCodec *codec = avcodec_find_encoder(AV_CODEC_ID_AAC);
 	if (!codec) return NULL;
 
@@ -40,15 +80,25 @@ EncoderContext *init_encoder(int channels, int sample_rate, int bitrate) {
 	codec_ctx->bit_rate = bitrate;
 	codec_ctx->time_base = (AVRational){1, sample_rate};
 
-	AVChannelLayout layout;
-	av_channel_layout_default(&layout, channels);
-	av_channel_layout_copy(&codec_ctx->ch_layout, &layout);
-	av_channel_layout_uninit(&layout);
+	if (set_aac_channel_layout(&codec_ctx->ch_layout, channels) < 0) {
+		avcodec_free_context(&codec_ctx);
+		return NULL;
+	}
 
 	if (avcodec_open2(codec_ctx, codec, NULL) < 0) {
 		avcodec_free_context(&codec_ctx);
 		return NULL;
 	}
+
+	return codec_ctx;
+}
+
+EMSCRIPTEN_KEEPALIVE
+EncoderContext *init_encoder(int channels, int sample_rate, int bitrate) {
+	av_log_set_level(AV_LOG_ERROR);
+
+	AVCodecContext *codec_ctx = open_codec_context(channels, sample_rate, bitrate);
+	if (!codec_ctx) return NULL;
 
 	AVPacket *packet = av_packet_alloc();
 	if (!packet) {
@@ -162,8 +212,20 @@ void flush_encoder_start(EncoderContext *ctx) {
 }
 
 EMSCRIPTEN_KEEPALIVE
-void reset_encoder(EncoderContext *ctx) {
-	avcodec_flush_buffers(ctx->codec_ctx);
+int reset_encoder(EncoderContext *ctx) {
+	// The AAC encoder can't be flushed (avcodec_flush_buffers does nothing for it), so once drained, it's done for
+	// good. A fresh one takes its place.
+	AVCodecContext *codec_ctx = open_codec_context(
+		ctx->codec_ctx->ch_layout.nb_channels,
+		ctx->codec_ctx->sample_rate,
+		ctx->codec_ctx->bit_rate
+	);
+	if (!codec_ctx) return -1;
+
+	avcodec_free_context(&ctx->codec_ctx);
+	ctx->codec_ctx = codec_ctx;
+
+	return 0;
 }
 
 EMSCRIPTEN_KEEPALIVE

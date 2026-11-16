@@ -43,7 +43,7 @@ export const unrefWorker = async () => {
 			keepAliveInterval = null;
 		}
 
-		const worker = await workerPromise;
+		const worker = await workerPromise?.catch(() => null);
 		if (worker) {
 			if (workerError) {
 				// The failed worker was already terminated. With nobody using it anymore, the next ref can start fresh
@@ -88,8 +88,14 @@ export const sendCommand = async <T extends string>(
 
 const ensureWorker = () => {
 	return workerPromise ??= (async () => {
-		// eslint-disable-next-line @typescript-eslint/no-unsafe-call
-		const worker = (await createWorker()) as ExtendedWorker;
+		let worker: ExtendedWorker;
+		try {
+			// eslint-disable-next-line @typescript-eslint/no-unsafe-call
+			worker = (await createWorker()) as ExtendedWorker;
+		} catch (error) {
+			workerPromise = null; // So that the next use tries again
+			throw error;
+		}
 		worker.unref?.(); // Start unreffed
 
 		const onMessage = (data: WorkerResponse) => {

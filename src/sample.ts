@@ -413,9 +413,14 @@ export class VideoSample implements Disposable {
 						throw new TypeError('plane.stride must be a non-negative integer.');
 					}
 				}
+
+				const planeCount = getPlaneConfigs(init.format).length;
+				if (init.layout.length !== planeCount) {
+					throw new TypeError(`init.layout must have ${planeCount} entries for format ${init.format}.`);
+				}
 			}
 			if (init.visibleRect !== undefined) {
-				validateRectangle(init.visibleRect, 'init.visibleRect');
+				validateVisibleRect(init.visibleRect);
 			}
 			if (
 				init.displayWidth !== undefined
@@ -493,6 +498,9 @@ export class VideoSample implements Disposable {
 			this._layout = layout;
 			this.colorSpace = new VideoSampleColorSpace(colorSpaceInit);
 		} else if (typeof VideoFrame !== 'undefined' && data instanceof VideoFrame) {
+			if (data.codedWidth === 0) { // Closed frames have their size zeroed out
+				throw new TypeError('data must not be a closed VideoFrame.');
+			}
 			if (init?.rotation !== undefined && ![0, 90, 180, 270].includes(init.rotation)) {
 				throw new TypeError('init.rotation, when provided, must be 0, 90, 180, or 270.');
 			}
@@ -506,7 +514,7 @@ export class VideoSample implements Disposable {
 				throw new TypeError('init.duration, when provided, must be a non-negative number.');
 			}
 			if (init?.visibleRect !== undefined) {
-				validateRectangle(init.visibleRect, 'init.visibleRect');
+				validateVisibleRect(init.visibleRect);
 			}
 
 			this._data = data;
@@ -564,7 +572,7 @@ export class VideoSample implements Disposable {
 				throw new TypeError('init.duration, when provided, must be a non-negative number.');
 			}
 			if (init.visibleRect !== undefined) {
-				validateRectangle(init.visibleRect, 'init.visibleRect');
+				validateVisibleRect(init.visibleRect);
 			}
 
 			if (typeof VideoFrame !== 'undefined') {
@@ -654,9 +662,6 @@ export class VideoSample implements Disposable {
 				throw new TypeError('init.duration, when provided, must be a non-negative number.');
 			}
 
-			this._data = data;
-			data._referenceCount++;
-
 			this.format = data.getFormat();
 			if (this.format !== null && !VIDEO_SAMPLE_PIXEL_FORMATS.includes(this.format)) {
 				throw new TypeError('getFormat() must return a VideoSamplePixelFormat or null.');
@@ -690,6 +695,9 @@ export class VideoSample implements Disposable {
 			this.timestamp = init.timestamp!;
 			this.duration = init.duration ?? 0;
 			this.colorSpace = data.getColorSpace();
+
+			this._data = data;
+			data._referenceCount++;
 		} else {
 			throw new TypeError(
 				'Invalid data type: Must be a BufferSource, CanvasImageSource, or VideoSampleResource.',
@@ -879,10 +887,11 @@ export class VideoSample implements Disposable {
 				}
 
 				const tempFrame = this.toVideoFrame();
-				const result = await tempFrame.copyTo(destination, options);
-				tempFrame.close();
-
-				return result;
+				try {
+					return await tempFrame.copyTo(destination, options);
+				} finally {
+					tempFrame.close();
+				}
 			}
 		}
 
@@ -921,7 +930,9 @@ export class VideoSample implements Disposable {
 			assert(this._layout.length === planeConfigs.length);
 
 			dataPlanes = this._layout.map((planeLayout, i) => {
-				const height = Math.ceil(this.codedHeight / planeConfigs[i]!.heightDivisor);
+				const height = Math.ceil(
+					(this.visibleRect.top + this.visibleRect.height) / planeConfigs[i]!.heightDivisor,
+				);
 
 				return {
 					data: (this._data as Uint8Array).subarray(
@@ -1021,18 +1032,25 @@ export class VideoSample implements Disposable {
 			const needsAlphaConversion = this.format.includes('X') && options.format.includes('A');
 
 			if (needsRgbConversion || needsAlphaConversion) {
-				// Loop over the destination bytes
-				for (let i = 0; i < combinedLayout.allocationSize; i += 4) {
-					if (needsRgbConversion) {
-						// Swap R with B
-						const r = destBytes[i]!;
-						const b = destBytes[i + 2]!;
-						destBytes[i] = b;
-						destBytes[i + 2] = r;
-					}
+				const computedLayout = combinedLayout.computedLayouts[0]!;
 
-					if (needsAlphaConversion) {
-						destBytes[i + 3] = 255;
+				// Loop over the destination bytes
+				for (let row = 0; row < computedLayout.sourceHeight; row++) {
+					const rowStart = computedLayout.destinationOffset + row * computedLayout.destinationStride;
+					const rowEnd = rowStart + computedLayout.sourceWidthBytes;
+
+					for (let i = rowStart; i < rowEnd; i += 4) {
+						if (needsRgbConversion) {
+							// Swap R with B
+							const r = destBytes[i]!;
+							const b = destBytes[i + 2]!;
+							destBytes[i] = b;
+							destBytes[i + 2] = r;
+						}
+
+						if (needsAlphaConversion) {
+							destBytes[i + 3] = 255;
+						}
 					}
 				}
 			}
@@ -1091,7 +1109,7 @@ export class VideoSample implements Disposable {
 				codedWidth: this.codedWidth,
 				codedHeight: this.codedHeight,
 				timestamp: this.microsecondTimestamp,
-				duration: this.microsecondDuration,
+				duration: this.microsecondDuration || undefined, // Drag 0 duration to undefined, glitches some codecs
 				colorSpace: this.colorSpace,
 				visibleRect: this.visibleRect,
 				displayWidth: this.squarePixelWidth, // Not display* since we're not passing rotation
@@ -1107,13 +1125,20 @@ export class VideoSample implements Disposable {
 
 			return new VideoFrame(this._data, {
 				format: this.format! as VideoPixelFormat,
-				codedWidth: this.codedWidth, // This is technically wrong! codedWidth is a lie technically. But, since
-				codedHeight: this.codedHeight, // we pass the layout (which contains the true coded width), we're good.
+				// The true coded size isn't known, but since we pass the layout (which contains the true strides), the
+				// smallest size containing the visible rect is good enough
+				codedWidth: this.visibleRect.left + this.visibleRect.width,
+				codedHeight: this.visibleRect.top + this.visibleRect.height,
 				layout: this._layout,
 				timestamp: this.microsecondTimestamp,
 				duration: this.microsecondDuration || undefined,
 				colorSpace: this.colorSpace,
-				visibleRect: this.visibleRect,
+				visibleRect: {
+					x: this.visibleRect.left,
+					y: this.visibleRect.top,
+					width: this.visibleRect.width,
+					height: this.visibleRect.height,
+				},
 				displayWidth: this.squarePixelWidth, // Not display* since we're not passing rotation
 				displayHeight: this.squarePixelHeight,
 			});
@@ -1359,10 +1384,10 @@ export class VideoSample implements Disposable {
 		let newHeight: number;
 
 		const { sx, sy, sWidth, sHeight } = this._unmapSourceRegion(
-			options.crop?.left ?? 0,
-			options.crop?.top ?? 0,
-			options.crop?.width ?? rotatedWidth,
-			options.crop?.height ?? rotatedHeight,
+			finalCrop?.left ?? 0,
+			finalCrop?.top ?? 0,
+			finalCrop?.width ?? rotatedWidth,
+			finalCrop?.height ?? rotatedHeight,
 			rotation,
 			flip,
 		);
@@ -1373,8 +1398,8 @@ export class VideoSample implements Disposable {
 			newWidth = canvasWidth;
 			newHeight = canvasHeight;
 		} else {
-			const [sampleWidth, sampleHeight] = options.crop
-				? [options.crop.width, options.crop.height]
+			const [sampleWidth, sampleHeight] = finalCrop
+				? [finalCrop.width, finalCrop.height]
 				: [rotatedWidth, rotatedHeight];
 
 			const scale = options.fit === 'contain'
@@ -1385,6 +1410,8 @@ export class VideoSample implements Disposable {
 			dx = (canvasWidth - newWidth) / 2;
 			dy = (canvasHeight - newHeight) / 2;
 		}
+
+		const source = this.toCanvasImageSource();
 
 		context.save();
 
@@ -1403,7 +1430,7 @@ export class VideoSample implements Disposable {
 
 		// Important that we don't use .draw() here since that would take rotation and flip into account, but we wanna
 		// handle them ourselves here
-		context.drawImage(this.toCanvasImageSource(), sx, sy, sWidth, sHeight, dx, dy, newWidth, newHeight);
+		context.drawImage(source, sx, sy, sWidth, sHeight, dx, dy, newWidth, newHeight);
 
 		context.restore();
 	}
@@ -1689,6 +1716,7 @@ export class VideoSample implements Disposable {
 			// Any previous rotation and flip are now baked in
 			rotation: 0,
 			flip: false,
+			encodeOptions: this.encodeOptions,
 		});
 	}
 
@@ -2040,6 +2068,13 @@ export const validateCropRectangle = (crop: CropRectangle, prefix: string) => {
 	}
 };
 
+const validateVisibleRect = (visibleRect: Rectangle) => {
+	validateRectangle(visibleRect, 'init.visibleRect');
+	if (visibleRect.width === 0 || visibleRect.height === 0) {
+		throw new TypeError('init.visibleRect must not be empty.');
+	}
+};
+
 const validateVideoFrameCopyToOptions = (options: VideoFrameCopyToOptions) => {
 	if (!options || typeof options !== 'object') {
 		throw new TypeError('options must be an object.');
@@ -2221,11 +2256,11 @@ const ParseVideoFrameCopyToOptions = (
 	options: VideoFrameCopyToOptions,
 ): CombinedBufferLayout => {
 	// 1. Let defaultRect be the result of performing the getter steps for visibleRect.
-	const defaultRect: Rectangle = {
-		left: 0,
-		top: 0,
-		width: sample.codedWidth,
-		height: sample.codedHeight,
+	const defaultRect: DOMRectInit = {
+		x: sample.visibleRect.left,
+		y: sample.visibleRect.top,
+		width: sample.visibleRect.width,
+		height: sample.visibleRect.height,
 	};
 
 	// 2. Let overrideRect be undefined.
@@ -2236,8 +2271,9 @@ const ParseVideoFrameCopyToOptions = (
 	const parsedRect = ParseVisibleRect(
 		defaultRect,
 		overrideRect,
-		sample.codedWidth,
-		sample.codedHeight,
+		// The true coded size isn't known, but it's at least large enough to contain the visible rect
+		sample.visibleRect.left + sample.visibleRect.width,
+		sample.visibleRect.top + sample.visibleRect.height,
 		sample.format,
 	);
 
@@ -2278,8 +2314,8 @@ const ParseVisibleRect = (
 
 	// 2. If overrideRect is not undefined:
 	if (overrideRect !== undefined) {
-		// If either of overrideRect.width or height is 0, return a TypeError.
-		if (overrideRect.width === 0 || overrideRect.height === 0) {
+		// If either of overrideRect.width or height is 0, return a TypeError. (They default to 0 when missing)
+		if (!overrideRect.width || !overrideRect.height) {
 			throw new TypeError('visibleRect dimensions cannot be zero.');
 		}
 		// If the sum of overrideRect.x and overrideRect.width is greater than codedWidth, return a TypeError.
@@ -2383,7 +2419,7 @@ const ComputeLayoutAndAllocationSize = (
 		// Set computedLayout’s sourceLeftBytes...
 		computedLayout.sourceLeftBytes = Math.floor(Math.trunc(parsedRect.x || 0) / sampleWidth) * sampleBytes;
 		// Set computedLayout’s sourceWidthBytes...
-		computedLayout.sourceWidthBytes = Math.floor(Math.trunc(parsedRect.width || 0) / sampleWidth) * sampleBytes;
+		computedLayout.sourceWidthBytes = Math.ceil(Math.trunc(parsedRect.width || 0) / sampleWidth) * sampleBytes;
 
 		// If layout is not undefined:
 		if (layout !== undefined) {
@@ -2508,6 +2544,9 @@ export type AudioSampleInit = {
 	sampleRate: number;
 	/** The presentation timestamp of the sample in seconds. */
 	timestamp: number;
+
+	/** @internal */
+	_doNotCopy?: boolean;
 };
 
 /**
@@ -2598,9 +2637,6 @@ export class AudioSample implements Disposable {
 			this.timestamp = init.timestamp / 1e6;
 			this.duration = init.numberOfFrames / init.sampleRate;
 		} else if (init instanceof AudioSampleResource) {
-			this._data = init;
-			init._referenceCount++;
-
 			this.format = init.getFormat();
 			if (!AUDIO_SAMPLE_FORMATS.has(this.format)) {
 				throw new TypeError('getFormat() must return an AudioSampleFormat.');
@@ -2627,6 +2663,9 @@ export class AudioSample implements Disposable {
 			}
 
 			this.duration = this.numberOfFrames / this.sampleRate;
+
+			this._data = init;
+			init._referenceCount++;
 		} else {
 			if (!init || typeof init !== 'object') {
 				throw new TypeError('Invalid AudioDataInit: must be an object.');
@@ -2638,7 +2677,7 @@ export class AudioSample implements Disposable {
 			if (!Number.isFinite(init.sampleRate) || init.sampleRate <= 0) {
 				throw new TypeError('Invalid AudioDataInit: sampleRate must be > 0.');
 			}
-			if (!Number.isInteger(init.numberOfChannels) || init.numberOfChannels === 0) {
+			if (!Number.isInteger(init.numberOfChannels) || init.numberOfChannels <= 0) {
 				throw new TypeError('Invalid AudioDataInit: numberOfChannels must be an integer > 0.');
 			}
 			if (!Number.isFinite(init?.timestamp)) {
@@ -2659,7 +2698,10 @@ export class AudioSample implements Disposable {
 			this.duration = numberOfFrames / init.sampleRate;
 
 			let dataBuffer: Uint8Array;
-			if (init.data instanceof ArrayBuffer) {
+			if (
+				init.data instanceof ArrayBuffer
+				|| (typeof SharedArrayBuffer !== 'undefined' && init.data instanceof SharedArrayBuffer)
+			) {
 				dataBuffer = new Uint8Array(init.data);
 			} else if (ArrayBuffer.isView(init.data)) {
 				dataBuffer = new Uint8Array(init.data.buffer, init.data.byteOffset, init.data.byteLength);
@@ -2673,7 +2715,9 @@ export class AudioSample implements Disposable {
 				throw new TypeError('Invalid AudioDataInit: insufficient data size.');
 			}
 
-			this._data = dataBuffer;
+			this._data = init._doNotCopy
+				? dataBuffer
+				: dataBuffer.slice(); // Copy it
 		}
 
 		finalizationRegistry?.register(this, { type: 'audio', data: this._data }, this);
@@ -2704,8 +2748,9 @@ export class AudioSample implements Disposable {
 
 		const destFormat = options.format ?? this.format;
 
+		// Offset 0 is always in range, so that an empty sample can be copied too
 		const frameOffset = options.frameOffset ?? 0;
-		if (frameOffset >= this.numberOfFrames) {
+		if (frameOffset > 0 && frameOffset >= this.numberOfFrames) {
 			throw new RangeError('frameOffset out of range');
 		}
 
@@ -2763,8 +2808,10 @@ export class AudioSample implements Disposable {
 
 		const numFrames = this.numberOfFrames;
 		const numChannels = this.numberOfChannels;
+
+		// Offset 0 is always in range, so that an empty sample can be copied too
 		const frameOffset = optFrameOffset ?? 0;
-		if (frameOffset >= numFrames) {
+		if (frameOffset > 0 && frameOffset >= numFrames) {
 			throw new RangeError('frameOffset out of range');
 		}
 
@@ -2960,6 +3007,9 @@ export class AudioSample implements Disposable {
 				numberOfChannels: this.numberOfChannels,
 				timestamp: this.timestamp,
 				data: this._data,
+
+				// It's already been copied, if we copy it again we make the clone unnecessarily expensive
+				_doNotCopy: true,
 			});
 		}
 	}
@@ -3029,6 +3079,7 @@ export class AudioSample implements Disposable {
 			sampleRate: this.sampleRate,
 			numberOfChannels: this.numberOfChannels,
 			timestamp: this.timestamp + startFrame / this.sampleRate,
+			_doNotCopy: true,
 		});
 	}
 
@@ -3197,6 +3248,7 @@ export class AudioSample implements Disposable {
 				numberOfChannels,
 				timestamp: timestamp + currentRelativeFrame / sampleRate,
 				data: chunkData,
+				_doNotCopy: true,
 			});
 
 			currentRelativeFrame += framesToCopy;
@@ -3245,6 +3297,7 @@ export class AudioSample implements Disposable {
 				numberOfChannels,
 				timestamp: timestamp + currentRelativeFrame / sampleRate,
 				data: chunkData,
+				_doNotCopy: true,
 			});
 
 			result.push(audioSample);
@@ -3465,5 +3518,6 @@ export const audioSampleToInterleavedFormat = (sample: AudioSample, format: 'u8'
 		sampleRate: sample.sampleRate,
 		timestamp: sample.timestamp,
 		duration: sample.duration,
+		_doNotCopy: true,
 	});
 };

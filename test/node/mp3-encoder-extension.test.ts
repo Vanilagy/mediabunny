@@ -9,6 +9,7 @@ import { AudioSampleSource } from '../../src/media-source.js';
 import { EncodedPacketSink } from '../../src/media-sink.js';
 import { Mp3OutputFormat, Mp4OutputFormat } from '../../src/output-format.js';
 import { AudioSample } from '../../src/sample.js';
+import { EncodedPacket } from '../../src/packet.js';
 import { registerMp3Encoder } from '@mediabunny/mp3-encoder';
 import { assert } from '../../src/misc.js';
 
@@ -90,16 +91,21 @@ test('MP3 with huge timestamps', async () => {
 
 	const sampleRate = 44100;
 	const channels = 2;
-	const timestamp = 1e9;
+	const timestamp = 1.7e9; // Big enough for per-frame float rounding to add up to a noticeable drift
 	const durationSeconds = 2;
 	const data = createSineWave(sampleRate, channels, durationSeconds);
+	const packets: EncodedPacket[] = [];
 
 	const output = new Output({
 		format: new Mp4OutputFormat({ fastStart: 'fragmented' }),
 		target: new BufferTarget(),
 	});
 
-	const audioSource = new AudioSampleSource({ codec: 'mp3', quality: new Quality({ bitrate: 128_000 }) });
+	const audioSource = new AudioSampleSource({
+		codec: 'mp3',
+		quality: new Quality({ bitrate: 128_000 }),
+		onEncodedPacket: packet => packets.push(packet),
+	});
 	output.addAudioTrack(audioSource);
 
 	await output.start();
@@ -126,4 +132,12 @@ test('MP3 with huge timestamps', async () => {
 	assert(firstPacket);
 
 	expect(firstPacket.timestamp).toBeCloseTo(timestamp - 1105 / sampleRate, 6);
+
+	const firstTimestampInSamples = timestamp * sampleRate - 1105;
+	const maxDriftInSamples = Math.max(...packets.map(
+		(packet, i) => Math.abs(sampleRate * packet.timestamp - (firstTimestampInSamples + 1152 * i)),
+	));
+
+	expect(packets.length).toBeGreaterThan(durationSeconds * sampleRate / 1152 - 2);
+	expect(maxDriftInSamples).toBeLessThan(0.05);
 });

@@ -147,6 +147,6 @@ The build artifacts included in this repo, which are also the ones bundled into 
 - Emscripten 4.0.21 (`d6f42310010ddec0753a69bab01a4b33aae255b7`)
 - `src/bridge.c` of this package
 
-SHA-256 of the WASM binary inlined in `build/flac.js`: `ea25f2da12550128391e0d83465deb887c3bef96b7ee4a9b34ebb1d8202fffbe`
+SHA-256 of the WASM binary inlined in `build/flac.js`: `0f1275da2fa046d33d4e3cabeea7054b418c4f7faa699404e8a3658158f87357`
 
 libFLAC is licensed under Xiph.Org's BSD-style license; its copyright notice and license are in [`licenses/libflac`](./licenses/libflac).

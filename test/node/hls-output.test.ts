@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest';
-import { Output, OutputTrackGroup } from '../../src/output.js';
+import { Output, OutputTrackGroup, OutputVideoTrack } from '../../src/output.js';
 import {
 	AdtsOutputFormat,
 	CmafOutputFormat,
@@ -9,6 +9,7 @@ import {
 	Mp3OutputFormat,
 	Mp4OutputFormat,
 	MpegTsOutputFormat,
+	OggOutputFormat,
 	WavOutputFormat,
 } from '../../src/output-format.js';
 import {
@@ -29,6 +30,7 @@ import { BufferSource, CustomPathedSource, FilePathSource } from '../../src/sour
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { InputAudioTrack, InputVideoTrack } from '../../src/input-track.js';
 import { EncodedPacketSink } from '../../src/media-sink.js';
+import { Conversion } from '../../src/conversion.js';
 const videoSource = (codec: VideoCodec = 'avc') => new EncodedVideoPacketSource(codec);
 const audioSource = (codec: AudioCodec = 'aac') => new EncodedAudioPacketSource(codec);
 
@@ -198,6 +200,47 @@ test('Playlist assignment, multiple video with different metadata #2', async () 
 	expect(decl[2]!.playlist).toBe(decl[0]!.playlist);
 });
 
+test('Playlist assignment, multiple video with different metadata and an I-frame track', async () => {
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new MpegTsOutputFormat(),
+		}),
+		target: new PathedTarget('', () => new NullTarget()),
+	});
+
+	output.addVideoTrack(videoSource(), { languageCode: 'eng' });
+	output.addVideoTrack(videoSource(), { languageCode: 'esp' });
+	output.addVideoTrack(videoSource(), { hasOnlyKeyPackets: true });
+
+	await output.start();
+
+	const muxer = output._muxer as HlsMuxer;
+	const decl = muxer.playlistDeclarations;
+
+	expect(decl).toHaveLength(4);
+
+	expect(decl[0]!.playlist.tracks).toHaveLength(1);
+	expect(decl[0]!.groupId).toBe('video-1');
+	expect(decl[0]!.references).toHaveLength(0);
+	expect(decl[0]!.noUri).toBe(true);
+
+	expect(decl[1]!.playlist.tracks).toHaveLength(1);
+	expect(decl[1]!.groupId).toBe('video-1');
+	expect(decl[1]!.references).toHaveLength(0);
+	expect(decl[1]!.noUri).toBe(false);
+
+	expect(decl[2]!.playlist.tracks).toHaveLength(1);
+	expect(decl[2]!.groupId).toBeNull();
+	expect(decl[2]!.references).toEqual(decl.slice(0, 2));
+
+	expect(decl[2]!.playlist).toBe(decl[0]!.playlist);
+
+	expect(decl[3]!.playlist.tracks).toHaveLength(1);
+	expect((decl[3]!.playlist.tracks[0] as OutputVideoTrack).metadata.hasOnlyKeyPackets).toBe(true);
+	expect(decl[3]!.groupId).toBeNull();
+	expect(decl[3]!.references).toHaveLength(0);
+});
+
 test('Playlist assignment, multiple audio with different metadata', async () => {
 	const output = new Output({
 		format: new HlsOutputFormat({
@@ -253,6 +296,36 @@ test('Playlist assignment, video and audio', async () => {
 	expect(decl[0]!.playlist.tracks).toHaveLength(2);
 	expect(decl[0]!.groupId).toBeNull();
 	expect(decl[0]!.references).toHaveLength(0);
+});
+
+test('Playlist assignment, video and audio without a common segment format', async () => {
+	const output = new Output({
+		format: new HlsOutputFormat({
+			// MPEG-TS can't hold Opus and Ogg can't hold video
+			segmentFormat: [new MpegTsOutputFormat(), new OggOutputFormat()],
+		}),
+		target: new PathedTarget('', () => new NullTarget()),
+	});
+
+	output.addVideoTrack(videoSource());
+	output.addAudioTrack(audioSource('opus'));
+
+	await output.start();
+
+	const muxer = output._muxer as HlsMuxer;
+	const decl = muxer.playlistDeclarations;
+
+	expect(decl).toHaveLength(2);
+
+	expect(decl[0]!.playlist.tracks).toHaveLength(1);
+	expect(decl[0]!.playlist.tracks[0]!.type).toBe('audio');
+	expect(decl[0]!.groupId).toBe('audio-1');
+	expect(decl[0]!.noUri).toBe(false);
+
+	expect(decl[1]!.playlist.tracks).toHaveLength(1);
+	expect(decl[1]!.playlist.tracks[0]!.type).toBe('video');
+	expect(decl[1]!.groupId).toBeNull();
+	expect(decl[1]!.references).toEqual([decl[0]!]);
 });
 
 test('Playlist assignment, one video and multiple audio', async () => {
@@ -825,10 +898,33 @@ const opusMetadata: EncodedAudioChunkMetadata = {
 	},
 };
 
+const flacMetadata: EncodedAudioChunkMetadata = {
+	decoderConfig: {
+		codec: 'flac',
+		numberOfChannels: 2,
+		sampleRate: 44100,
+		// 'fLaC', then a lone STREAMINFO block
+		description: new Uint8Array([
+			102, 76, 97, 67, 128, 0, 0, 34,
+			16, 0, 16, 0, 0, 0, 0, 0, 0, 0, 10, 196, 66, 240, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		]),
+	},
+};
+
+const mp3Metadata: EncodedAudioChunkMetadata = {
+	decoderConfig: {
+		codec: 'mp3',
+		numberOfChannels: 2,
+		sampleRate: 44100,
+	},
+};
+
 const setUpSegmentationEnvironment = async (options: {
 	video?: boolean;
 	audio?: boolean;
 	mediaTimestampBase?: number;
+	targetDuration?: number;
 } = {}) => {
 	let result: string | null = null;
 	let segmentCount = 0;
@@ -840,6 +936,7 @@ const setUpSegmentationEnvironment = async (options: {
 			segmentFormat: new MpegTsOutputFormat(), // No ADTS for simplicity
 			// So that segment timestamps can be compared directly
 			mediaTimestampBase: options.mediaTimestampBase ?? 0,
+			targetDuration: options.targetDuration,
 		}),
 		target: new PathedTarget('', (request) => {
 			const target = new BufferTarget();
@@ -947,7 +1044,7 @@ test('Segmentation, empty', async () => {
 	expect(env.result).toBe(`#EXTM3U
 #EXT-X-VERSION:3
 #EXT-X-PLAYLIST-TYPE:VOD
-#EXT-X-TARGETDURATION:2
+#EXT-X-TARGETDURATION:1
 #EXT-X-INDEPENDENT-SEGMENTS
 
 #EXT-X-ENDLIST
@@ -1541,7 +1638,7 @@ test('Segmentation, wholly negative timestamps', async () => {
 	expect(env.result).toBe(`#EXTM3U
 #EXT-X-VERSION:3
 #EXT-X-PLAYLIST-TYPE:VOD
-#EXT-X-TARGETDURATION:2
+#EXT-X-TARGETDURATION:1
 #EXT-X-INDEPENDENT-SEGMENTS
 
 #EXTINF:0.5,
@@ -1974,6 +2071,100 @@ segment-1-1.ts
 	);
 });
 
+test('Segmentation, dual-track, closing all tracks at once', async () => {
+	const rejections: unknown[] = [];
+	const onRejection = (reason: unknown) => rejections.push(reason);
+	process.on('unhandledRejection', onRejection);
+
+	const env = await setUpSegmentationEnvironment({ video: true, audio: true });
+
+	try {
+		await env.addVideoPacket(0, 'key', 0.5);
+		await env.addAudioPacket(0, 0.5);
+
+		env.videoSource!.close();
+		env.audioSource!.close();
+		await new Promise(resolve => setTimeout(resolve, 10));
+
+		expect(env.segmentCount).toBe(1);
+
+		await env.output.finalize();
+		await new Promise(resolve => setTimeout(resolve, 10));
+	} finally {
+		process.off('unhandledRejection', onRejection);
+	}
+
+	expect(rejections).toEqual([]);
+
+	expect(env.result).toBe(`#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-TARGETDURATION:1
+#EXT-X-INDEPENDENT-SEGMENTS
+
+#EXTINF:0.5,
+segment-1-1.ts
+
+#EXT-X-ENDLIST
+`,
+	);
+});
+
+test('Segmentation, floating-point noise in segment durations', async () => {
+	const env = await setUpSegmentationEnvironment({ video: true });
+
+	for (let i = 0; i < 150; i++) {
+		await env.addVideoPacket(0.001 + 0.04 * i, i % 50 === 0 ? 'key' : 'delta', 0.04);
+	}
+
+	await env.output.finalize();
+	expect(env.segmentCount).toBe(3);
+
+	expect(env.result).toBe(`#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-TARGETDURATION:2
+#EXT-X-INDEPENDENT-SEGMENTS
+
+#EXTINF:2,
+segment-1-1.ts
+#EXTINF:2,
+segment-1-2.ts
+#EXTINF:2,
+segment-1-3.ts
+
+#EXT-X-ENDLIST
+`,
+	);
+});
+
+test('Segmentation, infinite target duration', async () => {
+	const env = await setUpSegmentationEnvironment({
+		video: true,
+		targetDuration: Infinity,
+	});
+
+	for (let i = 0; i < 10; i++) {
+		await env.addVideoPacket(0.5 * i, i % 2 === 0 ? 'key' : 'delta', 0.5);
+	}
+
+	await env.output.finalize();
+	expect(env.segmentCount).toBe(1);
+
+	expect(env.result).toBe(`#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-TARGETDURATION:5
+#EXT-X-INDEPENDENT-SEGMENTS
+
+#EXTINF:5,
+segment-1-1.ts
+
+#EXT-X-ENDLIST
+`,
+	);
+});
+
 test('write, onSegment, onPlaylist, onMaster events', async () => {
 	const onSegment = vi.fn();
 	const onPlaylist = vi.fn();
@@ -2251,6 +2442,7 @@ test('I-frame stream', async () => {
 
 	expect(playlistText).toContain('#EXT-X-I-FRAMES-ONLY');
 	expect(playlistText).toContain('#EXT-X-VERSION:4');
+	expect(playlistText.match(/#EXTINF:/g)).toHaveLength(3); // One segment per I-frame
 
 	expect(masterText).toContain('#EXT-X-I-FRAME-STREAM-INF:');
 	expect(masterText).toMatch(/#EXT-X-I-FRAME-STREAM-INF:[^\n]*URI="/);
@@ -2509,6 +2701,69 @@ test('Opus codec string in master playlist', async () => {
 	expect(await audioTrack.getCodec()).toBe('opus');
 });
 
+test('FLAC and MP3 codec strings in master playlist', async () => {
+	let masterText = '';
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new CmafOutputFormat(),
+			onMaster: (text) => { masterText = text; },
+		}),
+		target: new PathedTarget('master.m3u8', () => new BufferTarget()),
+	});
+
+	output.addAudioTrack(audioSource('flac'), { decoderConfig: flacMetadata.decoderConfig });
+	for (const codec of ['mp3', 'mp4a.69', 'mp4a.6B']) {
+		output.addAudioTrack(audioSource('mp3'), {
+			decoderConfig: {
+				...mp3Metadata.decoderConfig!,
+				codec,
+			},
+		});
+	}
+
+	await output.start();
+	await output.finalize();
+
+	// HLS wants the RFC 6381 identifiers, not the WebCodecs ones
+	expect(masterText.match(/CODECS="[^"]*"/g)).toEqual([
+		'CODECS="fLaC"',
+		'CODECS="mp4a.40.34"',
+		'CODECS="mp4a.40.34"',
+		'CODECS="mp4a.40.34"',
+	]);
+});
+
+test('Codec strings of every rendition in a group', async () => {
+	let masterText = '';
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new MpegTsOutputFormat(),
+			onMaster: (text) => { masterText = text; },
+		}),
+		target: new PathedTarget('master.m3u8', () => new BufferTarget()),
+	});
+
+	output.addVideoTrack(videoSource(), { decoderConfig: avcMetadata.decoderConfig });
+	output.addAudioTrack(audioSource(), {
+		languageCode: 'eng',
+		decoderConfig: aacMetadata.decoderConfig,
+	});
+	output.addAudioTrack(audioSource(), {
+		languageCode: 'spa',
+		decoderConfig: {
+			...aacMetadata.decoderConfig!,
+			codec: 'mp4a.40.5',
+		},
+	});
+
+	await output.start();
+	await output.finalize();
+
+	expect(masterText).toContain('CODECS="avc1.4d401e,mp4a.40.2,mp4a.40.5"');
+});
+
 test('Empty playlist bandwidth, from track metadata', async () => {
 	let masterText = '';
 
@@ -2554,6 +2809,94 @@ test('Empty playlist bandwidth, medium quality default fallback', async () => {
 
 	const bandwidth = Number(masterText.match(/BANDWIDTH=(\d+)/)![1]);
 	expect(bandwidth).toBeGreaterThan(0);
+});
+
+test('Empty playlist bandwidth, variant that is its own group\'s rendition', async () => {
+	let masterText = '';
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new MpegTsOutputFormat(),
+			onMaster: (text) => { masterText = text; },
+		}),
+		target: new PathedTarget('master.m3u8', () => new BufferTarget()),
+	});
+
+	// Different languages put both tracks in a group whose URI-less first rendition is the variant itself
+	output.addAudioTrack(audioSource(), {
+		languageCode: 'eng',
+		bitrate: 128_000,
+		averageBitrate: 100_000,
+		decoderConfig: aacMetadata.decoderConfig,
+	});
+	output.addAudioTrack(audioSource(), {
+		languageCode: 'spa',
+		bitrate: 96_000,
+		averageBitrate: 80_000,
+		decoderConfig: aacMetadata.decoderConfig,
+	});
+
+	await output.start();
+	await output.finalize();
+
+	expect(masterText).toContain('BANDWIDTH=128000,AVERAGE-BANDWIDTH=100000,CODECS="mp4a.40.2",');
+});
+
+test('Rendition attributes, no FORCED on audio', async () => {
+	let masterText = '';
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new MpegTsOutputFormat(),
+			onMaster: (text) => { masterText = text; },
+		}),
+		target: new PathedTarget('master.m3u8', () => new BufferTarget()),
+	});
+
+	output.addVideoTrack(videoSource());
+	output.addAudioTrack(audioSource(), { languageCode: 'eng' });
+	output.addAudioTrack(audioSource(), {
+		languageCode: 'deu',
+		disposition: { forced: true },
+	});
+
+	await output.start();
+	await output.finalize();
+
+	expect(masterText).toContain('LANGUAGE="deu"');
+	expect(masterText).not.toContain('FORCED');
+});
+
+test('Rendition attributes, unique names within a group', async () => {
+	let masterText = '';
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new MpegTsOutputFormat(),
+			onMaster: (text) => { masterText = text; },
+		}),
+		target: new PathedTarget('master.m3u8', () => new BufferTarget()),
+	});
+
+	output.addAudioTrack(audioSource(), {
+		name: 'Audio',
+		languageCode: 'eng',
+	});
+	output.addAudioTrack(audioSource(), {
+		name: 'Audio',
+		languageCode: 'spa',
+	});
+	output.addAudioTrack(audioSource(), {
+		name: 'Audio',
+		languageCode: 'deu',
+	});
+
+	await output.start();
+	await output.finalize();
+
+	expect(masterText).toContain('NAME="Audio",LANGUAGE="eng"');
+	expect(masterText).toContain('NAME="Audio (2)",LANGUAGE="spa"');
+	expect(masterText).toContain('NAME="Audio (3)",LANGUAGE="deu"');
 });
 
 const testSparseTracksInSegments = async (hlsOptions: HlsOutputFormatOptions) => {
@@ -2854,6 +3197,50 @@ segment-1-1.ts
 
 #EXT-X-ENDLIST
 `);
+});
+
+test('Same target duration across playlists', async () => {
+	const playlists = new Map<number, string>();
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new MpegTsOutputFormat(),
+			onPlaylist: (content, info) => playlists.set(info.n, content),
+		}),
+		target: new PathedTarget('master.m3u8', () => new BufferTarget()),
+	});
+
+	// The audio tracks become renditions with their own playlists
+	const video = videoSource();
+	const audioEng = audioSource();
+	const audioSpa = audioSource();
+	output.addVideoTrack(video);
+	output.addAudioTrack(audioEng, { languageCode: 'eng' });
+	output.addAudioTrack(audioSpa, { languageCode: 'spa' });
+
+	await output.start();
+
+	for (let i = 0; i < 12; i++) {
+		await audioEng.add(new EncodedPacket(aacPacketData, 'key', 0.5 * i, 0.5), aacMetadata);
+		await audioSpa.add(new EncodedPacket(aacPacketData, 'key', 0.5 * i, 0.5), aacMetadata);
+	}
+
+	// The audio playlists are done before the video produces its overlong segment
+	audioEng.close();
+	audioSpa.close();
+
+	// A single 6-second GOP
+	for (let i = 0; i < 12; i++) {
+		const type = i === 0 ? 'key' : 'delta';
+		await video.add(new EncodedPacket(avcPacketData, type, 0.5 * i, 0.5), avcMetadata);
+	}
+
+	await output.finalize();
+
+	expect(playlists.size).toBe(3);
+	for (const content of playlists.values()) {
+		expect(content).toContain('#EXT-X-TARGETDURATION:6\n');
+	}
 });
 
 test('Live mode, empty', async () => {
@@ -3607,3 +3994,323 @@ const testTimestampWraparound = async (
 		expect(timestamps[i]).toBeCloseTo(start + 0.5 * i, 4);
 	}
 };
+
+test('Non-finite target duration', () => {
+	expect(() => new HlsOutputFormat({
+		segmentFormat: new MpegTsOutputFormat(),
+		targetDuration: NaN,
+	})).toThrow(TypeError);
+	expect(() => new HlsOutputFormat({
+		segmentFormat: new MpegTsOutputFormat(),
+		targetDuration: Infinity,
+	})).not.toThrow();
+	expect(() => new HlsOutputFormat({
+		segmentFormat: new MpegTsOutputFormat(),
+		targetDuration: Infinity,
+		live: true,
+	})).toThrow(TypeError);
+});
+
+test('NaN max live segment count', () => {
+	expect(() => new HlsOutputFormat({
+		segmentFormat: new MpegTsOutputFormat(),
+		maxLiveSegmentCount: NaN,
+	})).toThrow(TypeError);
+});
+
+test('Reserve-mode MP4 segments via Conversion', async () => {
+	using input = new Input({
+		source: new FilePathSource('./test/public/video.mp4'),
+		formats: ALL_FORMATS,
+	});
+
+	const segments: ArrayBuffer[] = [];
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new Mp4OutputFormat({ fastStart: 'reserve' }),
+		}),
+		target: new PathedTarget('master.m3u8', (request) => {
+			const target = new BufferTarget();
+			if (request.path.startsWith('segment')) {
+				target.on('finalized', () => segments.push(target.buffer!));
+			}
+
+			return target;
+		}),
+	});
+
+	const conversion = await Conversion.init({
+		input,
+		output,
+		trim: { end: 5 },
+		showWarnings: false,
+	});
+	await conversion.execute();
+
+	expect(segments.length).toBeGreaterThan(0);
+
+	for (const segment of segments) {
+		using segmentInput = new Input({
+			source: new BufferSource(segment),
+			formats: ALL_FORMATS,
+		});
+		expect(await segmentInput.getTracks()).toHaveLength(2);
+	}
+});
+
+test('Reserve-mode MP4 segments', async () => {
+	const segments: ArrayBuffer[] = [];
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new Mp4OutputFormat({ fastStart: 'reserve' }),
+		}),
+		target: new PathedTarget('master.m3u8', (request) => {
+			const target = new BufferTarget();
+			if (request.path.startsWith('segment')) {
+				target.on('finalized', () => segments.push(target.buffer!));
+			}
+
+			return target;
+		}),
+	});
+
+	const video = videoSource();
+	const audio = audioSource();
+	output.addVideoTrack(video);
+	output.addAudioTrack(audio);
+
+	await output.start();
+
+	// Two segments of four packets per track each
+	for (let i = 0; i < 8; i++) {
+		const type = i % 4 === 0 ? 'key' : 'delta';
+		await video.add(new EncodedPacket(avcPacketData, type, 0.5 * i, 0.5), avcMetadata);
+		await audio.add(new EncodedPacket(aacPacketData, 'key', 0.5 * i, 0.5), aacMetadata);
+	}
+
+	await output.finalize();
+
+	expect(segments).toHaveLength(2);
+
+	for (const segment of segments) {
+		using segmentInput = new Input({
+			source: new BufferSource(segment),
+			formats: ALL_FORMATS,
+		});
+
+		const tracks = await segmentInput.getTracks();
+		expect(tracks).toHaveLength(2);
+		for (const track of tracks) {
+			expect((await track.computePacketStats()).packetCount).toBe(4);
+		}
+	}
+});
+
+test('Subtitle codecs with CMAF segments', () => {
+	const format = new HlsOutputFormat({ segmentFormat: new CmafOutputFormat() });
+	expect(format.getSupportedSubtitleCodecs()).toEqual([]);
+});
+
+test('TrueHD unsupported codec hint', () => {
+	const output = new Output({
+		format: new HlsOutputFormat({ segmentFormat: new CmafOutputFormat() }),
+		target: new PathedTarget('master.m3u8', () => new BufferTarget()),
+	});
+
+	// No segment format can hold TrueHD in HLS, so the message must end right after the codec list
+	expect(() => output.addAudioTrack(audioSource('truehd')))
+		.toThrow(/^Codec 'truehd' cannot be contained .* Supported audio codecs are: .*'\.$/);
+});
+
+test('Peak bitrate window based on the written target duration', async () => {
+	let master: string | null = null;
+	const segmentSizes: number[] = [];
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new MpegTsOutputFormat(),
+			targetDuration: 2.5,
+			onMaster: (content) => {
+				master = content;
+			},
+		}),
+		target: new PathedTarget('master.m3u8', (request) => {
+			const target = new BufferTarget();
+			if (request.path.startsWith('segment')) {
+				target.on('finalized', () => segmentSizes.push(target.buffer!.byteLength));
+			}
+
+			return target;
+		}),
+	});
+
+	const source = videoSource();
+	output.addVideoTrack(source);
+
+	await output.start();
+
+	// Segments of 1.4, 2.5 and 2.5 seconds, the first being way denser than the rest
+	for (let i = 0; i < 140; i++) {
+		await source.add(new EncodedPacket(avcPacketData, i === 0 ? 'key' : 'delta', 0.01 * i, 0.01), avcMetadata);
+	}
+	for (let i = 0; i < 10; i++) {
+		const type = i % 5 === 0 ? 'key' : 'delta';
+		await source.add(new EncodedPacket(avcPacketData, type, 1.4 + 0.5 * i, 0.5), avcMetadata);
+	}
+
+	await output.finalize();
+
+	// TARGETDURATION is 3, so per spec only windows between 1.5 and 4.5 seconds count, which excludes the first
+	// segment on its own
+	expect(segmentSizes).toHaveLength(3);
+	const [size1, size2, size3] = segmentSizes as [number, number, number];
+	const peakBitrate = Math.max(8 * (size1 + size2) / 3.9, 8 * size2 / 2.5, 8 * size3 / 2.5);
+
+	assert(master);
+	expect(master).toContain(`BANDWIDTH=${Math.ceil(peakBitrate)},`);
+});
+
+test('RESOLUTION', async () => {
+	let masterText = '';
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new MpegTsOutputFormat(),
+			onMaster: (text) => { masterText = text; },
+		}),
+		target: new PathedTarget('master.m3u8', () => new BufferTarget()),
+	});
+
+	output.addVideoTrack(videoSource(), {
+		decoderConfig: {
+			codec: 'avc1.4d401e',
+			codedWidth: 1920,
+			codedHeight: 1080,
+		},
+	});
+
+	await output.start();
+	await output.finalize();
+
+	expect(masterText).toContain(',RESOLUTION=1920x1080');
+});
+
+test('MPEG-TS PIDs consistent across segments', async () => {
+	const segments = new Map<string, BufferTarget>();
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new MpegTsOutputFormat(),
+			targetDuration: 1,
+		}),
+		target: new PathedTarget('master.m3u8', (request) => {
+			const target = new BufferTarget();
+			segments.set(request.path, target);
+			return target;
+		}),
+	});
+
+	const video = videoSource();
+	const audio = audioSource();
+	output.addVideoTrack(video);
+	output.addAudioTrack(audio);
+	await output.start();
+
+	// The video ends after the first segment, so the later segments hold only audio
+	await video.add(new EncodedPacket(avcPacketData, 'key', 0, 0.5), avcMetadata);
+	await video.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0.5));
+	video.close();
+	for (let i = 0; i < 6; i++) {
+		await audio.add(new EncodedPacket(aacPacketData, 'key', 0.5 * i, 0.5), aacMetadata);
+	}
+	await output.finalize();
+
+	const audioPids = new Set<number>();
+	for (const [path, target] of segments) {
+		if (!path.endsWith('.ts')) {
+			continue;
+		}
+
+		const bytes = new Uint8Array(target.buffer!);
+		for (let pos = 0; pos < bytes.length; pos += 188) {
+			const pid = ((bytes[pos + 1]! & 0x1f) << 8) | bytes[pos + 2]!;
+			const payloadUnitStart = (bytes[pos + 1]! & 0x40) !== 0;
+			const payloadStart = pos + 4 + ((bytes[pos + 3]! & 0x20) ? 1 + bytes[pos + 4]! : 0);
+
+			// The start of an audio PES packet
+			if (payloadUnitStart && bytes[payloadStart + 3] === 0xc0) {
+				audioPids.add(pid);
+			}
+		}
+	}
+
+	expect([...audioPids]).toEqual([0x101]);
+});
+
+test('RESOLUTION, anamorphic video', async () => {
+	let masterText = '';
+
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new MpegTsOutputFormat(),
+			onMaster: (text) => { masterText = text; },
+		}),
+		target: new PathedTarget('master.m3u8', () => new BufferTarget()),
+	});
+
+	output.addVideoTrack(videoSource(), {
+		decoderConfig: {
+			codec: 'avc1.4d401e',
+			codedWidth: 1440,
+			codedHeight: 1080,
+			displayAspectWidth: 16,
+			displayAspectHeight: 9,
+		},
+	});
+
+	await output.start();
+	await output.finalize();
+
+	expect(masterText).toContain(',RESOLUTION=1920x1080');
+});
+
+test('MP3 segments without a Xing frame', async () => {
+	using input = new Input({
+		source: new FilePathSource('./test/public/Toothsome-Meme.VBRv2.mp3'),
+		formats: ALL_FORMATS,
+	});
+	const inputTrack = await input.getPrimaryAudioTrack();
+	assert(inputTrack);
+	const decoderConfig = await inputTrack.getDecoderConfig();
+	assert(decoderConfig);
+
+	const segments: ArrayBuffer[] = [];
+	const output = new Output({
+		format: new HlsOutputFormat({
+			segmentFormat: new Mp3OutputFormat(),
+		}),
+		target: new PathedTarget('master.m3u8', (request) => {
+			const target = new BufferTarget();
+			if (request.path.startsWith('segment')) {
+				target.on('finalized', () => segments.push(target.buffer!));
+			}
+
+			return target;
+		}),
+	});
+	const source = audioSource('mp3');
+	output.addAudioTrack(source);
+
+	await output.start();
+	for await (const packet of new EncodedPacketSink(inputTrack).packets()) {
+		await source.add(packet, { decoderConfig });
+	}
+	await output.finalize();
+
+	expect(segments.length).toBeGreaterThan(1);
+
+	for (const segment of segments) {
+		const text = new TextDecoder('latin1').decode(segment);
+		expect(text.includes('Xing')).toBe(false);
+		expect(text.includes('Info')).toBe(false);
+	}
+});

@@ -11,6 +11,7 @@ import {
 	addAvcBitstreamRestriction,
 	AvcNalUnitType,
 	concatAvcNalUnits,
+	countShownVideoFrames,
 	deserializeAvcDecoderConfigurationRecord,
 	determineVideoPacketType,
 	extractNalUnitTypeForAvc,
@@ -47,6 +48,7 @@ import {
 	promiseWithResolvers,
 	removeItem,
 	Rotation,
+	roundToDivisor,
 	toAsyncIterator,
 	toDataView,
 	toUint8Array,
@@ -636,6 +638,7 @@ export abstract class BaseMediaSampleSink<
 						// nothing can ever close.
 						terminated = true;
 						ended = true;
+						onQueueDequeue();
 						closeSamples();
 						throw new InputDisposedError();
 					} else if (terminated) {
@@ -643,6 +646,7 @@ export abstract class BaseMediaSampleSink<
 					} else if (hasOutOfBandError) {
 						terminated = true;
 						ended = true;
+						onQueueDequeue();
 						closeSamples();
 						throw outOfBandError;
 					} else if (sampleQueue.length > 0) {
@@ -666,6 +670,7 @@ export abstract class BaseMediaSampleSink<
 				return { value: undefined, done: true };
 			},
 			async throw(error) {
+				await this.return(); // Like a generator function, a throw() ends the iteration
 				throw error;
 			},
 			[Symbol.asyncIterator]() {
@@ -688,6 +693,7 @@ export abstract class BaseMediaSampleSink<
 		let { promise: queueDequeue, resolve: onQueueDequeue } = promiseWithResolvers();
 		let decoderIsFlushed = false;
 		let terminated = false;
+		const { promise: terminatedPromise, resolve: onTerminated } = promiseWithResolvers();
 		let decoder: DecoderWrapper<MediaSample> | null = null;
 
 		// This stores errors that are "out of band" in the sense that they didn't occur in the normal flow of this
@@ -809,62 +815,75 @@ export abstract class BaseMediaSampleSink<
 				timestampsOfInterest.length = 0;
 			};
 
-			for await (const timestamp of timestampIterator) {
-				validateTimestamp(timestamp);
-
-				if (terminated || this._track.input._disposed) {
-					break;
-				}
-
-				const targetPacket = await packetSink.getPacket(timestamp, retrievalOptions);
-				let keyPacket = targetPacket && await packetSink.getKeyPacket(
-					targetPacket.timestamp - preRollDuration,
-					retrievalOptions,
-				);
-				if (targetPacket && !keyPacket) {
-					// The track doesn't reach back far enough for the full pre-roll, so this is the best we can do
-					const firstKeyPacket = await packetSink.getFirstKeyPacket(retrievalOptions);
-					if (firstKeyPacket && firstKeyPacket.timestamp <= targetPacket.timestamp) {
-						keyPacket = firstKeyPacket;
-					}
-				}
-
-				if (!targetPacket || !keyPacket) {
-					if (lastPacket) {
-						await flushDecoder();
+			try {
+				while (true) {
+					// The timestamps may take arbitrarily long to come in, so stop waiting on them once terminated
+					const nextTimestamp = timestampIterator.next();
+					nextTimestamp.catch(() => {}); // It may lose the race and reject later on
+					const result = await Promise.race([nextTimestamp, terminatedPromise]);
+					if (!result || result.done) {
+						break;
 					}
 
-					pushToQueue(null);
-					lastPacket = null;
-					continue;
-				}
+					const timestamp = result.value;
+					validateTimestamp(timestamp);
 
-				// Keep extending the current batch as long as it reaches the key packet anyway (always the case for an
-				// unchanged key packet), so that consecutive timestamps don't redo their pre-roll. Otherwise, or if
-				// we're going back in time, start a new batch at the key packet. The query timestamps within a batch
-				// must not decrease, since the sample matching relies on that.
-				if (
-					!lastPacket
-					|| keyPacket.sequenceNumber > maxSequenceNumber + 1
-					|| timestamp < lastTimestamp
-				) {
-					if (lastPacket) {
-						await flushDecoder(); // Always flush here, improves decoder compatibility
+					if (terminated || this._track.input._disposed) {
+						break;
 					}
 
-					lastKeyPacket = keyPacket;
-					lastDecodedPacket = null;
-					maxSequenceNumber = -1;
+					const targetPacket = await packetSink.getPacket(timestamp, retrievalOptions);
+					let keyPacket = targetPacket && await packetSink.getKeyPacket(
+						targetPacket.timestamp - preRollDuration,
+						retrievalOptions,
+					);
+					if (targetPacket && !keyPacket) {
+						// The track doesn't reach back far enough for the full pre-roll, so this is the best we can do
+						const firstKeyPacket = await packetSink.getFirstKeyPacket(retrievalOptions);
+						if (firstKeyPacket && firstKeyPacket.timestamp <= targetPacket.timestamp) {
+							keyPacket = firstKeyPacket;
+						}
+					}
+
+					if (!targetPacket || !keyPacket) {
+						if (lastPacket) {
+							await flushDecoder();
+						}
+
+						pushToQueue(null);
+						lastPacket = null;
+						continue;
+					}
+
+					// Keep extending the current batch as long as it reaches the key packet anyway (always the case for
+					// an unchanged key packet), so that consecutive timestamps don't redo their pre-roll. Otherwise, or
+					// if we're going back in time, start a new batch at the key packet. The query timestamps within a
+					// batch must not decrease, since the sample matching relies on that.
+					if (
+						!lastPacket
+						|| keyPacket.sequenceNumber > maxSequenceNumber + 1
+						|| timestamp < lastTimestamp
+					) {
+						if (lastPacket) {
+							await flushDecoder(); // Always flush here, improves decoder compatibility
+						}
+
+						lastKeyPacket = keyPacket;
+						lastDecodedPacket = null;
+						maxSequenceNumber = -1;
+					}
+
+					timestampsOfInterest.push(timestamp);
+					maxSequenceNumber = Math.max(targetPacket.sequenceNumber, maxSequenceNumber);
+
+					lastPacket = targetPacket;
+					lastTimestamp = timestamp;
+
+					// Decode right away so that samples come out while the timestamps are still coming in
+					await decodePackets();
 				}
-
-				timestampsOfInterest.push(timestamp);
-				maxSequenceNumber = Math.max(targetPacket.sequenceNumber, maxSequenceNumber);
-
-				lastPacket = targetPacket;
-				lastTimestamp = timestamp;
-
-				// Decode right away so that samples come out while the timestamps are still coming in
-				await decodePackets();
+			} finally {
+				timestampIterator.return().catch(() => {});
 			}
 
 			if (!terminated && !this._track.input._disposed) {
@@ -900,12 +919,16 @@ export abstract class BaseMediaSampleSink<
 						// iteration here - otherwise, the pump keeps queueing decoded samples that
 						// nothing can ever close.
 						terminated = true;
+						onTerminated();
+						onQueueDequeue();
 						closeSamples();
 						throw new InputDisposedError();
 					} else if (terminated) {
 						return { value: undefined, done: true };
 					} else if (hasOutOfBandError) {
 						terminated = true;
+						onTerminated();
+						onQueueDequeue();
 						closeSamples();
 						throw outOfBandError;
 					} else if (sampleQueue.length > 0) {
@@ -922,6 +945,7 @@ export abstract class BaseMediaSampleSink<
 			},
 			async return() {
 				terminated = true;
+				onTerminated();
 				onQueueDequeue();
 				onQueueNotEmpty();
 				closeSamples();
@@ -929,6 +953,7 @@ export abstract class BaseMediaSampleSink<
 				return { value: undefined, done: true };
 			},
 			async throw(error) {
+				await this.return();
 				throw error;
 			},
 			[Symbol.asyncIterator]() {
@@ -1023,27 +1048,33 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 						toUint8Array(this.decoderConfig.description),
 					);
 					if (record && record.sequenceParameterSets.length > 0) {
-						const sps = parseAvcSps(record.sequenceParameterSets[0]!);
-						if (sps) {
-							if (sps.frameMbsOnlyFlag === 0) {
-								// Chromium has/had a bug with playing interlaced AVC
-								// (https://issues.chromium.org/issues/456919096) which can be worked around by
-								// requesting that software decoding be used. So, here we peek into the AVC description,
-								// if present, and switch to software decoding if we find interlaced content.
-								this.decoderConfig = {
-									...this.decoderConfig,
-									hardwareAcceleration: 'prefer-software',
-								};
-							}
+						const firstSps = parseAvcSps(record.sequenceParameterSets[0]!);
+						if (firstSps && firstSps.frameMbsOnlyFlag === 0) {
+							// Chromium has/had a bug with playing interlaced AVC
+							// (https://issues.chromium.org/issues/456919096) which can be worked around by
+							// requesting that software decoding be used. So, here we peek into the AVC description,
+							// if present, and switch to software decoding if we find interlaced content.
+							this.decoderConfig = {
+								...this.decoderConfig,
+								hardwareAcceleration: 'prefer-software',
+							};
+						}
 
-							if (sps.maxDecFrameBuffering !== 0 && sps.bitstreamRestrictionFlag !== 1) {
-								// Modify the SPS to fix potential loss of B frames
-								record.sequenceParameterSets[0] = addAvcBitstreamRestriction(sps);
-								this.decoderConfig = {
-									...this.decoderConfig,
-									description: serializeAvcDecoderConfigurationRecord(record),
-								};
+						// Modify the SPSs to fix potential loss of B frames
+						let recordModified = false;
+						for (let i = 0; i < record.sequenceParameterSets.length; i++) {
+							const sps = parseAvcSps(record.sequenceParameterSets[i]!);
+							if (sps && sps.maxDecFrameBuffering !== 0 && sps.bitstreamRestrictionFlag !== 1) {
+								record.sequenceParameterSets[i] = addAvcBitstreamRestriction(sps);
+								recordModified = true;
 							}
+						}
+
+						if (recordModified) {
+							this.decoderConfig = {
+								...this.decoderConfig,
+								description: serializeAvcDecoderConfigurationRecord(record),
+							};
 						}
 					}
 				}
@@ -1098,7 +1129,7 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			return Math.max(
 				this.decoder.decodeQueueSize,
 				this.alphaDecoder?.decodeQueueSize ?? 0,
-			);
+			) + this.finalSamples.length;
 		}
 	}
 
@@ -1124,62 +1155,18 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			assert(this.decoder);
 
 			if (!isWebKit()) {
-				insertSorted(this.inputTimestamps, packet.timestamp, x => x);
+				// It is important that we don't add timestamps for packets that won't produce a frame. If we did, it
+				// would offset everything. See https://github.com/Vanilagy/mediabunny/issues/642.
+				const shownFrameCount = countShownVideoFrames(this.codec, packet.data);
+				for (let i = 0; i < shownFrameCount; i++) {
+					insertSorted(this.inputTimestamps, packet.timestamp, x => x);
+				}
 			}
 
 			if (isChromium() && this.currentPacketIndex === 0) {
-				if (this.codec === 'avc') {
-					// Workaround for https://issues.chromium.org/issues/470109459
-					const filteredNalUnits: Uint8Array[] = [];
-					let hasFrameData = false;
-
-					for (const loc of iterateAvcNalUnits(packet.data, this.decoderConfig)) {
-						const type = extractNalUnitTypeForAvc(packet.data[loc.offset]!);
-						hasFrameData ||= type >= 1 && type <= 5;
-
-						if (type === AvcNalUnitType.AUD) {
-							if (hasFrameData) {
-								// Already has actual frame data, so treat an AUD as simply the end of the packet
-								break;
-							} else {
-								// If packets contain an AUD and have NALUs before it, this trips up Chromium's key
-								// frame detector. Clear the NALUs if an AUD is encountered.
-								// https://github.com/Vanilagy/mediabunny/issues/396
-								filteredNalUnits.length = 0;
-							}
-						}
-
-						// These trip up Chromium's key frame detection, so let's strip them
-						if (!(type >= 20 && type <= 31)) {
-							filteredNalUnits.push(packet.data.subarray(loc.offset, loc.offset + loc.length));
-						}
-					}
-
-					if (!this.decoderConfig.description) {
-						// Do SPS fixups if necessary
-						for (let i = 0; i < filteredNalUnits.length; i++) {
-							const nalUnit = filteredNalUnits[i]!;
-							if (extractNalUnitTypeForAvc(nalUnit[0]!) !== AvcNalUnitType.SPS) {
-								continue;
-							}
-
-							const sps = parseAvcSps(nalUnit);
-							if (sps && sps.maxDecFrameBuffering !== 0 && sps.bitstreamRestrictionFlag !== 1) {
-								filteredNalUnits[i] = addAvcBitstreamRestriction(sps);
-							}
-
-							break;
-						}
-					}
-
-					const newData = concatAvcNalUnits(filteredNalUnits, this.decoderConfig);
-					packet = new EncodedPacket(newData, packet.type, packet.timestamp, packet.duration);
-				} else if (this.codec === 'hevc') {
-					// Workaround for https://issues.chromium.org/issues/507611247
-					const sanitizedData = sanitizeHevcPacketForChromium(packet.data, this.decoderConfig);
-					if (sanitizedData) {
-						packet = new EncodedPacket(sanitizedData, packet.type, packet.timestamp, packet.duration);
-					}
+				const fixedData = this.fixFirstPacketDataForChromium(packet.data);
+				if (fixedData) {
+					packet = packet.clone({ data: fixedData });
 				}
 			}
 
@@ -1286,11 +1273,76 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 				this.alphaRaslSkipped = true;
 			}
 
+			// The alpha decoder is a decoder of its own, so its first packet needs the same treatment
+			if (isChromium() && this.currentAlphaPacketIndex === 0) {
+				const fixedData = this.fixFirstPacketDataForChromium(packet.sideData.alpha);
+				if (fixedData) {
+					packet = packet.clone({
+						sideData: {
+							...packet.sideData,
+							alpha: fixedData,
+						},
+					});
+				}
+			}
+
 			this.currentAlphaPacketIndex++;
 			this.alphaDecoder.decode(packet.alphaToEncodedVideoChunk(type ?? packet.type));
 			this.alphaDecoderQueueSize++;
 		} else {
 			this.pushNullAlphaFrame();
+		}
+	}
+
+	fixFirstPacketDataForChromium(data: Uint8Array) {
+		if (this.codec === 'avc') {
+			// Workaround for https://issues.chromium.org/issues/470109459
+			const filteredNalUnits: Uint8Array[] = [];
+			let hasFrameData = false;
+
+			for (const loc of iterateAvcNalUnits(data, this.decoderConfig)) {
+				const type = extractNalUnitTypeForAvc(data[loc.offset]!);
+				hasFrameData ||= type >= 1 && type <= 5;
+
+				if (type === AvcNalUnitType.AUD) {
+					if (hasFrameData) {
+						// Already has actual frame data, so treat an AUD as simply the end of the packet
+						break;
+					} else {
+						// If packets contain an AUD and have NALUs before it, this trips up Chromium's key frame
+						// detector. Clear the NALUs if an AUD is encountered.
+						// https://github.com/Vanilagy/mediabunny/issues/396
+						filteredNalUnits.length = 0;
+					}
+				}
+
+				// These trip up Chromium's key frame detection, so let's strip them
+				if (!(type >= 20 && type <= 31)) {
+					filteredNalUnits.push(data.subarray(loc.offset, loc.offset + loc.length));
+				}
+			}
+
+			if (!this.decoderConfig.description) {
+				// Do SPS fixups if necessary
+				for (let i = 0; i < filteredNalUnits.length; i++) {
+					const nalUnit = filteredNalUnits[i]!;
+					if (extractNalUnitTypeForAvc(nalUnit[0]!) !== AvcNalUnitType.SPS) {
+						continue;
+					}
+
+					const sps = parseAvcSps(nalUnit);
+					if (sps && sps.maxDecFrameBuffering !== 0 && sps.bitstreamRestrictionFlag !== 1) {
+						filteredNalUnits[i] = addAvcBitstreamRestriction(sps);
+					}
+				}
+			}
+
+			return concatAvcNalUnits(filteredNalUnits, this.decoderConfig);
+		} else if (this.codec === 'hevc') {
+			// Workaround for https://issues.chromium.org/issues/507611247
+			return sanitizeHevcPacketForChromium(data, this.decoderConfig);
+		} else {
+			return null;
 		}
 	}
 
@@ -1395,6 +1447,12 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			}
 		} catch (error) {
 			removeItem(this.finalSamples, result);
+
+			// Samples that finished merging after this one were waiting on it and would be stuck forever otherwise
+			while (this.finalSamples.length > 0 && this.finalSamples[0]!.sample !== null) {
+				this.finalSamples.shift()!.sample!.close();
+			}
+
 			this.onError(error);
 		} finally {
 			removeItem(this.mergeAlphaPromises, resolver.promise);
@@ -1470,6 +1528,8 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 			this.flushing = false;
 			await Promise.all(this.mergeAlphaPromises);
 
+			this.inputTimestamps.length = 0;
+
 			this.colorQueue.forEach(x => x.close());
 			this.colorQueue.length = 0;
 			this.alphaQueue.forEach(x => x?.close());
@@ -1497,7 +1557,8 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 
 	close() {
 		if (this.customDecoder) {
-			void this.customDecoderCallSerializer.call(() => this.customDecoder!.close());
+			void this.customDecoderCallSerializer.call(() => this.customDecoder!.close())
+				.catch(error => this.onError(error));
 		} else {
 			assert(this.decoder);
 
@@ -1550,6 +1611,10 @@ export class ColorAlphaMerger {
 					const data = event.data;
 					const pending = this.pendingRequests.get(data.id);
 					if (!pending) {
+						if ('frame' in data) {
+							data.frame.close(); // So it's still closed
+						}
+
 						return;
 					}
 					this.pendingRequests.delete(data.id);
@@ -1692,6 +1757,9 @@ const colorAlphaMergerWorkerCode = () => {
 			format: outputFormat,
 			codedWidth: width,
 			codedHeight: height,
+			displayWidth: color.displayWidth,
+			displayHeight: color.displayHeight,
+			colorSpace: color.colorSpace.toJSON(),
 			timestamp: color.timestamp,
 			duration: color.duration ?? undefined,
 			transfer: [output.buffer],
@@ -1750,6 +1818,9 @@ const colorAlphaMergerWorkerCode = () => {
 			format: outputFormat,
 			codedWidth: width,
 			codedHeight: height,
+			displayWidth: color.displayWidth,
+			displayHeight: color.displayHeight,
+			colorSpace: color.colorSpace.toJSON(),
 			timestamp: color.timestamp,
 			duration: color.duration ?? undefined,
 			transfer: [output.buffer],
@@ -1797,6 +1868,9 @@ const colorAlphaMergerWorkerCode = () => {
 			format: 'I420A',
 			codedWidth: width,
 			codedHeight: height,
+			displayWidth: color.displayWidth,
+			displayHeight: color.displayHeight,
+			colorSpace: color.colorSpace.toJSON(),
 			timestamp: color.timestamp,
 			duration: color.duration ?? undefined,
 			transfer: [output.buffer],
@@ -2237,23 +2311,24 @@ export class CanvasSink {
 		}) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 		assert(context);
 
-		sample._drawWithFitAndMipmapping(canvas, context, {
-			fit: this._fit,
-			rotation: this._rotation,
-			flip: this._flip,
-			crop: this._crop,
-			targetIsFresh: canvasIsNew,
-			fillBlack: !this._alpha && isFirefox(),
-		});
+		try {
+			sample._drawWithFitAndMipmapping(canvas, context, {
+				fit: this._fit,
+				rotation: this._rotation,
+				flip: this._flip,
+				crop: this._crop,
+				targetIsFresh: canvasIsNew,
+				fillBlack: !this._alpha && isFirefox(),
+			});
 
-		const result = {
-			canvas,
-			timestamp: sample.timestamp,
-			duration: sample.duration,
-		};
-
-		sample.close();
-		return result;
+			return {
+				canvas,
+				timestamp: sample.timestamp,
+				duration: sample.duration,
+			};
+		} finally {
+			sample.close();
+		}
 	}
 
 	/**
@@ -2459,7 +2534,8 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 
 	close() {
 		if (this.customDecoder) {
-			void this.customDecoderCallSerializer.call(() => this.customDecoder!.close());
+			void this.customDecoderCallSerializer.call(() => this.customDecoder!.close())
+				.catch(error => this.onError(error));
 		} else {
 			assert(this.decoder);
 
@@ -2615,6 +2691,10 @@ class PcmAudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 		const numberOfFrames = Math.floor(
 			packet.byteLength / this.decoderConfig.numberOfChannels / this.inputSampleSize,
 		);
+		if (numberOfFrames === 0) {
+			// Skip empty samples, just like the regular decoder does
+			return;
+		}
 
 		const outputBufferSize = numberOfFrames * this.decoderConfig.numberOfChannels * this.outputSampleSize;
 		const outputBuffer = new ArrayBuffer(outputBufferSize);
@@ -2637,20 +2717,22 @@ class PcmAudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 		const preciseTimestamp = this.currentTimestamp;
 		this.currentTimestamp += preciseDuration;
 
+		const sampleRate = this.decoderConfig.sampleRate;
 		const audioSample = new AudioSample({
 			format: this.outputFormat,
 			data: outputBuffer,
 			numberOfChannels: this.decoderConfig.numberOfChannels,
-			sampleRate: this.decoderConfig.sampleRate,
+			sampleRate,
 			numberOfFrames,
-			timestamp: preciseTimestamp,
+			timestamp: roundToDivisor(preciseTimestamp, sampleRate),
+			_doNotCopy: true,
 		});
 
 		this.onSample(audioSample);
 	}
 
 	async flush() {
-		// Do nothing
+		this.currentTimestamp = null;
 	}
 
 	close() {
@@ -2800,14 +2882,15 @@ export class AudioBufferSink {
 
 	/** @internal */
 	_audioSampleToWrappedArrayBuffer(sample: AudioSample): WrappedAudioBuffer {
-		const result: WrappedAudioBuffer = {
-			buffer: sample.toAudioBuffer(),
-			timestamp: sample.timestamp,
-			duration: sample.duration,
-		};
-
-		sample.close();
-		return result;
+		try {
+			return {
+				buffer: sample.toAudioBuffer(),
+				timestamp: sample.timestamp,
+				duration: sample.duration,
+			};
+		} finally {
+			sample.close();
+		}
 	}
 
 	/**

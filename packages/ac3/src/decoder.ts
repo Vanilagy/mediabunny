@@ -14,9 +14,12 @@ import {
 	registerDecoder,
 } from 'mediabunny';
 import { sendCommand, refWorker, unrefWorker } from './worker-client';
+import { assert, type DecodedChunk } from './shared';
 
 class Ac3Decoder extends CustomAudioDecoder {
-	private ctx = 0;
+	private ctx: number | null = null;
+	private nextTimestamp: number | null = null;
+	private inFlightDecode: Promise<void> | null = null;
 
 	static override supports(codec: AudioCodec): boolean {
 		return codec === 'ac3' || codec === 'eac3';
@@ -33,32 +36,62 @@ class Ac3Decoder extends CustomAudioDecoder {
 	}
 
 	async decode(packet: EncodedPacket) {
+		assert(this.ctx !== null);
+
 		const encodedData = packet.data.slice().buffer;
 		const timestamp = Math.round(packet.timestamp * this.config.sampleRate);
 
-		const result = await sendCommand({
+		const decode = sendCommand({
 			type: 'decode',
 			data: { ctx: this.ctx, encodedData, timestamp },
-		}, [encodedData]);
+		}, [encodedData]).then(result => this.emitSamples(result.chunks));
+		decode.catch(() => {}); // Surfaces through whoever awaits it next
 
-		const sample = new AudioSample({
-			data: result.pcmData,
-			format: result.format,
-			numberOfChannels: result.channels,
-			sampleRate: result.sampleRate,
-			timestamp: result.pts / result.sampleRate,
-		});
-		this.onSample(sample);
+		// Keep one packet in flight, so the worker already has the next one by the time it's done with the current one
+		const previousDecode = this.inFlightDecode;
+		this.inFlightDecode = decode;
+		await previousDecode;
 	}
 
 	async flush() {
-		await sendCommand({ type: 'flush-decoder', data: { ctx: this.ctx } });
+		assert(this.ctx !== null);
+
+		await this.inFlightDecode;
+		this.inFlightDecode = null;
+
+		const result = await sendCommand({ type: 'flush-decoder', data: { ctx: this.ctx } });
+		this.emitSamples(result.chunks);
 	}
 
 	async close() {
 		// Close shouldn't throw
-		sendCommand({ type: 'close-decoder', data: { ctx: this.ctx } }).catch(() => {});
+		if (this.ctx !== null) {
+			sendCommand({ type: 'close-decoder', data: { ctx: this.ctx } }).catch(() => {});
+		}
+
 		await unrefWorker();
+	}
+
+	private emitSamples(chunks: DecodedChunk[]) {
+		for (const chunk of chunks) {
+			let timestamp: number;
+			if (chunk.pts !== null) {
+				timestamp = chunk.pts / this.config.sampleRate;
+			} else {
+				assert(this.nextTimestamp !== null);
+				timestamp = this.nextTimestamp;
+			}
+
+			const sample = new AudioSample({
+				data: chunk.pcmData,
+				format: chunk.format,
+				numberOfChannels: chunk.channels,
+				sampleRate: chunk.sampleRate,
+				timestamp,
+			});
+			this.nextTimestamp = timestamp + sample.duration;
+			this.onSample(sample);
+		}
 	}
 }
 

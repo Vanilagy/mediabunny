@@ -17,8 +17,10 @@ import { sendCommand, refWorker, unrefWorker } from './worker-client';
 import { assert, BATCH_SAMPLE_COUNT, EncodedChunk } from './shared';
 import { TRUEHD_CHANNEL_COUNTS, TRUEHD_MAJOR_SYNC_WORD, TRUEHD_SAMPLE_RATES } from '../../../shared/truehd-misc';
 
+const MAJOR_SYNC_INTERVAL = 16; // In access units, as used by FFmpeg's encoder
+
 class TrueHdEncoder extends CustomAudioEncoder {
-	private ctx = 0;
+	private ctx: number | null = null;
 	private encoderFrameSize = 0;
 	private sampleRate = 0;
 	private numberOfChannels = 0;
@@ -27,7 +29,9 @@ class TrueHdEncoder extends CustomAudioEncoder {
 	// Accumulate interleaved f32 samples until we have a full batch
 	private pendingBuffer = new Float32Array(2 ** 16);
 	private pendingFrames = 0;
+	private receivedFrames = 0;
 	private nextSampleTimestampInSamples: number | null = null;
+	private inFlightEncode: Promise<void> | null = null;
 
 	static override supports(codec: AudioCodec, config: AudioEncoderConfig): boolean {
 		return codec === 'truehd'
@@ -57,6 +61,7 @@ class TrueHdEncoder extends CustomAudioEncoder {
 
 	private resetInternalState() {
 		this.pendingFrames = 0;
+		this.receivedFrames = 0;
 		this.nextSampleTimestampInSamples = null;
 
 		this.chunkMetadata = {
@@ -94,6 +99,7 @@ class TrueHdEncoder extends CustomAudioEncoder {
 		}
 		this.pendingBuffer.set(incomingData, this.pendingFrames * channels);
 		this.pendingFrames += incomingFrames;
+		this.receivedFrames += incomingFrames;
 
 		if (this.pendingFrames >= BATCH_SAMPLE_COUNT) {
 			// Only whole frames for now, since the encoder accepts a short frame only at the very end
@@ -102,9 +108,27 @@ class TrueHdEncoder extends CustomAudioEncoder {
 	}
 
 	async flush() {
+		assert(this.ctx !== null);
+
+		// The encoder writes no major sync at all for streams shorter than one major sync interval, leaving them
+		// undecodable, so pad these with silence
+		if (
+			this.nextSampleTimestampInSamples !== null
+			&& Math.ceil(this.receivedFrames / this.encoderFrameSize) < MAJOR_SYNC_INTERVAL
+		) {
+			const channels = this.numberOfChannels;
+			const paddedFrames = this.pendingFrames + MAJOR_SYNC_INTERVAL * this.encoderFrameSize - this.receivedFrames;
+
+			this.pendingBuffer.fill(0, this.pendingFrames * channels, paddedFrames * channels);
+			this.pendingFrames = paddedFrames;
+		}
+
 		if (this.pendingFrames > 0) {
 			await this.encodePendingFrames(this.pendingFrames);
 		}
+
+		await this.inFlightEncode;
+		this.inFlightEncode = null;
 
 		const result = await sendCommand({ type: 'flush-encoder', data: { ctx: this.ctx } });
 		this.emitPackets(result.packets);
@@ -114,11 +138,15 @@ class TrueHdEncoder extends CustomAudioEncoder {
 
 	close() {
 		// Close shouldn't throw
-		sendCommand({ type: 'close-encoder', data: { ctx: this.ctx } }).catch(() => {});
+		if (this.ctx !== null) {
+			sendCommand({ type: 'close-encoder', data: { ctx: this.ctx } }).catch(() => {});
+		}
+
 		void unrefWorker();
 	}
 
 	private async encodePendingFrames(frameCount: number) {
+		assert(this.ctx !== null);
 		assert(this.nextSampleTimestampInSamples !== null);
 
 		const channels = this.numberOfChannels;
@@ -132,7 +160,7 @@ class TrueHdEncoder extends CustomAudioEncoder {
 			this.pendingBuffer.copyWithin(0, sampleCount, sampleCount + this.pendingFrames * channels);
 		}
 
-		const result = await sendCommand({
+		const encode = sendCommand({
 			type: 'encode',
 			data: {
 				ctx: this.ctx,
@@ -140,11 +168,15 @@ class TrueHdEncoder extends CustomAudioEncoder {
 				sampleCount: frameCount,
 				timestamp: this.nextSampleTimestampInSamples,
 			},
-		}, [audioData]);
+		}, [audioData]).then(result => this.emitPackets(result.packets));
+		encode.catch(() => {}); // Surfaces through whoever awaits it next
 
 		this.nextSampleTimestampInSamples += frameCount;
 
-		this.emitPackets(result.packets);
+		// Keep one batch in flight, so the worker already has the next one by the time it's done with the current one
+		const previousEncode = this.inFlightEncode;
+		this.inFlightEncode = encode;
+		await previousEncode;
 	}
 
 	private emitPackets(packets: EncodedChunk[]) {

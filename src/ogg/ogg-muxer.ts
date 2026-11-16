@@ -10,6 +10,7 @@ import { OPUS_SAMPLE_RATE, validateAudioChunkMetadata } from '../codec';
 import { createVorbisComments, parseModesFromVorbisSetupPacket, parseOpusIdentificationHeader } from '../codec-data';
 import {
 	assert,
+	assertNever,
 	clamp,
 	promiseWithResolvers,
 	setInt64,
@@ -17,6 +18,7 @@ import {
 	toUint8Array,
 } from '../misc';
 import { Muxer } from '../muxer';
+import { Logging } from '../logging';
 import { Output,
 	OutputAudioTrack,
 	OutputTrack } from '../output';
@@ -38,11 +40,12 @@ type OggTrackData = {
 	track: OutputAudioTrack;
 	serialNumber: number;
 	internalSampleRate: number;
-	codecInfo: OggCodecInfo;
+	codecInfo: OggCodecInfo & { codec: 'vorbis' | 'opus' };
 	vorbisLastBlocksize: number | null;
 	packetQueue: Packet[];
-	startOffsetInSamples: number | null;
-	currentTimestampInSamples: number;
+	leadingPackets: Packet[];
+	startOffsetInSamples: number;
+	currentTimestampInSamples: number | null;
 	audioPacketCount: number;
 	pagesWritten: number;
 
@@ -52,15 +55,15 @@ type OggTrackData = {
 	currentPageSize: number;
 	currentPageStartsWithFreshPacket: boolean;
 	currentPageStartTimestampInSamples: number;
-	closed: boolean;
 };
 
 type Packet = {
 	data: Uint8Array;
 	timestampInSamples: number;
 	durationInSamples: number;
-	trimmedDurationInSamples: number;
 	forcePageFlush: boolean;
+	holdPage: boolean;
+	isHeader: boolean;
 };
 
 export class OggMuxer extends Muxer {
@@ -68,8 +71,10 @@ export class OggMuxer extends Muxer {
 	private writer!: Writer;
 
 	private trackDatas: OggTrackData[] = [];
+	private closedTracks = new Set<OutputTrack>();
 	private bosPagesWritten = false;
 	private allTracksKnown = promiseWithResolvers();
+	private warnedAboutTooNegativeTimestamp = false;
 
 	private pageBytes = new Uint8Array(MAX_PAGE_SIZE);
 	private pageView = new DataView(this.pageBytes.buffer);
@@ -83,23 +88,25 @@ export class OggMuxer extends Muxer {
 	async start() {
 		const release = await this.mutex.acquire();
 
-		this.writer = await this.output._getRootWriter(true); // Ogg is always monotonically written!
+		try {
+			this.writer = await this.output._getRootWriter(true); // Ogg is always monotonically written!
 
-		for (const track of this.output.tracks) {
-			assert(track.isAudioTrack());
-			if (track.metadata.decoderConfig) {
-				this.getTrackData(track, { decoderConfig: track.metadata.decoderConfig });
+			for (const track of this.output.tracks) {
+				assert(track.isAudioTrack());
+				if (track.metadata.decoderConfig) {
+					this.getTrackData(track, { decoderConfig: track.metadata.decoderConfig });
+				}
 			}
+		} finally {
+			release();
 		}
-
-		release();
 	}
 
 	async getMimeType() {
 		await this.allTracksKnown.promise;
 
 		return buildOggMimeType({
-			codecStrings: this.trackDatas.map(x => x.codecInfo.codec!),
+			codecStrings: this.trackDatas.map(x => x.codecInfo.codec),
 		});
 	}
 
@@ -126,12 +133,20 @@ export class OggMuxer extends Muxer {
 		assert(meta);
 		assert(meta.decoderConfig);
 
+		let internalSampleRate: number;
+		if (track.source._codec === 'vorbis') {
+			internalSampleRate = meta.decoderConfig.sampleRate;
+		} else if (track.source._codec === 'opus') {
+			internalSampleRate = OPUS_SAMPLE_RATE;
+		} else {
+			assertNever(track.source._codec);
+			assert(false);
+		}
+
 		const newTrackData: OggTrackData = {
 			track,
 			serialNumber,
-			internalSampleRate: track.source._codec === 'opus'
-				? OPUS_SAMPLE_RATE
-				: meta.decoderConfig.sampleRate,
+			internalSampleRate,
 			codecInfo: {
 				codec: track.source._codec,
 				vorbisInfo: null,
@@ -139,8 +154,9 @@ export class OggMuxer extends Muxer {
 			},
 			vorbisLastBlocksize: null,
 			packetQueue: [],
-			startOffsetInSamples: null,
-			currentTimestampInSamples: 0,
+			leadingPackets: [],
+			startOffsetInSamples: 0,
+			currentTimestampInSamples: null,
 			audioPacketCount: 0,
 			pagesWritten: 0,
 
@@ -150,7 +166,6 @@ export class OggMuxer extends Muxer {
 			currentPageSize: 27,
 			currentPageStartsWithFreshPacket: true,
 			currentPageStartTimestampInSamples: 0,
-			closed: false,
 		};
 
 		this.queueHeaderPackets(newTrackData, meta);
@@ -167,7 +182,7 @@ export class OggMuxer extends Muxer {
 	private queueHeaderPackets(trackData: OggTrackData, meta: EncodedAudioChunkMetadata) {
 		assert(meta.decoderConfig);
 
-		if (trackData.track.source._codec === 'vorbis') {
+		if (trackData.codecInfo.codec === 'vorbis') {
 			assert(meta.decoderConfig.description);
 
 			const bytes = toUint8Array(meta.decoderConfig.description);
@@ -214,26 +229,34 @@ export class OggMuxer extends Muxer {
 			commentHeaderHeader[5] = 0x69; // 'i'
 			commentHeaderHeader[6] = 0x73; // 's'
 
-			const commentHeader = createVorbisComments(commentHeaderHeader, this.output._metadataTags, true);
+			const vorbisComments = createVorbisComments(commentHeaderHeader, this.output._metadataTags, true);
+
+			// Unlike Opus, Vorbis requires the comment header to end with a set framing bit
+			const commentHeader = new Uint8Array(vorbisComments.length + 1);
+			commentHeader.set(vorbisComments);
+			commentHeader[vorbisComments.length] = 1;
 
 			trackData.packetQueue.push({
 				data: identificationHeader,
 				timestampInSamples: 0,
 				durationInSamples: 0,
-				trimmedDurationInSamples: 0,
 				forcePageFlush: true,
+				holdPage: false,
+				isHeader: true,
 			}, {
 				data: commentHeader,
 				timestampInSamples: 0,
 				durationInSamples: 0,
-				trimmedDurationInSamples: 0,
 				forcePageFlush: false,
+				holdPage: false,
+				isHeader: true,
 			}, {
 				data: setupHeader,
 				timestampInSamples: 0,
 				durationInSamples: 0,
-				trimmedDurationInSamples: 0,
 				forcePageFlush: true, // The last header packet must flush the page
+				holdPage: false,
+				isHeader: true,
 			});
 
 			const view = toDataView(identificationHeader);
@@ -246,7 +269,7 @@ export class OggMuxer extends Muxer {
 				],
 				modeBlockflags: parseModesFromVorbisSetupPacket(setupHeader).modeBlockflags,
 			};
-		} else if (trackData.track.source._codec === 'opus') {
+		} else if (trackData.codecInfo.codec === 'opus') {
 			if (!meta.decoderConfig.description) {
 				throw new TypeError('For Ogg, Opus decoder description is required.');
 			}
@@ -263,19 +286,23 @@ export class OggMuxer extends Muxer {
 				data: identificationHeader,
 				timestampInSamples: 0,
 				durationInSamples: 0,
-				trimmedDurationInSamples: 0,
 				forcePageFlush: true,
+				holdPage: false,
+				isHeader: true,
 			}, {
 				data: commentHeader,
 				timestampInSamples: 0,
 				durationInSamples: 0,
-				trimmedDurationInSamples: 0,
 				forcePageFlush: true, // The last header packet must flush the page
+				holdPage: false,
+				isHeader: true,
 			});
 
 			trackData.codecInfo.opusInfo = {
 				preSkip: parseOpusIdentificationHeader(identificationHeader).preSkip,
 			};
+		} else {
+			assertNever(trackData.codecInfo.codec);
 		}
 	}
 
@@ -292,45 +319,114 @@ export class OggMuxer extends Muxer {
 				trackData.codecInfo,
 				trackData.vorbisLastBlocksize,
 			);
-
-			if (trackData.startOffsetInSamples === null) {
-				// The first packet determines where the stream begins. Its timestamp includes the Opus pre-skip, which
-				// offsets the granule position. For Vorbis, it is the priming packet that decodes to nothing. Granule
-				// positions can't be negative, so the earliest representable start is the one where the audible part
-				// begins at zero.
-				const timestampInSamples = Math.round(packet.timestamp * trackData.internalSampleRate);
-				const preSkip = trackData.codecInfo.opusInfo?.preSkip ?? 0;
-				const minTimestampInSamples = trackData.codecInfo.codec === 'vorbis'
-					? -durationInSamples
-					: -preSkip;
-				const startTimestampInSamples = Math.max(timestampInSamples, minTimestampInSamples);
-
-				trackData.startOffsetInSamples = startTimestampInSamples - minTimestampInSamples;
-				trackData.currentTimestampInSamples = startTimestampInSamples + preSkip;
-			}
-
-			const currentTimestampInSamples = trackData.currentTimestampInSamples;
-			trackData.currentTimestampInSamples += durationInSamples;
 			trackData.vorbisLastBlocksize = vorbisBlockSize;
 
-			// A shorter packet duration signals trailing samples to discard, which only the final packet can express
-			const trimmedDurationInSamples = packet.duration > 0
-				? clamp(Math.round(packet.duration * trackData.internalSampleRate), 0, durationInSamples)
-				: durationInSamples;
+			if (trackData.currentTimestampInSamples === null) {
+				// The first packet determines where the stream begins. Granule positions are offset by the Opus
+				// pre-skip, so an earlier start than the encoder's own pre-skip goes into a larger one, as long as the
+				// header holding it hasn't been written yet.
+				const timestampInSamples = Math.round(packet.timestamp * trackData.internalSampleRate);
+
+				if (trackData.codecInfo.codec === 'vorbis') {
+					trackData.currentTimestampInSamples = timestampInSamples;
+				} else if (trackData.codecInfo.codec === 'opus') {
+					const opusInfo = trackData.codecInfo.opusInfo;
+					assert(opusInfo);
+
+					if (trackData.pagesWritten === 0) {
+						const preSkip = clamp(-timestampInSamples, opusInfo.preSkip, 2 ** 16 - 1);
+						const identificationHeader = trackData.packetQueue[0];
+						assert(identificationHeader?.isHeader);
+
+						identificationHeader.data = identificationHeader.data.slice();
+						toDataView(identificationHeader.data).setUint16(10, preSkip, true);
+						opusInfo.preSkip = preSkip;
+					}
+
+					trackData.currentTimestampInSamples = timestampInSamples + opusInfo.preSkip;
+				} else {
+					assertNever(trackData.codecInfo.codec);
+					assert(false);
+				}
+			}
+
+			const newPacket: Packet = {
+				data: packet.data,
+				timestampInSamples: trackData.currentTimestampInSamples,
+				durationInSamples,
+				forcePageFlush: false,
+				holdPage: false,
+				isHeader: false,
+			};
+			trackData.currentTimestampInSamples += durationInSamples;
+
+			if (trackData.audioPacketCount === 0) {
+				const packetEndTimestampInSamples = newPacket.timestampInSamples + durationInSamples;
+
+				if (trackData.codecInfo.codec === 'opus') {
+					if (newPacket.timestampInSamples < 0) {
+						this.warnAboutDiscardedPackets();
+						return;
+					}
+
+					trackData.startOffsetInSamples = newPacket.timestampInSamples;
+				} else if (trackData.codecInfo.codec === 'vorbis') {
+					if (packetEndTimestampInSamples < 0) {
+						// Packets ending before zero can still be represented through start trimming, so let's hold
+						// them back until we know the packet that makes the first granule position non-negative
+						trackData.leadingPackets.push(newPacket);
+						return;
+					}
+
+					// The start trimming is expressed by the first page's granule position being smaller than the
+					// duration of its packets, so all leading packets must end on that page. Let's keep as many of the
+					// latest ones as fit.
+					let segmentCount = Math.floor(newPacket.data.length / 255) + 1;
+					let firstKeptIndex = trackData.leadingPackets.length;
+					while (firstKeptIndex > 0) {
+						const leadingPacket = trackData.leadingPackets[firstKeptIndex - 1]!;
+						const leadingSegmentCount = Math.floor(leadingPacket.data.length / 255) + 1;
+						if (segmentCount + leadingSegmentCount > 255) {
+							break;
+						}
+
+						segmentCount += leadingSegmentCount;
+						firstKeptIndex--;
+					}
+
+					if (firstKeptIndex > 0) {
+						this.warnAboutDiscardedPackets();
+					}
+
+					const keptPackets = trackData.leadingPackets.slice(firstKeptIndex);
+					trackData.leadingPackets.length = 0;
+
+					if (keptPackets.length > 0) {
+						for (const keptPacket of keptPackets) {
+							keptPacket.holdPage = true;
+							trackData.packetQueue.push(keptPacket);
+						}
+
+						newPacket.holdPage = true;
+						newPacket.forcePageFlush = true;
+						trackData.audioPacketCount += keptPackets.length;
+					} else {
+						trackData.startOffsetInSamples = packetEndTimestampInSamples;
+					}
+				} else {
+					assertNever(trackData.codecInfo.codec);
+				}
+			}
 
 			// With a start offset, the second audio packet flushes the page. This keeps the offset from sharing a page
 			// with end trimming, as both are signaled through the granule position and would be indistinguishable.
 			// This mirrors a requirement of the Vorbis spec.
-			const forcePageFlush = trackData.startOffsetInSamples > 0 && trackData.audioPacketCount === 1;
+			if (trackData.startOffsetInSamples > 0 && trackData.audioPacketCount === 1) {
+				newPacket.forcePageFlush = true;
+			}
 			trackData.audioPacketCount++;
 
-			trackData.packetQueue.push({
-				data: packet.data,
-				timestampInSamples: currentTimestampInSamples,
-				durationInSamples,
-				trimmedDurationInSamples,
-				forcePageFlush,
-			});
+			trackData.packetQueue.push(newPacket);
 
 			await this.interleavePages();
 		} finally {
@@ -344,7 +440,7 @@ export class OggMuxer extends Muxer {
 
 	allTracksAreKnown() {
 		for (const track of this.output.tracks) {
-			if (!track.source._closed && !this.trackDatas.some(x => x.track === track)) {
+			if (!this.closedTracks.has(track) && !this.trackDatas.some(x => x.track === track)) {
 				return false; // We haven't seen a sample from this open track yet
 			}
 		}
@@ -383,17 +479,23 @@ export class OggMuxer extends Muxer {
 				if (
 					!isFinalCall
 					&& trackData.packetQueue.length <= 1 // Limit is 1, not 0, for correct EOS flag logic
-					&& !trackData.closed
+					&& !this.closedTracks.has(trackData.track)
 				) {
 					break outer;
 				}
 
-				if (
-					trackData.packetQueue.length > 0
-					&& trackData.packetQueue[0]!.timestampInSamples < minTimestamp
-				) {
+				if (trackData.packetQueue.length === 0) {
+					continue;
+				}
+
+				const nextPacket = trackData.packetQueue[0]!;
+				const timestamp = nextPacket.isHeader
+					? -Infinity // Headers come before any data
+					: nextPacket.timestampInSamples / trackData.internalSampleRate;
+
+				if (timestamp < minTimestamp) {
 					trackWithMinTimestamp = trackData;
-					minTimestamp = trackData.packetQueue[0]!.timestampInSamples;
+					minTimestamp = timestamp;
 				}
 			}
 
@@ -413,18 +515,13 @@ export class OggMuxer extends Muxer {
 	}
 
 	writePacket(trackData: OggTrackData, packet: Packet, isFinalPacket: boolean) {
-		// The final page's granule position may end the stream before the final packet's decoded output does
-		const packetEndTimestampInSamples = packet.timestampInSamples + (
-			isFinalPacket
-				? packet.trimmedDurationInSamples
-				: packet.durationInSamples
-		);
+		const packetEndTimestampInSamples = packet.timestampInSamples + packet.durationInSamples;
 
 		if (trackData.currentLacingValues.length === 0) {
 			trackData.currentPageStartTimestampInSamples = packet.timestampInSamples;
 		}
 
-		if (this.format._options.maximumPageDuration !== undefined) {
+		if (this.format._options.maximumPageDuration !== undefined && !packet.holdPage) {
 			const maxDurationInSamples = this.format._options.maximumPageDuration * trackData.internalSampleRate;
 
 			if (
@@ -483,7 +580,11 @@ export class OggMuxer extends Muxer {
 		trackData.currentPageSize += slice.length;
 		trackData.currentGranulePosition = packetEndTimestampInSamples;
 
-		if (trackData.currentPageSize >= PAGE_SIZE_TARGET || packet.forcePageFlush) {
+		if (
+			(trackData.currentPageSize >= PAGE_SIZE_TARGET && !packet.holdPage)
+			|| packet.forcePageFlush
+			|| isFinalPacket
+		) {
 			this.writePage(trackData, isFinalPacket);
 		}
 	}
@@ -546,23 +647,30 @@ export class OggMuxer extends Muxer {
 		}
 	}
 
-	// eslint-disable-next-line @typescript-eslint/no-misused-promises
 	override async onTrackClose(track: OutputTrack) {
 		const release = await this.mutex.acquire();
 
-		const trackData = this.trackDatas.find(x => x.track === track);
-		if (trackData) {
-			trackData.closed = true;
+		try {
+			this.closedTracks.add(track);
+
+			const trackData = this.trackDatas.find(x => x.track === track);
+			if (trackData) {
+				if (trackData.leadingPackets.length > 0) {
+					// No packet ever ended at or after zero, so none of them can be represented
+					trackData.leadingPackets.length = 0;
+					this.warnAboutDiscardedPackets();
+				}
+			}
+
+			if (this.allTracksAreKnown()) {
+				this.allTracksKnown.resolve();
+			}
+
+			// Since a track is now closed, we may be able to write out chunks that were previously waiting
+			await this.interleavePages();
+		} finally {
+			release();
 		}
-
-		if (this.allTracksAreKnown()) {
-			this.allTracksKnown.resolve();
-		}
-
-		// Since a track is now closed, we may be able to write out chunks that were previously waiting
-		await this.interleavePages();
-
-		release();
 	}
 
 	async finalize() {
@@ -571,17 +679,24 @@ export class OggMuxer extends Muxer {
 		this.allTracksKnown.resolve();
 
 		for (const trackData of this.trackDatas) {
-			trackData.closed = true;
+			this.closedTracks.add(trackData.track);
+
+			if (trackData.leadingPackets.length > 0) {
+				// No packet ever ended at or after zero, so none of them can be represented
+				trackData.leadingPackets.length = 0;
+				this.warnAboutDiscardedPackets();
+			}
 		}
 
 		await this.interleavePages(true);
 
-		for (const trackData of this.trackDatas) {
-			if (trackData.currentLacingValues.length > 0) {
-				this.writePage(trackData, true);
-			}
-		}
-
 		release();
+	}
+
+	private warnAboutDiscardedPackets() {
+		if (!this.warnedAboutTooNegativeTimestamp) {
+			Logging._warn('Packets had to be discarded because their timestamp is too negative to represent in Ogg.');
+			this.warnedAboutTooNegativeTimestamp = true;
+		}
 	}
 }

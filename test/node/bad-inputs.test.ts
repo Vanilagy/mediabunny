@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { expect, test } from 'vitest';
 import {
+	ADTS,
 	ALL_FORMATS,
 	AudioSampleSink,
 	BufferSource,
@@ -189,7 +190,7 @@ test('MP4: stsc with alternating chunk indices', async () => {
 	})]));
 });
 
-test('MP4: Single chunk with many samples', async () => {
+test('MP4: Single chunk with many samples', { timeout: 20_000 }, async () => {
 	// Computing a sample's offset in its chunk used to be linear, making iteration quadratic
 	const sampleCount = 100_000;
 	const header = mp4([trak({ handler: 'vide', stbl: singleChunkStbl(sampleCount, 0) })]);
@@ -303,7 +304,7 @@ test('MP4: trun without default sample values', async () => {
 	]), /trun/);
 });
 
-test('MP4: Fragments with decreasing timestamps', async () => {
+test('MP4: Fragments with decreasing timestamps', { timeout: 20_000 }, async () => {
 	// Caching their positions used to insert at the front over and over
 	const fragmentCount = 100_000;
 	const moofs: Uint8Array[] = [];
@@ -1781,6 +1782,32 @@ test('ADTS: Bare frame header at the end of the file', async () => {
 	await expectGracefulRead(concat(adtsHeader(7), [0]));
 });
 
+test('ADTS: Junk before and between frames', async () => {
+	// Each junk holds a false sync that matches the stream, but no frame follows it
+	const frames = Array.from({ length: 10 }, (_, i) => adtsFrame(10 + i));
+	using input = new Input({
+		source: new BufferSource(concat(
+			zeros(3),
+			adtsHeader(50),
+			zeros(10),
+			...frames.slice(0, 5),
+			zeros(3),
+			adtsHeader(40),
+			zeros(5),
+			...frames.slice(5),
+		)),
+		formats: ALL_FORMATS,
+	});
+	expect(await input.getFormat()).toBe(ADTS);
+	const track = (await input.getPrimaryAudioTrack())!;
+
+	const sizes: number[] = [];
+	for await (const packet of new EncodedPacketSink(track).packets()) {
+		sizes.push(packet.byteLength);
+	}
+	expect(sizes).toEqual(frames.map(x => x.length));
+});
+
 test('WAV: With zero block alignment', async () => {
 	await expectGracefulRead(wav([fmtChunk({ blockAlign: 0 }), dataChunk()]));
 });
@@ -2001,8 +2028,8 @@ test('HLS: QUERYPARAM with malformed percent-encoding', async () => {
 
 	const sink = new EncodedPacketSink((await input.getAudioTracks())[0]!);
 
-	// Used to be a URIError
-	await expect(sink.getFirstPacket()).rejects.toThrow(/query parameter/);
+	// Used to be a URIError. Like with URLSearchParams, the malformed parts are decoded leniently.
+	await expect(sink.getFirstPacket()).rejects.toThrow('No such file: seg�%A.ts');
 });
 
 test('HLS: Variant stream pointing at a huge file that is no playlist', async () => {

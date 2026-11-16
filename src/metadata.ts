@@ -50,7 +50,7 @@ export type MetadataTags = {
 	beatsPerMinute?: number;
 	/** Genre or category describing the media's style or content (e.g. Metal, Horror, etc.) */
 	genre?: string;
-	/** Release, recording or creation date of the media. */
+	/** Release, recording or creation date of the media. Typically in UTC. */
 	date?: Date;
 	/** Full text lyrics or transcript associated with the media. */
 	lyrics?: string;
@@ -250,6 +250,12 @@ export const validateMetadataTags = (tags: MetadataTags) => {
 			}
 			if (!['coverFront', 'coverBack', 'unknown'].includes(image.kind)) {
 				throw new TypeError('Each image.kind must be \'coverFront\', \'coverBack\', or \'unknown\'.');
+			}
+			if (image.name !== undefined && typeof image.name !== 'string') {
+				throw new TypeError('Each image.name, when provided, must be a string.');
+			}
+			if (image.description !== undefined && typeof image.description !== 'string') {
+				throw new TypeError('Each image.description, when provided, must be a string.');
 			}
 		}
 	}

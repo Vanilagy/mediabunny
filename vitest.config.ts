@@ -7,6 +7,8 @@ export default defineConfig({
 		alias: {
 			'mediabunny': path.resolve(__dirname, './src/index.ts'),
 			'@mediabunny/ac3': path.resolve(__dirname, './packages/ac3/dist/bundles/mediabunny-ac3.mjs'),
+			'@mediabunny/dts': path.resolve(__dirname, './packages/dts/dist/bundles/mediabunny-dts.mjs'),
+			'@mediabunny/truehd': path.resolve(__dirname, './packages/truehd/dist/bundles/mediabunny-truehd.mjs'),
 			'@mediabunny/aac-encoder':
 				path.resolve(__dirname, './packages/aac-encoder/dist/bundles/mediabunny-aac-encoder.mjs'),
 			'@mediabunny/flac-encoder':
@@ -46,6 +48,9 @@ export default defineConfig({
 								// somewhere persistent
 								'wdio:chromedriverOptions': {
 									cacheDir: path.resolve(__dirname, 'node_modules/.cache/webdriver'),
+								},
+								'goog:chromeOptions': {
+									args: ['--autoplay-policy=no-user-gesture-required'],
 								},
 							},
 						}),

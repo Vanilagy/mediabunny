@@ -280,7 +280,7 @@ export class EncodedPacket {
 			options?.timestamp ?? this.timestamp,
 			options?.duration ?? this.duration,
 			options?.sequenceNumber ?? this.sequenceNumber,
-			this.byteLength,
+			options?.data?.byteLength ?? this.byteLength,
 			options?.sideData ?? this.sideData,
 		);
 	}

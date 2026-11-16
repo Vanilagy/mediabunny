@@ -9,9 +9,9 @@ import { ALL_FORMATS } from '../../src/input-format.js';
 import { Output } from '../../src/output.js';
 import { MkvOutputFormat, Mp4OutputFormat, OutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
-import { Conversion } from '../../src/conversion.js';
+import { Conversion, ConversionOptions } from '../../src/conversion.js';
 import { AudioSampleSink, EncodedPacketSink } from '../../src/media-sink.js';
-import { AudioSampleSource } from '../../src/media-source.js';
+import { AudioSampleSource, EncodedAudioPacketSource } from '../../src/media-source.js';
 import { EncodedPacket } from '../../src/packet.js';
 import { AudioSample } from '../../src/sample.js';
 import { canEncode } from '../../src/encode.js';
@@ -51,6 +51,60 @@ test('Matroska muxing and demuxing', async () => {
 	using newInput = await convert(input, new MkvOutputFormat());
 	const newPackets = await expectTrueHdTrack(newInput);
 	expectPacketsToMatch(newPackets, packets, 1 / 1000);
+});
+
+test('Matroska blocks all flagged as key', async () => {
+	using originalInput = new Input({
+		source: new FilePathSource(TRUEHD_FILE),
+		formats: ALL_FORMATS,
+	});
+	const originalTrack = await originalInput.getPrimaryAudioTrack();
+	assert(originalTrack);
+	const decoderConfig = await originalTrack.getDecoderConfig();
+	assert(decoderConfig);
+
+	const output = new Output({
+		format: new MkvOutputFormat(),
+		target: new BufferTarget(),
+	});
+	const source = new EncodedAudioPacketSource('truehd');
+	output.addAudioTrack(source);
+	await output.start();
+
+	for await (const packet of new EncodedPacketSink(originalTrack).packets()) {
+		await source.add(packet.clone({ type: 'key' }), { decoderConfig });
+	}
+	await output.finalize();
+	assert(output.target.buffer);
+
+	// The key packets should still be just the access units with a major sync
+	using input = new Input({
+		source: new BufferSource(output.target.buffer),
+		formats: ALL_FORMATS,
+	});
+	await expectTrueHdTrack(input);
+});
+
+test('Trimmed copy includes the media at the start', async () => {
+	using input = new Input({
+		source: new FilePathSource(TRUEHD_FILE),
+		formats: ALL_FORMATS,
+	});
+
+	using newInput = await convert(input, new Mp4OutputFormat(), {
+		copy: { mode: 'forced' },
+		trim: { start: 2.5, end: 3 },
+	});
+	const track = await newInput.getPrimaryAudioTrack();
+	assert(track);
+
+	const firstPacket = await new EncodedPacketSink(track).getFirstPacket();
+	assert(firstPacket);
+
+	// Major syncs are 16 access units of 40 samples apart, so the copy must start at most that far before the start
+	expect(firstPacket.type).toBe('key');
+	expect(firstPacket.timestamp).toBeLessThanOrEqual(0);
+	expect(firstPacket.timestamp).toBeGreaterThan(-16 * 40 / 48000);
 });
 
 test('Custom coder registration', async () => {
@@ -277,13 +331,21 @@ const expectTrueHdTrack = async (input: Input) => {
 	return packets;
 };
 
-const convert = async (input: Input, format: OutputFormat) => {
+const convert = async (
+	input: Input,
+	format: OutputFormat,
+	options: Omit<ConversionOptions, 'input' | 'output'> = {},
+) => {
 	const output = new Output({
 		format,
 		target: new BufferTarget(),
 	});
 
-	const conversion = await Conversion.init({ input, output });
+	const conversion = await Conversion.init({
+		input,
+		output,
+		...options,
+	});
 	await conversion.execute();
 
 	const { buffer } = output.target;
@@ -382,3 +444,255 @@ const createSineWave = () => {
 
 	return data;
 };
+
+test('Encode less than a major sync interval', async () => {
+	await testShortStream(48000, 100);
+});
+
+test('Encode less than a major sync interval at 192 kHz', async () => {
+	await testShortStream(192000, 2000); // Big enough for a batch to reach the encoder before flushing
+});
+
+const testShortStream = async (sampleRate: number, numberOfFrames: number) => {
+	registerTrueHdDecoder();
+	registerTrueHdEncoder();
+
+	const numberOfChannels = 2;
+	const accessUnitSize = 40 * sampleRate / 48000;
+
+	// Snapped to 24 bits, which TrueHD encodes losslessly
+	const data = new Float32Array(numberOfFrames * numberOfChannels);
+	for (let i = 0; i < data.length; i++) {
+		data[i] = Math.round(2 ** 22 * Math.sin(i / 10)) / 2 ** 23;
+	}
+
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+	const source = new AudioSampleSource({ codec: 'truehd' });
+	output.addAudioTrack(source);
+	await output.start();
+
+	const sample = new AudioSample({
+		data,
+		format: 'f32',
+		numberOfChannels,
+		sampleRate,
+		timestamp: 0,
+	});
+	await source.add(sample);
+	sample.close();
+	source.close();
+
+	await output.finalize();
+	assert(output.target.buffer);
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	const packetTypes: string[] = [];
+	for await (const packet of new EncodedPacketSink(track).packets()) {
+		packetTypes.push(packet.type);
+	}
+
+	// Padded with silence up to a full major sync interval
+	expect(packetTypes).toEqual(['key', ...Array<string>(15).fill('delta')]);
+
+	const copyOptions = {
+		format: 'f32',
+		planeIndex: 0,
+	} as const;
+	const chunks: Float32Array[] = [];
+	for await (using decodedSample of new AudioSampleSink(track).samples()) {
+		const chunk = new Float32Array(decodedSample.allocationSize(copyOptions) / 4);
+		decodedSample.copyTo(chunk, copyOptions);
+		chunks.push(chunk);
+	}
+
+	const decoded = new Float32Array(chunks.reduce((sum, chunk) => sum + chunk.length, 0));
+	let offset = 0;
+	for (const chunk of chunks) {
+		decoded.set(chunk, offset);
+		offset += chunk.length;
+	}
+
+	expect(decoded.length).toBe(16 * accessUnitSize * numberOfChannels);
+	expect(decoded.subarray(0, data.length)).toEqual(data);
+	expect(decoded.subarray(data.length).every(x => x === 0)).toBe(true);
+};
+
+test('Track sample rate differing from the decoded sample rate', async () => {
+	registerTrueHdDecoder();
+
+	using originalInput = new Input({
+		source: new FilePathSource(TRUEHD_FILE),
+		formats: ALL_FORMATS,
+	});
+	const originalTrack = await originalInput.getPrimaryAudioTrack();
+	assert(originalTrack);
+	const decoderConfig = await originalTrack.getDecoderConfig();
+	assert(decoderConfig);
+	expect(decoderConfig.sampleRate).toBe(48000);
+
+	// Declare half the rate the stream decodes at
+	const output = new Output({
+		format: new MkvOutputFormat(),
+		target: new BufferTarget(),
+	});
+	const source = new EncodedAudioPacketSource('truehd');
+	output.addAudioTrack(source);
+	await output.start();
+
+	let packetCount = 0;
+	for await (const packet of new EncodedPacketSink(originalTrack).packets()) {
+		await source.add(packet, {
+			decoderConfig: {
+				...decoderConfig,
+				sampleRate: 24000,
+			},
+		});
+
+		if (++packetCount === 20) {
+			break;
+		}
+	}
+	await output.finalize();
+	assert(output.target.buffer);
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+	expect(await track.getSampleRate()).toBe(24000);
+
+	const packetTimestamps: number[] = [];
+	for await (const packet of new EncodedPacketSink(track).packets()) {
+		packetTimestamps.push(packet.timestamp);
+	}
+
+	const sampleTimestamps: number[] = [];
+	for await (using sample of new AudioSampleSink(track).samples()) {
+		expect(sample.sampleRate).toBe(48000);
+		sampleTimestamps.push(sample.timestamp);
+	}
+
+	// Matroska stores timestamps in whole milliseconds, which the decoded samples needn't stick to
+	expect(sampleTimestamps.length).toBe(packetTimestamps.length);
+	for (let i = 0; i < packetTimestamps.length; i++) {
+		expect(Math.abs(sampleTimestamps[i]! - packetTimestamps[i]!)).toBeLessThan(0.001);
+	}
+});
+
+test('Decode packets holding several access units', async () => {
+	registerTrueHdDecoder();
+
+	using originalInput = new Input({
+		source: new FilePathSource(TRUEHD_FILE),
+		formats: ALL_FORMATS,
+	});
+	const originalTrack = await originalInput.getPrimaryAudioTrack();
+	assert(originalTrack);
+	const decoderConfig = await originalTrack.getDecoderConfig();
+	assert(decoderConfig);
+
+	// Pack every three access units into one packet
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+	const source = new EncodedAudioPacketSource('truehd');
+	output.addAudioTrack(source);
+	await output.start();
+
+	let group: EncodedPacket[] = [];
+	for await (const packet of new EncodedPacketSink(originalTrack).packets()) {
+		group.push(packet);
+		if (group.length < 3) {
+			continue;
+		}
+
+		const data = new Uint8Array(group.reduce((sum, x) => sum + x.data.byteLength, 0));
+		let offset = 0;
+		for (const x of group) {
+			data.set(x.data, offset);
+			offset += x.data.byteLength;
+		}
+
+		await source.add(new EncodedPacket(data, group[0]!.type, group[0]!.timestamp, 3 * 40 / 48000), {
+			decoderConfig,
+		});
+		group = [];
+
+		if (packet.timestamp >= 0.5) {
+			break;
+		}
+	}
+	await output.finalize();
+	assert(output.target.buffer);
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	let nextTimestamp = 0;
+	for await (using sample of new AudioSampleSink(track).samples()) {
+		expect(sample.timestamp).toBeCloseTo(nextTimestamp);
+		nextTimestamp += sample.duration;
+	}
+	expect(nextTimestamp).toBeGreaterThan(0.5);
+});
+
+test('Float input rounded to 24 bits', async () => {
+	registerTrueHdEncoder();
+	registerTrueHdDecoder();
+
+	const output = new Output({
+		format: new MkvOutputFormat(),
+		target: new BufferTarget(),
+	});
+	const source = new AudioSampleSource({ codec: 'truehd' });
+	output.addAudioTrack(source);
+	await output.start();
+
+	// Three quarters of the way from one 24-bit value to the next
+	const sample = new AudioSample({
+		data: new Float32Array(2 * 48000).fill(1000.75 / 2 ** 23),
+		format: 'f32',
+		numberOfChannels: 2,
+		sampleRate: 48000,
+		timestamp: 0,
+	});
+	await source.add(sample);
+	sample.close();
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	const values = new Set<number>();
+	for await (using decoded of new AudioSampleSink(track).samples()) {
+		const plane = new Int32Array(decoded.numberOfFrames);
+		decoded.copyTo(plane, {
+			format: 's32-planar',
+			planeIndex: 0,
+		});
+		for (const value of plane) {
+			values.add(value);
+		}
+	}
+	expect(values).toEqual(new Set([256 * 1001]));
+});

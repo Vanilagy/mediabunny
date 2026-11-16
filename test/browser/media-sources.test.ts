@@ -1,15 +1,22 @@
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 import { Output } from '../../src/output.js';
-import { Mp4OutputFormat, WebMOutputFormat } from '../../src/output-format.js';
-import { BufferTarget } from '../../src/target.js';
-import { AudioSampleSource, VideoSampleSource } from '../../src/media-source.js';
+import { Mp4OutputFormat, WavOutputFormat, WebMOutputFormat } from '../../src/output-format.js';
+import { BufferTarget, StreamTarget } from '../../src/target.js';
+import {
+	AudioBufferSource,
+	AudioSampleSource,
+	CanvasSource,
+	MediaStreamAudioTrackSource,
+	MediaStreamVideoTrackSource,
+	VideoSampleSource,
+} from '../../src/media-source.js';
 import { AudioSample, VideoSample } from '../../src/sample.js';
 import { Quality } from '../../src/encode.js';
 import { Input } from '../../src/input.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { BufferSource } from '../../src/source.js';
-import { VideoSampleSink } from '../../src/media-sink.js';
-import { assert, Rotation } from '../../src/misc.js';
+import { EncodedPacketSink, VideoSampleSink } from '../../src/media-sink.js';
+import { assert, promiseWithResolvers, Rotation, toDataView, wait } from '../../src/misc.js';
 import { InputAudioTrack, InputVideoTrack } from '../../src/input-track.js';
 
 test('VideoSampleSource, normal usage', async () => {
@@ -619,6 +626,81 @@ const readBackSamples = async (buffer: ArrayBuffer) => {
 	return samples;
 };
 
+test('CanvasSource, transform.frameRate closes the captured frames', async () => {
+	const cloneSpy = vi.spyOn(VideoSample.prototype, 'clone');
+
+	try {
+		const output = new Output({
+			format: new Mp4OutputFormat(),
+			target: new BufferTarget(),
+		});
+		const source = new CanvasSource(makeCanvas(64, 64), {
+			codec: 'vp8',
+			quality: new Quality('medium'),
+			transform: { frameRate: 10 },
+		});
+		output.addVideoTrack(source);
+		await output.start();
+
+		for (let i = 0; i < 5; i++) {
+			await source.add(0.1 * i, 0.1);
+		}
+		await output.finalize();
+
+		const clonedSamples = cloneSpy.mock.contexts as VideoSample[];
+		expect(clonedSamples.length).toBeGreaterThan(0);
+		expect(clonedSamples.every(sample => sample._closed)).toBe(true);
+	} finally {
+		cloneSpy.mockRestore();
+	}
+});
+
+test('VideoSampleSource, fit from sizeChangeBehavior for frames of the original size', async () => {
+	const cornerPixels: number[][] = [];
+
+	const output = new Output({
+		format: new WebMOutputFormat(),
+		target: new BufferTarget(),
+	});
+	const source = new VideoSampleSource({
+		codec: 'vp8',
+		quality: new Quality('medium'),
+		sizeChangeBehavior: 'contain',
+		transform: {
+			width: 64,
+			height: 64,
+		},
+		onEncodedSample: (sample) => {
+			const canvas = new OffscreenCanvas(64, 64);
+			const context = canvas.getContext('2d')!;
+			sample.draw(context, 0, 0);
+			cornerPixels.push([...context.getImageData(5, 5, 1, 1).data]);
+		},
+	});
+	output.addVideoTrack(source);
+	await output.start();
+
+	// A white landscape frame, which sets the original size, followed by a portrait one
+	const sizes = [[160, 90], [90, 160]] as const;
+	for (let i = 0; i < sizes.length; i++) {
+		const [width, height] = sizes[i]!;
+		const canvas = new OffscreenCanvas(width, height);
+		const context = canvas.getContext('2d')!;
+		context.fillStyle = 'white';
+		context.fillRect(0, 0, width, height);
+
+		using sample = new VideoSample(canvas, {
+			timestamp: i / 30,
+			duration: 1 / 30,
+		});
+		await source.add(sample);
+	}
+	await output.finalize();
+
+	// Both are letterboxed, the first one isn't stretched
+	expect(cornerPixels).toEqual([[0, 0, 0, 0], [0, 0, 0, 0]]);
+});
+
 test('AudioSampleSource, normal usage', async () => {
 	const sample = makeSineWave(48000, 2, 1);
 	const buffer = await encodeAudio({ codec: 'pcm-s16' }, sample);
@@ -731,3 +813,432 @@ const readBackAudioTrack = async (buffer: ArrayBuffer) => {
 
 	return { input, track };
 };
+
+test('Delta packets from the encoder on a hasOnlyKeyPackets track', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const source = new VideoSampleSource({
+		codec: 'vp8',
+		quality: new Quality('medium'),
+	});
+	// Without a key frame interval of 0, the encoder will also produce delta packets
+	output.addVideoTrack(source, { hasOnlyKeyPackets: true });
+	await output.start();
+
+	const encode = async () => {
+		const canvas = new OffscreenCanvas(64, 64);
+		const context = canvas.getContext('2d')!;
+
+		for (let i = 0; i < 5; i++) {
+			context.fillStyle = i % 2 === 0 ? 'red' : 'blue';
+			context.fillRect(0, 0, 64, 64);
+
+			using sample = new VideoSample(canvas, { timestamp: i / 30, duration: 1 / 30 });
+			await source.add(sample);
+		}
+
+		await output.finalize();
+	};
+
+	await expect(encode()).rejects.toThrow('Cannot add non-key packets');
+});
+
+test('Output canceled while the encoder is being created', async () => {
+	const encoders: VideoEncoder[] = [];
+	const OriginalVideoEncoder = VideoEncoder;
+	globalThis.VideoEncoder = class extends OriginalVideoEncoder {
+		constructor(init: VideoEncoderInit) {
+			super(init);
+			encoders.push(this);
+		}
+	};
+
+	try {
+		const output = new Output({
+			format: new Mp4OutputFormat(),
+			target: new BufferTarget(),
+		});
+
+		const source = new VideoSampleSource({
+			codec: 'vp8',
+			quality: new Quality('medium'),
+		});
+		output.addVideoTrack(source);
+		await output.start();
+
+		const canvas = new OffscreenCanvas(64, 64);
+		canvas.getContext('2d')!.fillRect(0, 0, 64, 64);
+		using sample = new VideoSample(canvas, { timestamp: 0, duration: 1 / 30 });
+
+		// Encoder creation is asynchronous, so this cancels the output while it's still in progress
+		const addPromise = source.add(sample);
+		await output.cancel();
+		await addPromise;
+
+		expect(encoders.length).toBeGreaterThan(0);
+		expect(encoders.every(x => x.state === 'closed')).toBe(true);
+	} finally {
+		globalThis.VideoEncoder = OriginalVideoEncoder;
+	}
+});
+
+test('Video track paused before its first frame', async () => {
+	const uncaughtErrors = collectUncaughtErrors();
+
+	const generator = new MediaStreamTrackGenerator({ kind: 'video' });
+	const writer = generator.writable.getWriter();
+
+	const source = new MediaStreamVideoTrackSource(
+		generator,
+		{ codec: 'vp8', quality: new Quality('low') },
+		{ frameRate: 30 },
+	);
+	const sourceErrors: unknown[] = [];
+	source.errorPromise.catch(error => sourceErrors.push(error));
+	source.pause();
+
+	const output = new Output({
+		format: new WebMOutputFormat(),
+		target: new BufferTarget(),
+	});
+	output.addVideoTrack(source);
+	await output.start();
+
+	await writer.write(makeVideoFrame(0));
+	await wait(100);
+
+	source.resume();
+	for (let i = 1; i <= 10; i++) {
+		await writer.write(makeVideoFrame(i / 30));
+		await wait(1000 / 30);
+	}
+
+	await output.finalize();
+	generator.stop();
+	uncaughtErrors.stop();
+
+	expect(uncaughtErrors.errors).toEqual([]);
+	expect(sourceErrors).toEqual([]);
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryVideoTrack();
+	assert(track);
+	const firstPacket = await new EncodedPacketSink(track).getFirstPacket();
+	assert(firstPacket);
+	expect(firstPacket.timestamp).toBe(0);
+});
+
+const makeVideoFrame = (timestamp: number) => {
+	const canvas = new OffscreenCanvas(64, 64);
+	const ctx = canvas.getContext('2d')!;
+	ctx.fillStyle = 'red';
+	ctx.fillRect(0, 0, 64, 64);
+
+	return new VideoFrame(canvas, { timestamp: 1e6 * timestamp });
+};
+
+test('Audio track resampled with a slow target', async () => {
+	const generator = new MediaStreamTrackGenerator({ kind: 'audio' });
+	const writer = generator.writable.getWriter();
+
+	const encodedSamples: { timestamp: number; numberOfFrames: number }[] = [];
+	const source = new MediaStreamAudioTrackSource(
+		generator,
+		{
+			codec: 'pcm-s16',
+			transform: { numberOfChannels: 2 },
+			onEncodedSample: (sample) => {
+				encodedSamples.push({ timestamp: sample.timestamp, numberOfFrames: sample.numberOfFrames });
+			},
+		},
+		{ timestampBase: 'zero' },
+	);
+	const sourceErrors: unknown[] = [];
+	source.errorPromise.catch(error => sourceErrors.push(error));
+
+	let writesBlocked = false;
+	const writesUnblocked = promiseWithResolvers();
+	const output = new Output({
+		format: new WavOutputFormat(),
+		target: new StreamTarget(new WritableStream({
+			write: async () => {
+				if (writesBlocked) {
+					await writesUnblocked.promise;
+				}
+			},
+		})),
+	});
+	output.addAudioTrack(source);
+	await output.start();
+	writesBlocked = true;
+
+	// 6 seconds of audio. The resampler hands over its first 5 seconds at once, and encoding them is stuck on the
+	// target until we finalize, so further samples queue up behind it until the queue is full.
+	for (let i = 0; i < 600; i++) {
+		await writer.write(new AudioData({
+			format: 'f32-planar',
+			sampleRate: 48000,
+			numberOfChannels: 1,
+			numberOfFrames: 480,
+			timestamp: 10_000 * i,
+			data: new Float32Array(480),
+		}));
+		await wait(0);
+	}
+	await wait(200);
+
+	// The resampler's last second only gets handed over when finalizing
+	expect(encodedSamples).toEqual([{ timestamp: 0, numberOfFrames: 5 * 48000 }]);
+
+	// The queued samples were captured before finalizing, so they must still make it into the file, while the ones
+	// arriving once the queue was full got dropped
+	const finalizePromise = output.finalize();
+	writesUnblocked.resolve();
+	await finalizePromise;
+	generator.stop();
+
+	expect(sourceErrors).toEqual([]);
+	expect(encodedSamples).toHaveLength(2);
+	expect(encodedSamples[1]!.timestamp).toBe(5);
+	// How many got queued depends on timing, but never more than the queue holds
+	const queuedSampleCount = Math.round(encodedSamples[1]!.numberOfFrames / 480);
+	expect(queuedSampleCount).toBeGreaterThan(0);
+	expect(queuedSampleCount).toBeLessThanOrEqual(8);
+});
+
+test('Audio track captured through the audio context fallback', async () => {
+	const generator = new MediaStreamTrackGenerator({ kind: 'audio' });
+	const writer = generator.writable.getWriter();
+
+	const contexts: AudioContext[] = [];
+	const OriginalAudioContext = window.AudioContext;
+	window.AudioContext = class extends OriginalAudioContext {
+		constructor(options?: AudioContextOptions) {
+			super(options);
+			contexts.push(this);
+		}
+	};
+	const OriginalProcessor = window.MediaStreamTrackProcessor;
+	// @ts-expect-error Simulates a browser without it
+	window.MediaStreamTrackProcessor = undefined;
+
+	const source = new MediaStreamAudioTrackSource(generator, { codec: 'pcm-s16' });
+	const sourceErrors: unknown[] = [];
+	source.errorPromise.catch(error => sourceErrors.push(error));
+
+	const output = new Output({
+		format: new WavOutputFormat(),
+		target: new BufferTarget(),
+	});
+	output.addAudioTrack(source);
+
+	try {
+		await output.start();
+	} finally {
+		window.AudioContext = OriginalAudioContext;
+		window.MediaStreamTrackProcessor = OriginalProcessor;
+	}
+
+	// Under load, the audio context can take a while to start rendering, so feed the track until it has rendered some
+	assert(contexts.length === 1);
+	for (let i = 0; contexts[0]!.currentTime < 0.5; i++) {
+		await writer.write(new AudioData({
+			format: 'f32-planar',
+			sampleRate: 48000,
+			numberOfChannels: 1,
+			numberOfFrames: 480,
+			timestamp: 10_000 * i,
+			data: new Float32Array(480).fill(0.5),
+		}));
+		await wait(10);
+	}
+
+	await output.finalize();
+	generator.stop();
+
+	expect(sourceErrors).toEqual([]);
+	expect(output.target.buffer!.byteLength).toBeGreaterThan(44);
+	expect(contexts.length).toBe(1);
+	expect(contexts[0]!.state).toBe('closed');
+});
+
+test('Encoder error while an added sample is still being processed', async () => {
+	const toAudioDataSpy = vi.spyOn(AudioSample.prototype, 'toAudioData');
+
+	const output = new Output({
+		format: new WebMOutputFormat(),
+		target: new BufferTarget(),
+	});
+	let processCount = 0;
+	const source = new AudioSampleSource({
+		codec: 'opus',
+		quality: new Quality('medium'),
+		transform: {
+			process: async (sample) => {
+				if (processCount++ === 0) {
+					return sample.clone();
+				}
+
+				await wait(100);
+
+				// The encoder is configured for stereo, so this makes it error out
+				return new AudioSample({
+					data: new Float32Array(6 * 960),
+					format: 'f32',
+					numberOfChannels: 6,
+					sampleRate: 48000,
+					timestamp: sample.timestamp,
+				});
+			},
+		},
+	});
+	output.addAudioTrack(source);
+	await output.start();
+
+	const errors: string[] = [];
+	for (let i = 0; i < 3; i++) {
+		using sample = new AudioSample({
+			data: new Float32Array(2 * 960),
+			format: 'f32',
+			numberOfChannels: 2,
+			sampleRate: 48000,
+			timestamp: 0.02 * i,
+		});
+		await source.add(sample).catch((error: Error) => errors.push(error.name));
+	}
+
+	const audioDatas = toAudioDataSpy.mock.results.map(result => result.value as AudioData);
+	toAudioDataSpy.mockRestore();
+
+	await output.cancel();
+
+	expect(errors).toEqual(['EncodingError']);
+	// Closed AudioData has a null format
+	expect(audioDatas.filter(audioData => audioData.format !== null)).toEqual([]);
+});
+
+test('onEncodedPacket throwing for an encoder-emitted packet', async () => {
+	const uncaughtErrors = collectUncaughtErrors();
+
+	const output = new Output({
+		format: new WebMOutputFormat(),
+		target: new BufferTarget(),
+	});
+	const source = new AudioSampleSource({
+		codec: 'opus',
+		quality: new Quality('medium'),
+		onEncodedPacket: () => {
+			throw new Error('Callback failed');
+		},
+	});
+	output.addAudioTrack(source);
+	await output.start();
+
+	using sample = new AudioSample({
+		data: new Float32Array(2 * 48000),
+		format: 'f32',
+		numberOfChannels: 2,
+		sampleRate: 48000,
+		timestamp: 0,
+	});
+	await source.add(sample);
+
+	await expect(output.finalize()).rejects.toThrow('Callback failed');
+	uncaughtErrors.stop();
+
+	expect(uncaughtErrors.errors).toEqual([]);
+});
+
+const collectUncaughtErrors = () => {
+	const errors: unknown[] = [];
+	const onError = (event: ErrorEvent) => {
+		errors.push(event.error);
+		event.preventDefault();
+	};
+	window.addEventListener('error', onError);
+
+	return {
+		errors,
+		stop: () => window.removeEventListener('error', onError),
+	};
+};
+
+test('Empty audio sample', async () => {
+	const output = new Output({
+		format: new WebMOutputFormat(),
+		target: new BufferTarget(),
+	});
+	const source = new AudioSampleSource({
+		codec: 'opus',
+		bitrate: 64000,
+	});
+	output.addAudioTrack(source);
+	await output.start();
+
+	for (const [timestamp, numberOfFrames] of [[0, 960], [0.02, 0], [0.02, 960]]) {
+		using sample = new AudioSample({
+			data: new Float32Array(numberOfFrames!),
+			format: 'f32',
+			numberOfChannels: 1,
+			sampleRate: 48000,
+			timestamp: timestamp!,
+		});
+		await source.add(sample);
+	}
+
+	await output.finalize();
+});
+
+test('AudioBufferSource with overlapping adds', async () => {
+	const output = new Output({
+		format: new WavOutputFormat(),
+		target: new BufferTarget(),
+	});
+	const source = new AudioBufferSource({ codec: 'pcm-s16' });
+	output.addAudioTrack(source);
+	await output.start();
+
+	// Each buffer gets split into two samples, and is a constant value higher than the one before
+	const frameCount = 6 * 48000;
+	const buffers = [1, 2].map((value) => {
+		const buffer = new AudioBuffer({
+			length: frameCount,
+			numberOfChannels: 1,
+			sampleRate: 48000,
+		});
+		buffer.getChannelData(0).fill(value / 16);
+		return buffer;
+	});
+
+	await Promise.all(buffers.map(buffer => source.add(buffer)));
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	const values: number[] = [];
+	for await (const packet of new EncodedPacketSink(track).packets()) {
+		const view = toDataView(packet.data);
+		for (let i = 0; i < packet.data.byteLength; i += 2) {
+			values.push(view.getInt16(i, true));
+		}
+	}
+
+	// The buffers' samples must not interleave
+	expect(values).toHaveLength(2 * frameCount);
+	const firstValues = new Set(values.slice(0, frameCount));
+	const secondValues = new Set(values.slice(frameCount));
+	expect(firstValues.size).toBe(1);
+	expect(secondValues.size).toBe(1);
+	expect([...secondValues][0]).toBeGreaterThan([...firstValues][0]!);
+});

@@ -1,9 +1,6 @@
 // Adapted from https://github.com/mitschabaude/esbuild-plugin-inline-worker
 
 import * as esbuild from 'esbuild';
-import findCacheDir from 'find-cache-dir';
-import fs from 'node:fs';
-import path from 'node:path';
 
 export function inlineWorkerPlugin(extraConfig: esbuild.BuildOptions): esbuild.Plugin {
 	return {
@@ -16,8 +13,9 @@ export function inlineWorkerPlugin(extraConfig: esbuild.BuildOptions): esbuild.P
 					const workerCode = await buildWorker(workerPath, extraConfig);
 					return {
 						contents: `import inlineWorker from '__inline-worker'
+const cache = {};
 export default function Worker() {
-  return inlineWorker(${JSON.stringify(workerCode)});
+  return inlineWorker(${JSON.stringify(workerCode)}, cache);
 }
 `,
 						loader: 'js',
@@ -26,13 +24,18 @@ export default function Worker() {
 			);
 
 			const inlineWorkerFunctionCode = `
-export default async function inlineWorker(scriptText) {
+export default async function inlineWorker(scriptText, cache) {
 	if (typeof Worker !== 'undefined' && typeof Bun === 'undefined') {
 		// Browser, Deno (Deno can't do dynamic import of worker_threads)
 
-		const blob = new Blob([scriptText], { type: "text/javascript" });
-		const url = URL.createObjectURL(blob);
-		const worker = new Worker(url, { type: typeof Deno !== 'undefined' ? 'module' : undefined }); // module for Deno
+		// Reused instead of revoked, since Deno fails when the URL is revoked right after creating the worker
+		if (!cache.url) {
+			const blob = new Blob([scriptText], { type: "text/javascript" });
+			cache.url = URL.createObjectURL(blob);
+		}
+		const worker = new Worker(cache.url, {
+			type: typeof Deno !== 'undefined' ? 'module' : undefined, // module for Deno
+		});
 		return worker;
 	} else {
 		// Node, Bun (Bun's Worker is flaky, worker_threads works much better)
@@ -64,41 +67,22 @@ export default async function inlineWorker(scriptText) {
 	};
 }
 
-const cacheDir = findCacheDir({
-	name: 'esbuild-plugin-inline-worker',
-	create: true,
-});
-if (cacheDir === undefined) {
-	throw new Error('Cache directory not found.');
-}
-
-let i = 0;
-
 async function buildWorker(workerPath: string, extraConfig: esbuild.BuildOptions) {
-	const scriptNameParts = path.basename(workerPath).split('.');
-	scriptNameParts.pop();
-	scriptNameParts.push(String(i)); // To make sure it doesn't clash with other builds
-	scriptNameParts.push('js');
-	const scriptName = scriptNameParts.join('.');
-	const bundlePath = path.resolve(cacheDir!, scriptName);
-
-	i = (i + 1) % 32;
-
 	if (extraConfig) {
 		delete extraConfig.entryPoints;
 		delete extraConfig.outfile;
 		delete extraConfig.outdir;
 	}
 
-	await esbuild.build({
+	const result = await esbuild.build({
 		entryPoints: [workerPath],
 		bundle: true,
 		minify: true,
-		outfile: bundlePath,
 		target: 'es2017',
 		format: 'esm',
 		...extraConfig,
+		write: false, // In memory
 	});
 
-	return fs.promises.readFile(bundlePath, { encoding: 'utf-8' });
+	return result.outputFiles[0]!.text;
 }

@@ -58,6 +58,21 @@ test('findUnderlyingFrameRate with 30 FPS at 1000 Hz starting at 1e9 seconds', (
 	expect(findUnderlyingFrameRate(ticks, 1000)).toBe(30);
 });
 
+test('findUnderlyingFrameRate with 60 FPS at 90000 Hz with one tick of jitter', () => {
+	// Every timestamp lies on the 60 FPS lattice, give or take one tick
+	const ticks = new Float64Array(300).map((_, i) => 1500 * i + (i % 3 === 1 ? 1 : 0));
+	expect(findUnderlyingFrameRate(ticks, 90000)).toBe(60);
+});
+
+test('findUnderlyingFrameRate with 60/1.001 FPS at 90000 Hz with dropped frames and ceil quantization', () => {
+	const ticks = makeTicks(60000 / 1001, 90000, {
+		frameCount: 257,
+		quantize: Math.ceil,
+		dropFrame: dropSomeFrames,
+	});
+	expect(findUnderlyingFrameRate(ticks, 90000)).toBe(60000 / 1001);
+});
+
 test('findUnderlyingFrameRate with irregular timestamps yields null', () => {
 	const ticks = new Float64Array([0, 0.2, 0.5].map(x => Math.round(x * 100)));
 	expect(findUnderlyingFrameRate(ticks, 100)).toBe(null);
@@ -106,6 +121,21 @@ test('computeFrameRateMetrics with cursed VFR video', async () => {
 	expect(metrics.averageFrameRate).toBe(8.664659340979288);
 	expect(metrics.medianFrameRate).toBe(30.165016356826754);
 	expect(metrics.frameRateIsConstant).toBe(false);
+});
+
+test('computeFrameRateMetrics with one tick of jitter', async () => {
+	using input = new Input({
+		source: new FilePathSource(publicPath('193039199_mp4_h264_aac_fhd_7.ts')),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+
+	const metrics = await videoTrack.computeFrameRateMetrics();
+	expect(metrics.underlyingFrameRate).toBe(60);
+	expect(metrics.bestGuessFrameRate).toBe(60);
+	expect(metrics.frameRateIsConstant).toBe(true);
 });
 
 const makeTicks = (

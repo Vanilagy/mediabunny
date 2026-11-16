@@ -8,7 +8,13 @@
 
 import { AES_128_BLOCK_SIZE, createAes128CbcDecryptStream } from '../aes';
 import { ENCRYPTION_KEY_CACHE_GROUP, Input } from '../input';
-import { Segment, SegmentedInput, SegmentedInputTrackDeclaration, SegmentRetrievalOptions } from '../segmented-input';
+import {
+	getReferenceFirstTimestamp,
+	Segment,
+	SegmentedInput,
+	SegmentedInputTrackDeclaration,
+	SegmentRetrievalOptions,
+} from '../segmented-input';
 import {
 	toDataView,
 	joinPaths,
@@ -36,6 +42,7 @@ import {
 	TAG_DISCONTINUITY_SEQUENCE,
 	TAG_ENDLIST,
 	TAG_EXTINF,
+	TAG_I_FRAMES_ONLY,
 	TAG_KEY,
 	TAG_MAP,
 	TAG_MEDIA_SEQUENCE,
@@ -173,7 +180,9 @@ export class HlsSegmentedInput extends SegmentedInput {
 			}
 		}
 
-		const offsetTimestampsByDateTime = this.input._formatOptions.hls?.offsetTimestampsByDateTime !== false;
+		// Only do this if we know no segments yet or if we already had datetime-offset segments
+		const offsetTimestampsByDateTime = this.input._formatOptions.hls?.offsetTimestampsByDateTime !== false
+			&& (this.segments.length === 0 || this.segments[0]!.unixEpochTimestamp === this.segments[0]!.timestamp);
 		const variables = new HlsPlaylistVariables(
 			this.rootPath,
 			this.demuxer.hasMasterPlaylist ? this.demuxer.masterPlaylistVariables : null,
@@ -222,13 +231,15 @@ export class HlsSegmentedInput extends SegmentedInput {
 
 				if (prevLastSegment.sequenceNumber < number) {
 					// The sequence number has finally exceeded the last sequence number we knew, meaning we can now
-					// continue the segment list from there. Set some data to continue where we left off.
-					accumulatedTime = prevLastSegment.timestamp + prevLastSegment.duration;
-					currentFirstSegment = prevLastSegment.firstSegment;
+					// continue the segment list from there. Set some data to continue where we left off. Segments that
+					// dropped out of the playlist before we ever saw them still took up time, so estimate it.
+					const elapsed = (number - prevLastSegment.sequenceNumber) * prevLastSegment.duration;
+					accumulatedTime = prevLastSegment.timestamp + elapsed;
+					currentFirstSegment = prevLastSegment.firstSegment ?? prevLastSegment;
 					currentInitSegment = prevLastSegment.initSegment;
 					lastProgramDateTimeSeconds = prevLastSegment.lastProgramDateTimeSeconds;
 					accumulatedUnixTime = prevLastSegment.unixEpochTimestamp !== null
-						? prevLastSegment.unixEpochTimestamp + prevLastSegment.duration
+						? prevLastSegment.unixEpochTimestamp + elapsed
 						: null;
 					prevLastSegment = null;
 				}
@@ -273,6 +284,11 @@ export class HlsSegmentedInput extends SegmentedInput {
 						offset: nextByteRange?.offset ?? 0,
 						length: nextByteRange?.length ?? null,
 					};
+
+					if (currentFirstSegment && currentFirstSegment.discontinuityNumber !== nextDiscontinuityNumber) {
+						// A discontinuity happened in segments that dropped out before we ever saw them
+						currentFirstSegment = null;
+					}
 
 					const segment: HlsSegment = {
 						index: this.segments.length,
@@ -374,14 +390,6 @@ export class HlsSegmentedInput extends SegmentedInput {
 					currentInitSegment = segment;
 				} else {
 					// We're still seeing segments we already know about
-				}
-
-				nextSegmentDuration = null;
-
-				if (nextByteRange === null) {
-					lastByteRangeEnd = null;
-				} else {
-					nextByteRange = null;
 				}
 			} else if (line.startsWith(TAG_KEY)) {
 				const attributes = new AttributeList(line.slice(TAG_KEY.length), variables);
@@ -514,9 +522,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 					// one or more Media Segment URIs, the client SHOULD extrapolate
 					// backward from that tag (using EXTINF durations and/or media
 					// timestamps) to associate dates with those segments."
-					const lastSegment = last(this.segments)!;
-					const lastSegmentEnd = lastSegment.timestamp + lastSegment.duration;
-					const offset = dateTimeSeconds - lastSegmentEnd;
+					const offset = dateTimeSeconds - accumulatedTime;
 
 					for (const segment of this.segments) {
 						segment.unixEpochTimestamp = segment.timestamp + offset;
@@ -557,6 +563,8 @@ export class HlsSegmentedInput extends SegmentedInput {
 				}
 
 				this.refreshInterval = clamp(duration, 0.5, 3600); // Clamped for safety
+			} else if (line === TAG_I_FRAMES_ONLY) {
+				this.hasOnlyKeyPackets = true;
 			} else if (line === TAG_ENDLIST) {
 				this.streamHasEnded = true;
 				break; // No need to keep reading after this
@@ -581,7 +589,7 @@ export class HlsSegmentedInput extends SegmentedInput {
 	}
 
 	async getFirstSegment() {
-		if (this.segments.length === 0) {
+		if (this.segments.length === 0 && !this.streamHasEnded) {
 			await this.runUpdateSegments();
 		}
 
@@ -589,7 +597,11 @@ export class HlsSegmentedInput extends SegmentedInput {
 	}
 
 	async getSegmentAt(timestamp: number, options: SegmentRetrievalOptions) {
-		if (this.segments.length === 0) {
+		if (
+			this.segments.length === 0
+			&& !this.streamHasEnded
+			&& !(options.skipLiveWait && this.getRemainingWaitTimeMs() > 0)
+		) {
 			await this.runUpdateSegments();
 		}
 
@@ -859,14 +871,13 @@ export class HlsSegmentedInput extends SegmentedInput {
 				return 0;
 			}
 
-			const tracks = await input.getTracks();
-			const track = tracks.find(x => x.type === 'video') ?? tracks[0];
-			if (!track) {
-				throw new Error('The playlist\'s first segment contains no tracks.');
+			const firstTimestamp = await getReferenceFirstTimestamp(input);
+			if (firstTimestamp === null) {
+				throw new Error('The playlist\'s first segment contains no media.');
 			}
 
 			const mediaOffset = await this.getMediaOffset(firstSegment, input);
-			const offset = await track.getFirstTimestamp() + mediaOffset - firstSegment.timestamp;
+			const offset = firstTimestamp + mediaOffset - firstSegment.timestamp;
 
 			// Set it if it isn't already
 			this.learnedSegmentTimestampOffset ??= offset;
