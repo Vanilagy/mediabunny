@@ -248,6 +248,30 @@ const pipedWav = (frameCount: number) => {
 	return file;
 };
 
+test('Wrong block align', async () => {
+	for (const [channels, bitsPerSample, blockAlign] of [[1, 16, 4], [2, 24, 3]] as const) {
+		const frameSize = channels * bitsPerSample / 8;
+		const file = wav([
+			fmtChunk(1, channels, 8000, bitsPerSample, blockAlign),
+			riffChunk('data', new Uint8Array(frameSize * 100)),
+		]);
+
+		using input = new Input({
+			source: new BufferSource(file),
+			formats: ALL_FORMATS,
+		});
+		const track = (await input.getPrimaryAudioTrack())!;
+		expect(await track.getDurationFromMetadata()).toBe(100 / 8000);
+		expect(await track.computeDuration()).toBe(100 / 8000);
+
+		let byteCount = 0;
+		for await (const packet of new EncodedPacketSink(track).packets()) {
+			byteCount += packet.data.byteLength;
+		}
+		expect(byteCount).toBe(frameSize * 100);
+	}
+});
+
 test('RF64 with metadata after the data chunk', async () => {
 	// What libsndfile writes when tagging an existing RF64 file
 	const ds64 = riffChunk('ds64', new Uint8Array(28));
@@ -273,9 +297,13 @@ const wav = (chunks: Uint8Array[], riffType = 'RIFF') => {
 	return concat(ascii(riffType), u32(body.length), body);
 };
 
-const fmtChunk = (formatTag: number, channels: number, sampleRate: number, bitsPerSample: number) => {
-	const blockAlign = channels * bitsPerSample / 8;
-
+const fmtChunk = (
+	formatTag: number,
+	channels: number,
+	sampleRate: number,
+	bitsPerSample: number,
+	blockAlign = channels * bitsPerSample / 8,
+) => {
 	return riffChunk('fmt ', concat(
 		u16(formatTag),
 		u16(channels),
