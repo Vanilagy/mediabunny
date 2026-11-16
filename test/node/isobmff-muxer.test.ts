@@ -1793,3 +1793,45 @@ test('HEVC codec string follows the sample entry', async () => {
 	assert(rereadTrack);
 	expect(await rereadTrack.getCodecParameterString()).toBe(decoderConfig.codec.replace('hev1.', 'hvc1.'));
 });
+
+// A standalone fragmented MP4 can also back a byte-range playlist without copying its payloads.
+test('Fragment metadata indexes complete moof/mdat pairs on the presentation timeline', async () => {
+	const fragments: { position: number; byteLength: number; startTimestamp: number; endTimestamp: number }[] = [];
+	const boxes: { position: number; length: number }[] = [];
+	const output = new Output({
+		format: new Mp4OutputFormat({
+			fastStart: 'fragmented',
+			minimumFragmentDuration: 1,
+			onFragment: fragment => fragments.push(fragment),
+			onMoof: (data, position) => boxes.push({ position, length: data.length }),
+			onMdat: (data, position) => boxes.push({ position, length: data.length }),
+		}),
+		target: new BufferTarget(),
+	});
+	const video = new EncodedVideoPacketSource('vp8');
+	const audio = new EncodedAudioPacketSource('mp3');
+	output.addVideoTrack(video);
+	output.addAudioTrack(audio);
+	await output.start();
+	for (let i = 0; i < 3; i++) {
+		await video.add(new EncodedPacket(new Uint8Array([1, 2, 3]), 'key', i, 1), vp8Meta);
+		await audio.add(new EncodedPacket(new Uint8Array([4, 5, 6]), 'key', i, 1.1), mp3Meta);
+	}
+	await output.finalize();
+	expect(fragments).toHaveLength(3);
+	const bytes = new Uint8Array(output.target.buffer!);
+	for (const [i, fragment] of fragments.entries()) {
+		const moof = boxes[2 * i]!;
+		const mdat = boxes[2 * i + 1]!;
+		expect(fragment.position).toBe(moof.position);
+		expect(fragment.byteLength).toBe(moof.length + mdat.length);
+		expect(mdat.position).toBe(moof.position + moof.length);
+		expect(new TextDecoder().decode(bytes.subarray(fragment.position + 4, fragment.position + 8))).toBe('moof');
+		expect(fragment.startTimestamp).toBeCloseTo(i);
+		expect(fragment.endTimestamp).toBeCloseTo(i + 1.1);
+		if (i > 0) {
+			const previous = fragments[i - 1]!;
+			expect(fragment.position).toBe(previous.position + previous.byteLength);
+		}
+	}
+});

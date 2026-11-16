@@ -74,6 +74,12 @@ type IsobmffOutputFormatOptions = {
 	onMoov?: (data: Uint8Array, position: number) => unknown;
 	onMdat?: (data: Uint8Array, position: number) => unknown;
 	onMoof?: (data: Uint8Array, position: number, timestamp: number) => unknown;
+	onFragment?: (fragment: {
+		position: number;
+		byteLength: number;
+		startTimestamp: number;
+		endTimestamp: number;
+	}) => unknown;
 };
 ```
 - `fastStart`\
@@ -110,6 +116,9 @@ type IsobmffOutputFormatOptions = {
 	Will be called for each finalized mdat (Media Data) box of the output file. Usage of this callback is not recommended when not using `fastStart: 'fragmented'`, as there will be one monolithic mdat box which might require large amounts of memory.
 - `onMoof`\
 	Will be called for each finalized moof (Movie Fragment) box of the output file. The fragment's start timestamp in seconds is also passed.
+- `onFragment`\
+  Receives the byte range of each complete moof/mdat pair and its presentation start/end in seconds, without copying media bytes. Only fires for fragmented output. The start follows the first video track when present, otherwise the earliest track; the end includes all tracks. Useful for building a fragment index alongside a standalone MP4. The callback does not imply that a streaming target has flushed those bytes.
+
 
 ## QuickTime File Format (.mov)
 

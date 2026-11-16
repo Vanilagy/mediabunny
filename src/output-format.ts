@@ -232,6 +232,19 @@ export type IsobmffOutputFormatOptions = {
 	 * @param timestamp - The start timestamp of the fragment in seconds.
 	 */
 	onMoof?: (data: Uint8Array, position: number, timestamp: number) => unknown;
+	/**
+	 * Called after a complete fragment is written, without copying its bytes. Only used for fragmented output.
+	 *
+	 * The byte range covers the moof and mdat boxes. Timestamps are in seconds on the presentation timeline:
+	 * the start follows the first video track when present, otherwise the earliest track; the end includes all
+	 * tracks. This is useful for indexing fragments without buffering or parsing their payloads.
+	 */
+	onFragment?: (fragment: {
+		position: number;
+		byteLength: number;
+		startTimestamp: number;
+		endTimestamp: number;
+	}) => unknown;
 };
 
 /**
@@ -270,6 +283,9 @@ export abstract class IsobmffOutputFormat extends OutputFormat {
 		}
 		if (options.onMdat !== undefined && typeof options.onMdat !== 'function') {
 			throw new TypeError('options.onMdat, when provided, must be a function.');
+		}
+		if (options.onFragment !== undefined && typeof options.onFragment !== 'function') {
+			throw new TypeError('options.onFragment, when provided, must be a function.');
 		}
 		if (options.onMoof !== undefined && typeof options.onMoof !== 'function') {
 			throw new TypeError('options.onMoof, when provided, must be a function.');

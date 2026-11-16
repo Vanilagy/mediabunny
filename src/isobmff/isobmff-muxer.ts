@@ -1572,6 +1572,27 @@ export class IsobmffMuxer extends Muxer {
 			this.formatOptions.onMdat(data, start);
 		}
 
+		if (this.formatOptions.onFragment) {
+			const video = tracksInFragment.find(track => track.track.isVideoTrack());
+			const timingTracks = video ? [video] : tracksInFragment;
+			const startTimestamp = Math.min(...timingTracks.map(track =>
+				track.currentChunk!.startTimestamp + track.startTimestampOffset!));
+			let endTimestamp = -Infinity;
+			for (const track of tracksInFragment) {
+				for (const sample of track.currentChunk!.samples) {
+					endTimestamp = Math.max(
+						endTimestamp, sample.timestamp + track.startTimestampOffset! + sample.duration,
+					);
+				}
+			}
+			this.formatOptions.onFragment({
+				position: moofOffset,
+				byteLength: this.writer.getPos() - moofOffset,
+				startTimestamp,
+				endTimestamp,
+			});
+		}
+
 		for (const trackData of tracksInFragment) {
 			trackData.finalizedChunks.push(trackData.currentChunk!);
 			this.finalizedChunks.push(trackData.currentChunk!);
