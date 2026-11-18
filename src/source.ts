@@ -982,6 +982,9 @@ export class UrlSource extends PathedSource {
 	/** @internal */
 	private async _runWorker(worker: ReadWorker) {
 		let consecutiveReadFailures = 0;
+		const rangeEnd = this._length !== null
+			? this._offset + this._length - 1
+			: '';
 
 		// The outer loop is for resuming a request if it dies mid-response
 		while (true) {
@@ -1000,7 +1003,7 @@ export class UrlSource extends PathedSource {
 				mergeRequestInit(this._requestInit, {
 					headers: {
 						// Always sending a range request is a good way to probe if the server supports them
-						Range: `bytes=${worker.currentPos}-`,
+						Range: `bytes=${worker.currentPos}-${rangeEnd}`,
 					},
 					signal: abortController.signal,
 				}),
@@ -1008,8 +1011,8 @@ export class UrlSource extends PathedSource {
 				() => abortController.signal.aborted,
 			);
 
-			// Our ranges are always open-ended, so a 416 means the start lies past the end of the resource. If the
-			// response doesn't state the size, the end is right here when this worker has read its way up to it.
+			// Servers clamp a range's end to the resource, so a 416 means the start lies past the end of the resource.
+			// If the response doesn't state the size, the end is right here when this worker has read its way up to it.
 			const unsatisfiedRangeMatch = response.status === 416
 				? /^bytes \*\/(\d+)$/.exec(response.headers.get('Content-Range') ?? '')
 				: null;
@@ -2991,7 +2994,7 @@ export class RangedSource extends Source {
 					this._offset + start,
 					this._offset + end,
 					this._offset + minReadPosition,
-					this._offset + maxReadPosition,
+					this._offset + Math.min(maxReadPosition, this._length ?? Infinity),
 				);
 
 		const processResult = (result: ReadResult | null) => {

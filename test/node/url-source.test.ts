@@ -418,25 +418,30 @@ const startRangelessServer = async (
 	};
 };
 
-test('UrlSource read events with a Range header', async () => {
+test('UrlSource reads and requests with a Range header', async () => {
 	const bytes = makeRamp(256);
 	const logs = captureLogs();
 
 	try {
 		for (const supportsRanges of [true, false]) {
+			const requestedRanges: string[] = [];
 			const server = await startServer((req, res) => {
+				requestedRanges.push(req.headers.range!);
+
 				if (!supportsRanges) {
 					res.writeHead(200, { 'Content-Length': bytes.length });
 					res.end(bytes);
 					return;
 				}
 
-				const start = Number(/^bytes=(\d+)-$/.exec(req.headers.range!)![1]);
+				const match = /^bytes=(\d+)-(\d+)$/.exec(req.headers.range!)!;
+				const start = Number(match[1]);
+				const end = Number(match[2]) + 1;
 				res.writeHead(206, {
-					'Content-Range': `bytes ${start}-${bytes.length - 1}/${bytes.length}`,
-					'Content-Length': bytes.length - start,
+					'Content-Range': `bytes ${start}-${end - 1}/${bytes.length}`,
+					'Content-Length': end - start,
 				});
-				res.end(bytes.subarray(start));
+				res.end(bytes.subarray(start, end));
 			});
 
 			try {
@@ -448,6 +453,7 @@ test('UrlSource read events with a Range header', async () => {
 				const slice = await new Reader(ref.source).requestSlice(0, 4);
 				expect([...readBytes(slice!, 4)]).toEqual([100, 101, 102, 103]);
 				expect(reads).toEqual([{ start: 0, end: 100 }]);
+				expect(requestedRanges).toEqual(['bytes=100-199']);
 			} finally {
 				server.close();
 			}
@@ -726,6 +732,21 @@ test('UrlSource read with capped responses and unknown size', async () => {
 	// Reading on past the end gets a 416 without a size, which still pins the end down
 	expectBytes(await reader.requestSlice(data.length - 100_000, 100_000), data.subarray(data.length - 100_000));
 	await vi.waitFor(() => expect(source._orchestrator.fileSize).toBe(data.length));
+});
+
+test('UrlSource slice prefetch within the slice', async () => {
+	const data = createTestData(4 * 2 ** 20);
+	const source = new UrlSource('https://example.com/file.bin', {
+		fetchFn: createRangeFetchFn(data, { exposeSize: () => true }),
+	});
+	using sourceRef = source.ref();
+	using sliceRef = sourceRef.source.slice(2 ** 20, 100_000).ref();
+
+	expectBytes(await new Reader(sliceRef.source).requestSlice(0, 8), data.subarray(2 ** 20, 2 ** 20 + 8));
+
+	// The final chunk may overshoot
+	const maxTargetPos = Math.max(...source._orchestrator.workers.map(x => x.targetPos));
+	expect(maxTargetPos).toBeLessThanOrEqual(2 ** 20 + 100_000 + 2 ** 16);
 });
 
 const createTestData = (length: number) => {
