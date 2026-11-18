@@ -513,6 +513,27 @@ export abstract class BaseMediaSampleSink<
 			metadataOnly: false,
 		};
 
+		const track = this._track;
+		const closeSamples = () => {
+			lastSample?.close();
+			lastSample = null;
+			for (const sample of sampleQueue) {
+				sample.close();
+			}
+			sampleQueue.length = 0;
+		};
+		const terminate = () => {
+			terminated = true;
+			ended = true;
+			onQueueDequeue();
+			onQueueNotEmpty();
+		};
+
+		// Disposal must wake an idle pump even if the consumer never advances the iterator again.
+		if (!track.input._disposed) {
+			track.input._disposeCallbacks.add(terminate);
+		}
+
 		// The following is the "pump" process that keeps pumping packets into the decoder
 		(async () => {
 			decoder = await this._createDecoder((sample) => {
@@ -618,16 +639,12 @@ export abstract class BaseMediaSampleSink<
 				onQueueNotEmpty();
 			}
 		}).finally(() => {
+			track.input._disposeCallbacks.delete(terminate);
 			decoder?.close();
-		});
-
-		const track = this._track;
-		const closeSamples = () => {
-			lastSample?.close();
-			for (const sample of sampleQueue) {
-				sample.close();
+			if (track.input._disposed) {
+				closeSamples();
 			}
-		};
+		});
 
 		return {
 			async next() {
@@ -636,17 +653,13 @@ export abstract class BaseMediaSampleSink<
 						// Once next() throws, the consumer will never call return(), so terminate the
 						// iteration here - otherwise, the pump keeps queueing decoded samples that
 						// nothing can ever close.
-						terminated = true;
-						ended = true;
-						onQueueDequeue();
+						terminate();
 						closeSamples();
 						throw new InputDisposedError();
 					} else if (terminated) {
 						return { value: undefined, done: true };
 					} else if (hasOutOfBandError) {
-						terminated = true;
-						ended = true;
-						onQueueDequeue();
+						terminate();
 						closeSamples();
 						throw outOfBandError;
 					} else if (sampleQueue.length > 0) {
@@ -661,10 +674,7 @@ export abstract class BaseMediaSampleSink<
 				}
 			},
 			async return() {
-				terminated = true;
-				ended = true;
-				onQueueDequeue();
-				onQueueNotEmpty();
+				terminate();
 				closeSamples();
 
 				return { value: undefined, done: true };
@@ -730,6 +740,27 @@ export abstract class BaseMediaSampleSink<
 			verifyKeyPackets: true,
 			metadataOnly: false,
 		};
+
+		const track = this._track;
+		const closeSamples = () => {
+			heldSample?.close();
+			heldSample = null;
+			for (const sample of sampleQueue) {
+				sample?.close();
+			}
+			sampleQueue.length = 0;
+		};
+		const terminate = () => {
+			terminated = true;
+			onTerminated();
+			onQueueDequeue();
+			onQueueNotEmpty();
+		};
+
+		// Disposal must wake an idle pump even if the consumer never advances the iterator again.
+		if (!track.input._disposed) {
+			track.input._disposeCallbacks.add(terminate);
+		}
 
 		// The following is the "pump" process that keeps pumping packets into the decoder
 		(async () => {
@@ -899,17 +930,12 @@ export abstract class BaseMediaSampleSink<
 				onQueueNotEmpty();
 			}
 		}).finally(() => {
+			track.input._disposeCallbacks.delete(terminate);
 			decoder?.close();
-		});
-
-		const track = this._track;
-		const closeSamples = () => {
-			heldSample?.close();
-			heldSample = null;
-			for (const sample of sampleQueue) {
-				sample?.close();
+			if (track.input._disposed) {
+				closeSamples();
 			}
-		};
+		});
 
 		return {
 			async next() {
@@ -918,17 +944,13 @@ export abstract class BaseMediaSampleSink<
 						// Once next() throws, the consumer will never call return(), so terminate the
 						// iteration here - otherwise, the pump keeps queueing decoded samples that
 						// nothing can ever close.
-						terminated = true;
-						onTerminated();
-						onQueueDequeue();
+						terminate();
 						closeSamples();
 						throw new InputDisposedError();
 					} else if (terminated) {
 						return { value: undefined, done: true };
 					} else if (hasOutOfBandError) {
-						terminated = true;
-						onTerminated();
-						onQueueDequeue();
+						terminate();
 						closeSamples();
 						throw outOfBandError;
 					} else if (sampleQueue.length > 0) {
@@ -944,10 +966,7 @@ export abstract class BaseMediaSampleSink<
 				}
 			},
 			async return() {
-				terminated = true;
-				onTerminated();
-				onQueueDequeue();
-				onQueueNotEmpty();
+				terminate();
 				closeSamples();
 
 				return { value: undefined, done: true };

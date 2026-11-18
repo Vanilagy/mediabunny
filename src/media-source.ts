@@ -1225,6 +1225,9 @@ const detectAvcChunkTimestampShift = () => {
 
 			await encoder.flush();
 		} catch {
+			// Firefox encoders can be flaky and error _sometimes_, so let's just try again next time
+			avcChunkTimestampShiftPromise = null;
+
 			return false;
 		} finally {
 			if (encoder.state !== 'closed') {

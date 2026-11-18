@@ -128,32 +128,40 @@ registerDecoder(FailingAudioDecoder);
 registerDecoder(FakeAudioDecoder);
 
 test('Range iterator closes its decoder after throwing on disposal', async () => {
-	await testDecoderClosedAfterThrow(sink => sink.samples(), 'dispose');
+	await testDecoderClosed(sink => sink.samples(), 'dispose');
 });
 
 test('Range iterator closes its decoder after throwing a decoder error', async () => {
-	await testDecoderClosedAfterThrow(sink => sink.samples(), 'decoderError');
+	await testDecoderClosed(sink => sink.samples(), 'decoderError');
 });
 
 test('Timestamp iterator closes its decoder after throwing on disposal', async () => {
-	await testDecoderClosedAfterThrow(sink => sink.samplesAtTimestamps(QUERY_TIMESTAMPS), 'dispose');
+	await testDecoderClosed(sink => sink.samplesAtTimestamps(QUERY_TIMESTAMPS), 'dispose');
 });
 
 test('Timestamp iterator closes its decoder after throwing a decoder error', async () => {
-	await testDecoderClosedAfterThrow(sink => sink.samplesAtTimestamps(QUERY_TIMESTAMPS), 'decoderError');
+	await testDecoderClosed(sink => sink.samplesAtTimestamps(QUERY_TIMESTAMPS), 'decoderError');
 });
 
 test('Range iterator closes its decoder after throw()', async () => {
-	await testDecoderClosedAfterThrow(sink => sink.samples(), 'throw');
+	await testDecoderClosed(sink => sink.samples(), 'throw');
 });
 
 test('Timestamp iterator closes its decoder after throw()', async () => {
-	await testDecoderClosedAfterThrow(sink => sink.samplesAtTimestamps(QUERY_TIMESTAMPS), 'throw');
+	await testDecoderClosed(sink => sink.samplesAtTimestamps(QUERY_TIMESTAMPS), 'throw');
 });
 
-const testDecoderClosedAfterThrow = async (
+test('Range iterator closes its decoder when an idle input is disposed', async () => {
+	await testDecoderClosed(sink => sink.samples(), 'idleDispose');
+});
+
+test('Timestamp iterator closes its decoder when an idle input is disposed', async () => {
+	await testDecoderClosed(sink => sink.samplesAtTimestamps(QUERY_TIMESTAMPS), 'idleDispose');
+});
+
+const testDecoderClosed = async (
 	createIterator: (sink: VideoSampleSink) => AsyncGenerator<VideoSample | null, void, unknown>,
-	cause: 'dispose' | 'decoderError' | 'throw',
+	cause: 'dispose' | 'decoderError' | 'throw' | 'idleDispose',
 ) => {
 	using input = new Input({
 		source: new FilePathSource(path.join(__dirname, '../public/frames.webm')),
@@ -175,6 +183,14 @@ const testDecoderClosedAfterThrow = async (
 	while (decoder.decodedCount !== decodedCount) {
 		decodedCount = decoder.decodedCount;
 		await new Promise(resolve => setTimeout(resolve, 50));
+	}
+
+	expect(decoder.closed).toBe(false);
+	if (cause === 'idleDispose') {
+		input.dispose();
+		// Returning the iterator before this assertion would mask the leak.
+		await vi.waitFor(() => expect(decoder.closed).toBe(true)).finally(() => iterator.return());
+		return;
 	}
 
 	if (cause === 'dispose') {

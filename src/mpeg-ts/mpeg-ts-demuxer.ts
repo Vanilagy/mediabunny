@@ -851,7 +851,12 @@ export class MpegTsDemuxer extends Demuxer {
 					break;
 				}
 
-				currentPos += this.packetStride;
+				if (isProgramMap) {
+					// Media data may already start before the PMT, so jump back to the start of the file
+					currentPos = this.packetOffset;
+				} else {
+					currentPos += this.packetStride;
+				}
 			}
 
 			if (!hasProgramMap) {

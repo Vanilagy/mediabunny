@@ -1236,7 +1236,7 @@ test('MPEG-TS: Many streams and one that never shows up', async () => {
 	// Streams that were already set up used to have their sections read in full anyway, while looking for the last
 	// one
 	const streams = Array.from({ length: 300 }, (_, i) => ({ type: 0x0f, pid: 0x100 + i }));
-	streams.push({ type: 0x0f, pid: 0x1000 });
+	streams.push({ type: 0x0f, pid: 0x100 + 300 });
 
 	const packets: Uint8Array[] = [];
 	for (let round = 0; round < 10; round++) {

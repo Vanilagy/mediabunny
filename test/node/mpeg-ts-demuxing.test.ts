@@ -1402,8 +1402,8 @@ test('PES packets preceding the PMT', async () => {
 		avcPacket([HIGH_SPS, HIGH_PPS, IDR_SLICE], 4, 'key'),
 	]);
 
-	// Move the PAT and PMT behind the first three PES packets, like in a recording that starts mid-stream. The
-	// track then only consists of the frames at 2 and 4.
+	// Move the PAT and PMT behind the first three PES packets, like in a file whose media data starts before its
+	// tables. The track still begins with the very first frame.
 	const tsPackets: Uint8Array[] = [];
 	for (let pos = 0; pos < bytes.byteLength; pos += 188) {
 		tsPackets.push(bytes.subarray(pos, pos + 188));
@@ -1426,24 +1426,21 @@ test('PES packets preceding the PMT', async () => {
 	assert(track);
 
 	const sink = new EncodedPacketSink(track);
-	const firstPacket = await sink.getFirstPacket();
-	assert(firstPacket);
-	const secondPacket = await sink.getNextPacket(firstPacket);
-	assert(secondPacket);
-	expect(firstPacket.timestamp).toBeCloseTo(2 * FRAME_DURATION);
-	expect(firstPacket.duration).toBeCloseTo(2 * FRAME_DURATION);
-	expect(secondPacket.timestamp).toBeCloseTo(4 * FRAME_DURATION);
-	expect(secondPacket.duration).toBeCloseTo(2 * FRAME_DURATION);
+	const packets: EncodedPacket[] = [];
+	for await (const packet of sink.packets()) {
+		packets.push(packet);
+	}
+	expect(packets.map(x => Math.round(x.timestamp / FRAME_DURATION))).toEqual([0, 3, 1, 2, 4]);
+	expect(packets[0]!.type).toBe('key');
 
 	const packet = await sink.getPacket(3 * FRAME_DURATION);
 	assert(packet);
-	expect(packet.sequenceNumber).toBe(firstPacket.sequenceNumber);
-	expect(packet.duration).toBe(firstPacket.duration);
+	expect(packet.sequenceNumber).toBe(packets[1]!.sequenceNumber);
+	expect(packet.duration).toBe(packets[1]!.duration);
 
-	const keyPacket = await sink.getKeyPacket(Infinity);
+	const keyPacket = await sink.getKeyPacket(3 * FRAME_DURATION);
 	assert(keyPacket);
-	expect(keyPacket.sequenceNumber).toBe(secondPacket.sequenceNumber);
-	expect(keyPacket.duration).toBe(secondPacket.duration);
+	expect(keyPacket.sequenceNumber).toBe(packets[0]!.sequenceNumber);
 });
 
 test('Leading frames presented before the first packet', async () => {
