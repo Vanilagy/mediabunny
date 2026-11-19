@@ -396,8 +396,7 @@ test('Vorbis seeking to a short block ahead of an empty final packet', async () 
 	expect(seekedPacket?.duration).toBe(lastPacket.duration);
 });
 
-// A Vorbis decoder outputs nothing for the first packet it receives, which used to shift all timestamps by that packet
-test('decoded Vorbis sample timestamps do not depend on where decoding starts', async () => {
+test('Vorbis decoded timestamps independent of decoding start', async () => {
 	using input = new Input({
 		source: new UrlSource('/vorbis-eos.ogg'),
 		formats: ALL_FORMATS,
@@ -412,18 +411,27 @@ test('decoded Vorbis sample timestamps do not depend on where decoding starts', 
 		const samples: { timestamp: number; data: Float32Array }[] = [];
 		for await (using sample of sink.samples(startTimestamp, endTimestamp)) {
 			const data = new Float32Array(sample.numberOfFrames);
-			sample.copyTo(data, { planeIndex: 0, format: 'f32-planar' });
-			samples.push({ timestamp: sample.timestamp, data });
+			sample.copyTo(data, {
+				planeIndex: 0,
+				format: 'f32-planar',
+			});
+			samples.push({
+				timestamp: sample.timestamp,
+				data,
+			});
 		}
 
 		return samples;
 	};
 
-	// The first packet only primes the decoder, so the audio starts where it ends
-	const firstPacket = await new EncodedPacketSink(track).getFirstPacket();
+	// The first packet only primes the decoder, so the audio starts with the second one
+	const packetSink = new EncodedPacketSink(track);
+	const firstPacket = await packetSink.getFirstPacket();
 	assert(firstPacket);
+	const secondPacket = await packetSink.getNextPacket(firstPacket);
+	assert(secondPacket);
 	const fromStart = await decode(-Infinity, Infinity);
-	expect(fromStart[0]!.timestamp).toBeCloseTo(firstPacket.timestamp + firstPacket.duration, 10);
+	expect(fromStart[0]!.timestamp).toBeCloseTo(secondPacket.timestamp, 10);
 
 	// Decoding straight from a later point must give the same audio at the same timestamps
 	const fromStartByTimestamp = new Map(fromStart.map(x => [x.timestamp, x.data]));

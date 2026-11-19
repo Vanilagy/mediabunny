@@ -2397,8 +2397,10 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 	// Chromium does not respect negative packet timestamps, so we must do the fixin' ourselves
 	expectedFirstTimestamp: number | null = null;
 	timestampOffset = 0;
-
-	private codec: AudioCodec;
+	// Index of the packet, since the last flush, whose timestamp the first decoded audio sample has
+	referencePacketIndex: number;
+	packetsSinceFlush = 0;
+	inputTimestampShift = 0;
 
 	constructor(
 		onSample: (sample: AudioSample) => unknown,
@@ -2408,7 +2410,8 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 	) {
 		super(onSample, onError);
 
-		this.codec = codec;
+		// A Vorbis decoder outputs nada for the first packet it receives
+		this.referencePacketIndex = codec === 'vorbis' ? 1 : 0;
 
 		// WebCodecs impls discards the preskip (correct) but doesn't advance the timestamp (incorrect)
 		const opusPreSkip = codec === 'opus' && decoderConfig.description
@@ -2518,12 +2521,19 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 		} else {
 			assert(this.decoder);
 
-			// A Vorbis decoder outputs nothing for the first packet it receives, as that packet only primes the overlap
-			// with the next one. The first decoded audio therefore begins where the first packet ends.
-			this.expectedFirstTimestamp ??= this.codec === 'vorbis'
-				? packet.timestamp + packet.duration
-				: packet.timestamp;
-			this.decoder.decode(packet.toEncodedAudioChunk());
+			if (this.packetsSinceFlush === 0) {
+				this.inputTimestampShift = -packet.timestamp;
+			}
+			if (this.packetsSinceFlush === this.referencePacketIndex) {
+				this.expectedFirstTimestamp = packet.timestamp;
+			}
+			this.packetsSinceFlush++;
+
+			// Some decoders mishandle negative or otherwise unusual timestamps, so we always feed them a stream that
+			// starts at zero. Their output gets rebased onto expectedFirstTimestamp anyway.
+			// See https://github.com/Vanilagy/mediabunny/issues/653
+			const shiftedPacket = packet.clone({ timestamp: packet.timestamp + this.inputTimestampShift });
+			this.decoder.decode(shiftedPacket.toEncodedAudioChunk());
 		}
 	}
 
@@ -2537,6 +2547,8 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 
 		this.currentTimestamp = null;
 		this.expectedFirstTimestamp = null;
+		this.packetsSinceFlush = 0;
+		this.inputTimestampShift = 0;
 		this.timestampOffset = 0;
 	}
 
