@@ -359,9 +359,23 @@ export class EncodedPacketSink {
 		let outOfBandError = null as unknown;
 		let hasOutOfBandError = false;
 
-		const timestamps: number[] = [];
-		// The queue should always be big enough to hold 1 second worth of packets
-		const maxQueueSize = () => Math.max(2, timestamps.length);
+		// Read ahead by about 1 second of media time which smooths over high-latency sources like networks
+		const isQueueFull = () => {
+			if (packetQueue.length >= 128) {
+				return true;
+			} else if (packetQueue.length < 8) {
+				return false;
+			}
+
+			let minTimestamp = Infinity;
+			let maxTimestamp = -Infinity;
+			for (const packet of packetQueue) {
+				minTimestamp = Math.min(minTimestamp, packet.timestamp);
+				maxTimestamp = Math.max(maxTimestamp, packet.timestamp);
+			}
+
+			return maxTimestamp - minTimestamp >= 1;
+		};
 
 		// The following is the "pump" process that keeps pumping packets into the queue
 		(async () => {
@@ -372,7 +386,7 @@ export class EncodedPacketSink {
 					break;
 				}
 
-				if (packetQueue.length > maxQueueSize()) {
+				if (isQueueFull()) {
 					({ promise: queueDequeue, resolve: onQueueDequeue } = promiseWithResolvers());
 					await queueDequeue;
 					continue;
@@ -409,13 +423,6 @@ export class EncodedPacketSink {
 						throw outOfBandError;
 					} else if (packetQueue.length > 0) {
 						const value = packetQueue.shift()!;
-						const now = performance.now();
-						timestamps.push(now);
-
-						while (timestamps.length > 0 && now - timestamps[0]! >= 1000) {
-							timestamps.shift();
-						}
-
 						onQueueDequeue();
 
 						return { value, done: false };
@@ -2416,6 +2423,10 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 	// Chromium does not respect negative packet timestamps, so we must do the fixin' ourselves
 	expectedFirstTimestamp: number | null = null;
 	timestampOffset = 0;
+	// Index of the packet, since the last flush, whose timestamp the first decoded audio sample has
+	referencePacketIndex: number;
+	packetsSinceFlush = 0;
+	inputTimestampShift = 0;
 
 	constructor(
 		onSample: (sample: AudioSample) => unknown,
@@ -2425,12 +2436,22 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 	) {
 		super(onSample, onError);
 
+		// A Vorbis decoder outputs nada for the first packet it receives
+		this.referencePacketIndex = codec === 'vorbis' ? 1 : 0;
+
 		// WebCodecs impls discards the preskip (correct) but doesn't advance the timestamp (incorrect)
 		const opusPreSkip = codec === 'opus' && decoderConfig.description
 			? parseOpusIdentificationHeader(toUint8Array(decoderConfig.description)).preSkip / OPUS_SAMPLE_RATE
 			: 0;
 
 		const sampleHandler = (sample: AudioSample) => {
+			if (sample.numberOfFrames === 0) {
+				// We skip zero-data (empty) AudioSamples. These are sometimes emitted, for example, by Firefox when it
+				// decodes Vorbis (at the start). Skip them before they can anchor the timestamp offset.
+				sample.close();
+				return;
+			}
+
 			let sampleTimestamp = sample.timestamp;
 
 			if (this.expectedFirstTimestamp !== null && this.currentTimestamp === null) {
@@ -2449,13 +2470,6 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 
 			const preciseTimestamp = this.currentTimestamp;
 			this.currentTimestamp += sample.duration;
-
-			if (sample.numberOfFrames === 0) {
-				// We skip zero-data (empty) AudioSamples. These are sometimes emitted, for example, by Firefox when it
-				// decodes Vorbis (at the start).
-				sample.close();
-				return;
-			}
 
 			// Round the timestamp to the sample rate
 			const sampleRate = decoderConfig.sampleRate;
@@ -2533,8 +2547,19 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 		} else {
 			assert(this.decoder);
 
-			this.expectedFirstTimestamp ??= packet.timestamp;
-			this.decoder.decode(packet.toEncodedAudioChunk());
+			if (this.packetsSinceFlush === 0) {
+				this.inputTimestampShift = -packet.timestamp;
+			}
+			if (this.packetsSinceFlush === this.referencePacketIndex) {
+				this.expectedFirstTimestamp = packet.timestamp;
+			}
+			this.packetsSinceFlush++;
+
+			// Some decoders mishandle negative or otherwise unusual timestamps, so we always feed them a stream that
+			// starts at zero. Their output gets rebased onto expectedFirstTimestamp anyway.
+			// See https://github.com/Vanilagy/mediabunny/issues/653
+			const shiftedPacket = packet.clone({ timestamp: packet.timestamp + this.inputTimestampShift });
+			this.decoder.decode(shiftedPacket.toEncodedAudioChunk());
 		}
 	}
 
@@ -2548,6 +2573,8 @@ class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
 
 		this.currentTimestamp = null;
 		this.expectedFirstTimestamp = null;
+		this.packetsSinceFlush = 0;
+		this.inputTimestampShift = 0;
 		this.timestampOffset = 0;
 	}
 

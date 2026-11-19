@@ -17,7 +17,15 @@
 			source: new Mediabunny.BlobSource(file),
 		});
 
-		const audioTrack = await input.getPrimaryAudioTrack();
+		const videoTrack = await input.getPrimaryVideoTrack();
+		const sink = new Mediabunny.EncodedPacketSink(videoTrack);
+
+		for await (const packet of sink.packets()) {
+			console.log(packet.timestamp, packet.duration, packet.type)
+		}
+
+		/*
+		const audioTrack = await input.getPrimaryVideoTrack();
 		const sink = new Mediabunny.AudioSampleSink(audioTrack);
 
 		for await (const sample of sink.samples()) {
@@ -27,7 +35,7 @@
 			console.log(sample.timestamp, sample.duration, thing);
 
 			sample.close()
-		}
+		}*/
 		
 		/*
 		console.log(await audioTrack.getPreRollDuration());

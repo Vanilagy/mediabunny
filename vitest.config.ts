@@ -31,6 +31,8 @@ export default defineConfig({
 					root: 'test',
 					include: ['node/**/*.test.ts'],
 					environment: 'node',
+					// Run after the browser tests instead of alongside them so the two don't fight over CPU
+					sequence: { groupOrder: 1 },
 				},
 			},
 			{

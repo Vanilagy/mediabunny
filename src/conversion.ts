@@ -1761,6 +1761,13 @@ export class Conversion {
 						}
 					}
 
+					// This check is mostly there to discard open-GOP packets that come before the first key frame we
+					// copy. Those can't be decoded anyway, and some decoders discard them properly, but some don't, so
+					// let's just skip them altogether.
+					if (packet.timestamp < copyStartPacket.timestamp) {
+						continue;
+					}
+
 					let packetStartTimestamp = packet.timestamp;
 					let packetEndTimestamp = packet.timestamp + packet.duration;
 
@@ -2234,6 +2241,10 @@ export class Conversion {
 						&& packet.timestamp + packet.duration > this._endTimestamp
 					) {
 						break;
+					}
+
+					if (packet.timestamp < copyStartPacket.timestamp) {
+						continue;
 					}
 
 					const packetTimestamp = packet.timestamp + this._timestampOffset;

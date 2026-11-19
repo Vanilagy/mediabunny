@@ -59,7 +59,7 @@
 		const tracks = [];
 		let start = 0;
 
-		if (true) {
+		if (false) {
 			input = new Mediabunny.Input({
 				source: new Mediabunny.UrlSource('http://localhost:8080/playlist.m3u8'),
 				formats: Mediabunny.ALL_FORMATS,
@@ -177,6 +177,8 @@
 				}
 			},
 			trim: {
+				start: 2,
+				end: 5,
 				//start: 5,
 				//end: 10,
 				//start: 0,

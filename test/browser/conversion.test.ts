@@ -1213,6 +1213,73 @@ const testCopy = async (options: {
 	}
 };
 
+test('Packet copy, open GOP leading packets', async () => {
+	const output = new Output({
+		format: new MkvOutputFormat(),
+		target: new BufferTarget(),
+	});
+	const videoSource = new EncodedVideoPacketSource('vp8');
+	const audioSource = new EncodedAudioPacketSource('pcm-s16');
+	output.addVideoTrack(videoSource);
+	output.addAudioTrack(audioSource);
+	await output.start();
+
+	// Like in an open GOP, the second key packet is followed by packets that display before it
+	const keyTimestamps = [0, 1.5];
+	for (const timestamp of [0, 0.25, 0.5, 0.75, 1.5, 1, 1.25, 1.75, 2, 2.25]) {
+		const type = keyTimestamps.includes(timestamp) ? 'key' : 'delta';
+
+		await videoSource.add(new EncodedPacket(new Uint8Array(16), type, timestamp, 0.25), {
+			decoderConfig: {
+				codec: 'vp8',
+				codedWidth: 320,
+				codedHeight: 240,
+			},
+		});
+		await audioSource.add(new EncodedPacket(new Uint8Array(24000), type, timestamp, 0.25), {
+			decoderConfig: {
+				codec: 'pcm-s16',
+				numberOfChannels: 1,
+				sampleRate: 48000,
+			},
+		});
+	}
+
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const newOutput = new Output({
+		format: new MkvOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const conversion = await Conversion.init({
+		input,
+		output: newOutput,
+		trim: { start: 1.5, end: 2.5 },
+	});
+	await conversion.execute();
+
+	using newInput = new Input({
+		source: new BufferSource(newOutput.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const tracks = await newInput.getTracks();
+	expect(tracks).toHaveLength(2);
+
+	for (const track of tracks) {
+		const timestamps: number[] = [];
+		for await (const packet of new EncodedPacketSink(track).packets()) {
+			timestamps.push(packet.timestamp);
+		}
+
+		expect(timestamps).toEqual([0, 0.25, 0.5, 0.75]);
+	}
+});
+
 test('Trim wholly before media data, transcode', async () => {
 	using input = new Input({
 		source: new UrlSource('/demo.mp4'),

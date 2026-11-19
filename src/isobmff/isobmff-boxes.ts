@@ -1708,31 +1708,17 @@ export const mfra = (trackDatas: IsobmffTrackData[]) => {
 export const tfra = (trackData: IsobmffTrackData) => {
 	const version = 1; // Using this version allows us to use 64-bit time and offset values
 
-	const entries: NestedNumberArray[] = [];
-	for (const chunk of trackData.finalizedChunks) {
-		const sampleIndex = chunk.samples.findIndex(sample => sample.type === 'key');
-		if (sampleIndex === -1) {
-			// tfra must point to sync samples, so continue here. This should never happen in practice since all
-			// fragments begin with a sync sample for every track anyways.
-			continue;
-		}
-
-		const sample = chunk.samples[sampleIndex]!;
-
-		entries.push([
-			u64(intoTimescale(sample.timestamp, trackData.timescale)), // Time (in presentation time)
-			u64(chunk.moofOffset!), // moof offset
-			u32(chunk.trafIndex! + 1), // traf number
-			u32(1), // trun number
-			u32(sampleIndex + 1), // Sample number
-		]);
-	}
-
 	return fullBox('tfra', version, 0, [
 		u32(trackData.track.id), // Track ID
 		u32(0b111111), // This specifies that traf number, trun number and sample number are 32-bit ints
-		u32(entries.length), // Number of entries
-		entries,
+		u32(trackData.tfraEntries.length), // Number of entries
+		trackData.tfraEntries.map(entry => [
+			u64(intoTimescale(entry.timestamp, trackData.timescale)), // Time (in presentation time)
+			u64(entry.moofOffset), // moof offset
+			u32(entry.trafIndex + 1), // traf number
+			u32(1), // trun number
+			u32(entry.sampleIndex + 1), // Sample number
+		]),
 	]);
 };
 

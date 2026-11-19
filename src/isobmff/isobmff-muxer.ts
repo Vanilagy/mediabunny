@@ -84,9 +84,6 @@ type Chunk = {
 	offset: number | null;
 	// In the case of a fragmented file, this indicates the position of the moof box pointing to the data in this chunk
 	moofOffset: number | null;
-	// In the case of a fragmented file, this indicates the index of the traf box in the moof box pointing to the data
-	// in this chunk
-	trafIndex: number | null;
 };
 
 export type IsobmffTrackData = {
@@ -104,6 +101,12 @@ export type IsobmffTrackData = {
 
 	finalizedChunks: Chunk[];
 	currentChunk: Chunk | null;
+	tfraEntries: {
+		timestamp: number;
+		moofOffset: number;
+		trafIndex: number;
+		sampleIndex: number;
+	}[];
 	compactlyCodedChunkTable: {
 		firstChunk: number;
 		samplesPerChunk: number;
@@ -546,6 +549,7 @@ export class IsobmffMuxer extends Muxer {
 			startTimestampOffset: null,
 			finalizedChunks: [],
 			currentChunk: null,
+			tfraEntries: [],
 			compactlyCodedChunkTable: [],
 			avgBitrate: track.source._nominalBitrate ?? track.metadata.averageBitrate ?? 0,
 			maxBitrate: track.source._nominalBitrate ?? track.metadata.bitrate ?? 0,
@@ -668,6 +672,7 @@ export class IsobmffMuxer extends Muxer {
 			startTimestampOffset: null,
 			finalizedChunks: [],
 			currentChunk: null,
+			tfraEntries: [],
 			compactlyCodedChunkTable: [],
 			avgBitrate: track.source._nominalBitrate ?? track.metadata.averageBitrate ?? 0,
 			maxBitrate: track.source._nominalBitrate ?? track.metadata.bitrate ?? 0,
@@ -712,6 +717,7 @@ export class IsobmffMuxer extends Muxer {
 			startTimestampOffset: null,
 			finalizedChunks: [],
 			currentChunk: null,
+			tfraEntries: [],
 			compactlyCodedChunkTable: [],
 			avgBitrate: track.source._nominalBitrate ?? track.metadata.averageBitrate ?? 0,
 			maxBitrate: track.source._nominalBitrate ?? track.metadata.bitrate ?? 0,
@@ -1337,7 +1343,6 @@ export class IsobmffMuxer extends Muxer {
 				samples: [],
 				offset: null,
 				moofOffset: null,
-				trafIndex: null,
 			};
 		}
 
@@ -1360,7 +1365,6 @@ export class IsobmffMuxer extends Muxer {
 		trackData.currentChunk = null;
 
 		trackData.finalizedChunks.push(chunk);
-		this.finalizedChunks.push(chunk);
 
 		let sampleCount = chunk.samples.length;
 		if (trackData.type === 'audio' && trackData.info.requiresPcmTransformation) {
@@ -1380,6 +1384,7 @@ export class IsobmffMuxer extends Muxer {
 
 		if (this.fastStart === 'in-memory') {
 			chunk.offset = 0; // We'll compute the proper offset when finalizing
+			this.finalizedChunks.push(chunk);
 			return;
 		}
 
@@ -1390,6 +1395,7 @@ export class IsobmffMuxer extends Muxer {
 			this.writer.write(sample.data);
 			sample.data = null; // Can be GC'd
 		}
+		chunk.samples.length = 0; // Only the chunk's offset is needed from now on
 
 		await this.writer.flush();
 	}
@@ -1504,7 +1510,6 @@ export class IsobmffMuxer extends Muxer {
 
 			trackData.currentChunk.offset = currentPos;
 			trackData.currentChunk.moofOffset = moofOffset;
-			trackData.currentChunk.trafIndex = i;
 			trackData.currentChunk.startTimestamp -= trackData.startTimestampOffset;
 
 			for (const sample of trackData.currentChunk.samples) {
@@ -1572,9 +1577,24 @@ export class IsobmffMuxer extends Muxer {
 			this.formatOptions.onMdat(data, start);
 		}
 
-		for (const trackData of tracksInFragment) {
-			trackData.finalizedChunks.push(trackData.currentChunk!);
-			this.finalizedChunks.push(trackData.currentChunk!);
+		for (let i = 0; i < tracksInFragment.length; i++) {
+			const trackData = tracksInFragment[i]!;
+			assert(trackData.currentChunk);
+
+			if (!this.isCmaf) {
+				// tfra must point to sync samples, so skip fragments without one. This should never happen in practice
+				// since all fragments begin with a sync sample for every track anyways.
+				const sampleIndex = trackData.currentChunk.samples.findIndex(sample => sample.type === 'key');
+				if (sampleIndex !== -1) {
+					trackData.tfraEntries.push({
+						timestamp: trackData.currentChunk.samples[sampleIndex]!.timestamp,
+						moofOffset,
+						trafIndex: i,
+						sampleIndex,
+					});
+				}
+			}
+
 			trackData.currentChunk = null;
 		}
 

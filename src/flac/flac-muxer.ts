@@ -37,8 +37,13 @@ export class FlacMuxer extends Muxer {
 	private writer!: Writer;
 	private metadataWritten = false;
 
-	private blockSizes: number[] = [];
-	private frameSizes: number[] = [];
+	private frameCount = 0;
+	private minimumBlockSize = Infinity; // Excluding the last block
+	private maximumBlockSize = 0;
+	private lastBlockSize: number | null = null;
+	private minimumFrameSize = Infinity;
+	private maximumFrameSize = 0;
+	private totalSamples = 0;
 
 	private sampleRate: number | null = null;
 	private channels: number | null = null;
@@ -305,8 +310,18 @@ export class FlacMuxer extends Muxer {
 			const blockSize = readBlockSize(slice, blockSizeOrUncommon);
 
 			if (!this.format._options.appendOnly) {
-				this.blockSizes.push(blockSize);
-				this.frameSizes.push(packet.data.length);
+				// The minimum excludes the last block, so a block only counts toward it once the next one comes in
+				// https://www.rfc-editor.org/rfc/rfc9639.html#name-streaminfo
+				if (this.lastBlockSize !== null) {
+					this.minimumBlockSize = Math.min(this.minimumBlockSize, this.lastBlockSize);
+				}
+
+				this.frameCount++;
+				this.maximumBlockSize = Math.max(this.maximumBlockSize, blockSize);
+				this.lastBlockSize = blockSize;
+				this.minimumFrameSize = Math.min(this.minimumFrameSize, packet.data.length);
+				this.maximumFrameSize = Math.max(this.maximumFrameSize, packet.data.length);
+				this.totalSamples += blockSize;
 			}
 
 			const startPos = this.writer.getPos();
@@ -342,35 +357,19 @@ export class FlacMuxer extends Muxer {
 		}
 
 		if (!this.format._options.appendOnly) {
-			let minimumBlockSize = Infinity;
-			let maximumBlockSize = 0;
-			let minimumFrameSize = Infinity;
-			let maximumFrameSize = 0;
-			let totalSamples = 0;
-			for (let i = 0; i < this.blockSizes.length; i++) {
-				minimumFrameSize = Math.min(minimumFrameSize, this.frameSizes[i]!);
-				maximumFrameSize = Math.max(maximumFrameSize, this.frameSizes[i]!);
-				maximumBlockSize = Math.max(maximumBlockSize, this.blockSizes[i]!);
-				totalSamples += this.blockSizes[i]!;
+			let minimumBlockSize = this.minimumBlockSize;
+			let maximumBlockSize = this.maximumBlockSize;
+			let minimumFrameSize = this.minimumFrameSize;
+			let maximumFrameSize = this.maximumFrameSize;
 
-				// Excluding the last frame from block size calculation
-				// https://www.rfc-editor.org/rfc/rfc9639.html#name-streaminfo
-				// "The minimum block size (in samples) used in the stream, excluding the last block."
-				const isLastFrame = i === this.blockSizes.length - 1;
-				if (isLastFrame) {
-					continue;
-				}
-				minimumBlockSize = Math.min(minimumBlockSize, this.blockSizes[i]!);
-			}
-
-			if (this.blockSizes.length === 0) {
+			if (this.frameCount === 0) {
 				// There are no frames to derive these from, so let's use the full valid range like we do for
 				// append-only output
 				minimumBlockSize = 16;
 				maximumBlockSize = 65535;
 				minimumFrameSize = 0;
 				maximumFrameSize = 0;
-			} else if (this.blockSizes.length === 1) {
+			} else if (this.frameCount === 1) {
 				// The only block is also the last one, so it's a fixed block size stream. Being the last block, it may
 				// be shorter than 16 samples, which STREAMINFO's block sizes must never go below
 				maximumBlockSize = Math.max(maximumBlockSize, 16);
@@ -389,7 +388,7 @@ export class FlacMuxer extends Muxer {
 				sampleRate: this.sampleRate,
 				channels: this.channels,
 				bitsPerSample: this.bitsPerSample,
-				totalSamples,
+				totalSamples: this.totalSamples,
 			});
 		}
 
