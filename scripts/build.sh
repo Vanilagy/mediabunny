@@ -11,6 +11,7 @@ rm -rf packages/dts/dist
 rm -rf packages/truehd/dist
 rm -rf packages/aac-encoder/dist
 rm -rf packages/flac-encoder/dist
+rm -rf packages/mjpeg/dist
 rm -rf packages/prores/dist
 rm -rf packages/server/dist
 
@@ -25,6 +26,7 @@ tsc -p packages/dts
 tsc -p packages/truehd
 tsc -p packages/aac-encoder
 tsc -p packages/flac-encoder
+tsc -p packages/mjpeg
 tsc -p packages/prores
 tsc -p packages/server
 
@@ -47,6 +49,7 @@ api-extractor run -c packages/dts/api-extractor.json
 api-extractor run -c packages/truehd/api-extractor.json
 api-extractor run -c packages/aac-encoder/api-extractor.json
 api-extractor run -c packages/flac-encoder/api-extractor.json
+api-extractor run -c packages/mjpeg/api-extractor.json
 api-extractor run -c packages/prores/api-extractor.json
 api-extractor run -c packages/server/api-extractor.json
 
@@ -59,6 +62,7 @@ tsx scripts/check-docblocks.ts \
 	packages/truehd/dist/mediabunny-truehd.d.ts \
 	packages/aac-encoder/dist/mediabunny-aac-encoder.d.ts \
 	packages/flac-encoder/dist/mediabunny-flac-encoder.d.ts \
+	packages/mjpeg/dist/mediabunny-mjpeg.d.ts \
 	packages/prores/dist/mediabunny-prores.d.ts \
 	packages/server/dist/mediabunny-server.d.ts
 
@@ -73,5 +77,6 @@ echo 'export as namespace MediabunnyDts;' >> packages/dts/dist/mediabunny-dts.d.
 echo 'export as namespace MediabunnyTrueHd;' >> packages/truehd/dist/mediabunny-truehd.d.ts
 echo 'export as namespace MediabunnyAacEncoder;' >> packages/aac-encoder/dist/mediabunny-aac-encoder.d.ts
 echo 'export as namespace MediabunnyFlacEncoder;' >> packages/flac-encoder/dist/mediabunny-flac-encoder.d.ts
+echo 'export as namespace MediabunnyMjpeg;' >> packages/mjpeg/dist/mediabunny-mjpeg.d.ts
 echo 'export as namespace MediabunnyProres;' >> packages/prores/dist/mediabunny-prores.d.ts
 echo 'export as namespace MediabunnyServer;' >> packages/server/dist/mediabunny-server.d.ts

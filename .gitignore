@@ -13,4 +13,5 @@ packages/truehd/dist
 packages/aac-encoder/dist
 packages/flac-encoder/dist
 packages/server/dist
+packages/mjpeg/dist
 packages/prores/dist
