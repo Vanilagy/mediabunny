@@ -359,9 +359,23 @@ export class EncodedPacketSink {
 		let outOfBandError = null as unknown;
 		let hasOutOfBandError = false;
 
-		const timestamps: number[] = [];
-		// The queue should always be big enough to hold 1 second worth of packets
-		const maxQueueSize = () => Math.max(2, timestamps.length);
+		// Read ahead by about 1 second of media time which smooths over high-latency sources like networks
+		const isQueueFull = () => {
+			if (packetQueue.length >= 128) {
+				return true;
+			} else if (packetQueue.length < 8) {
+				return false;
+			}
+
+			let minTimestamp = Infinity;
+			let maxTimestamp = -Infinity;
+			for (const packet of packetQueue) {
+				minTimestamp = Math.min(minTimestamp, packet.timestamp);
+				maxTimestamp = Math.max(maxTimestamp, packet.timestamp);
+			}
+
+			return maxTimestamp - minTimestamp >= 1;
+		};
 
 		// The following is the "pump" process that keeps pumping packets into the queue
 		(async () => {
@@ -372,7 +386,7 @@ export class EncodedPacketSink {
 					break;
 				}
 
-				if (packetQueue.length > maxQueueSize()) {
+				if (isQueueFull()) {
 					({ promise: queueDequeue, resolve: onQueueDequeue } = promiseWithResolvers());
 					await queueDequeue;
 					continue;
@@ -409,13 +423,6 @@ export class EncodedPacketSink {
 						throw outOfBandError;
 					} else if (packetQueue.length > 0) {
 						const value = packetQueue.shift()!;
-						const now = performance.now();
-						timestamps.push(now);
-
-						while (timestamps.length > 0 && now - timestamps[0]! >= 1000) {
-							timestamps.shift();
-						}
-
 						onQueueDequeue();
 
 						return { value, done: false };
