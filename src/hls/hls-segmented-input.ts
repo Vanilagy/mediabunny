@@ -676,8 +676,14 @@ export class HlsSegmentedInput extends SegmentedInput {
 		}
 
 		let initInput: Input | null = null;
-		if (hlsSegment.initSegment || hlsSegment.firstSegment) {
-			initInput = this.getInputForSegment((hlsSegment.initSegment ?? hlsSegment.firstSegment)!);
+		if (hlsSegment.initSegment) {
+			initInput = this.getInputForSegment(hlsSegment.initSegment);
+
+			// Start fetching the EXT-X-MAP segment alongside this media segment. Otherwise, it's only requested once
+			// the media segment's demuxer has found a moof without a moov. Errors are cached and resurface on use.
+			void initInput.getFormat().catch(() => {});
+		} else if (hlsSegment.firstSegment) {
+			initInput = this.getInputForSegment(hlsSegment.firstSegment);
 		}
 
 		const formatOptions: InputFormatOptions = {
