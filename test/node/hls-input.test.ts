@@ -1744,6 +1744,47 @@ test.concurrent('EXTINF and EXT-X-BYTERANGE before EXT-X-MAP', async () => {
 	expect(await collectTimestamps(new EncodedPacketSink(videoTrack))).toEqual([0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5]);
 });
 
+test.concurrent('EXT-X-MAP segment is fetched alongside the first media segment', async () => {
+	const files = await writeHls({
+		segmentFormat: new CmafOutputFormat(),
+	}, async (addVideo) => {
+		for (let i = 0; i < 8; i++) {
+			await addVideo(0.5 * i, i % 4 === 0);
+		}
+	});
+
+	// The first media segment only arrives once the init segment has been requested (or after a timeout), so the
+	// two requests have to be in flight at the same time
+	const events: string[] = [];
+	let onInitRequested!: () => void;
+	const initRequested = new Promise<void>(resolve => onInitRequested = resolve);
+
+	using input = new Input({
+		source: new CustomPathedSource('playlist-1.m3u8', async ({ path }) => {
+			const bytes = files.get(path);
+			assert(bytes);
+
+			events.push(`${path} requested`);
+			if (path === 'init-1.m4s') {
+				onInitRequested();
+			} else if (path === 'segment-1-1.m4s') {
+				await Promise.race([initRequested, new Promise(resolve => setTimeout(resolve, 500))]);
+				events.push(`${path} received`);
+			}
+
+			return new BufferSource(bytes);
+		}),
+		formats: ALL_FORMATS,
+	});
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	assert(videoTrack);
+	expect(await new EncodedPacketSink(videoTrack).getFirstPacket()).not.toBe(null);
+
+	expect(events.indexOf('init-1.m4s requested')).toBeLessThan(events.indexOf('segment-1-1.m4s received'));
+	expect(events.filter(x => x === 'init-1.m4s requested')).toHaveLength(1);
+});
+
 const createInputFromFiles = (files: Map<string, Uint8Array>, rootPath: string) => {
 	return new Input({
 		source: new CustomPathedSource(rootPath, ({ path }) => {
