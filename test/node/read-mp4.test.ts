@@ -1,5 +1,6 @@
 import { expect, test } from 'vitest';
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
 	ALL_FORMATS,
@@ -188,8 +189,11 @@ test('HE-AAC v2 audio config is parsed correctly', async () => {
 test('PCM track with stsc not starting at the first chunk', async () => {
 	// The stsc box's first entry starts at the second chunk, leaving three chunks of PCM audio
 	const filePath = path.join(__dirname, '..', 'public/pcm-stsc-not-first-chunk.mp4');
+	// The fixture contains only metadata; leave room for its declared PCM chunks.
+	const file = Buffer.alloc(2048);
+	file.set(readFileSync(filePath));
 	using input = new Input({
-		source: new FilePathSource(filePath),
+		source: new BufferSource(file),
 		formats: ALL_FORMATS,
 	});
 
@@ -688,6 +692,31 @@ const testMoovSamplesThenFragment = async (withTfdt: boolean) => {
 	// The metadata only knows about the samples in the moov box
 	expect(await track.getDurationFromMetadata()).toBe(null);
 };
+
+test.each(['moov', 'fragment'])('Metadata-only packets exclude incomplete %s samples', async (location) => {
+	// A camera recording interrupted mid-write can have sample metadata for bytes that were never written.
+	const file = moovSamplesThenFragment(true);
+	const end = location === 'moov' ? Buffer.from(file).indexOf('mdat') + 4 + 10 : file.length - 2;
+	using input = new Input({
+		source: new BufferSource(file.subarray(0, end)),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryVideoTrack();
+	assert(track);
+	const sink = new EncodedPacketSink(track);
+	const timestamps: number[] = [];
+	for await (const packet of sink.packets()) {
+		timestamps.push(packet.timestamp);
+	}
+	const metadataTimestamps: number[] = [];
+	for await (const packet of sink.packets(undefined, undefined, { metadataOnly: true })) {
+		expect(packet.isMetadataOnly).toBe(true);
+		metadataTimestamps.push(packet.timestamp);
+	}
+
+	expect(timestamps).toHaveLength(location === 'moov' ? 2 : 5);
+	expect(metadataTimestamps).toEqual(timestamps);
+});
 
 const moovSamplesThenFragment = (withTfdt: boolean) => {
 	const moov = (dataOffset: number) => box('moov',

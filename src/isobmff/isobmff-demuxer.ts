@@ -3540,6 +3540,12 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			return null;
 		}
 
+		// Metadata-only reads must not advertise samples whose data is past a known file end.
+		const fileSize = this.internalTrack.demuxer.reader.fileSizeNonStrict;
+		if (fileSize !== null && sampleInfo.sampleOffset + sampleInfo.sampleSize > fileSize) {
+			return null;
+		}
+
 		let data: Uint8Array;
 		if (options.metadataOnly && this.internalTrack.info?.codec !== 'eac3') { // E-AC-3 is split by its data
 			data = PLACEHOLDER_DATA;
@@ -3611,6 +3617,12 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		const trackData = fragment.trackData.get(this.internalTrack.id)!;
 		const fragmentSample = trackData.samples[sampleIndex];
 		assert(fragmentSample);
+
+		// An interrupted recording can have a complete moof but an incomplete mdat.
+		const fileSize = this.internalTrack.demuxer.reader.fileSizeNonStrict;
+		if (fileSize !== null && fragmentSample.byteOffset + fragmentSample.byteSize > fileSize) {
+			return null;
+		}
 
 		let data: Uint8Array;
 		if (options.metadataOnly && this.internalTrack.info?.codec !== 'eac3') { // E-AC-3 is split by its data
