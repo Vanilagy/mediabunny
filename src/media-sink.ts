@@ -34,6 +34,7 @@ import {
 	CallSerializer,
 	clamp,
 	colorSpaceIsComplete,
+	createWorker,
 	getInt24,
 	getUint24,
 	insertSorted,
@@ -1610,8 +1611,6 @@ class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
 	}
 }
 
-let mergerWorkerUrl: string | null = null;
-
 /** Utility class that merges together color and alpha information on the CPU in a pool of workers. */
 export class ColorAlphaMerger {
 	private workers: Worker[] = [];
@@ -1621,17 +1620,9 @@ export class ColorAlphaMerger {
 
 	merge(color: VideoFrame, alpha: VideoFrame): Promise<VideoFrame> {
 		if (this.workers.length === 0) {
-			if (!mergerWorkerUrl) {
-				const blob = new Blob(
-					[`(${colorAlphaMergerWorkerCode.toString()})()`],
-					{ type: 'application/javascript' },
-				);
-				mergerWorkerUrl = URL.createObjectURL(blob);
-			}
-
 			const poolSize = clamp(navigator.hardwareConcurrency, 1, 4);
 			for (let i = 0; i < poolSize; i++) {
-				const worker = new Worker(mergerWorkerUrl);
+				const worker = createWorker('color-alpha-merger', colorAlphaMergerWorkerCode);
 
 				worker.addEventListener('message', (event: MessageEvent<ColorAlphaMergerWorkerResponse>) => {
 					const data = event.data;
@@ -1700,7 +1691,7 @@ type ColorAlphaMergerWorkerResponse =
 	| { id: number; frame: VideoFrame }
 	| { id: number; error: string };
 
-const colorAlphaMergerWorkerCode = () => {
+export const colorAlphaMergerWorkerCode = () => {
 	// These buffers are reused across frames as long as the size matches, since consecutive frames usually share
 	// dimensions
 	let cpuAlphaBuffer: Uint8Array | null = null;

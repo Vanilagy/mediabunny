@@ -1450,7 +1450,7 @@ const shouldUseNativeTimers = () => {
 	return typeof window === 'undefined';
 };
 
-const unthrottledTimerWorkerMain = () => {
+export const unthrottledTimerWorkerCode = () => {
 	const timeoutHandles = new Map<number, ReturnType<typeof setTimeout>>();
 	const intervalHandles = new Map<number, ReturnType<typeof setInterval>>();
 
@@ -1499,10 +1499,7 @@ const getUnthrottledTimerWorker = () => {
 		return unthrottledTimerWorker;
 	}
 
-	const workerSource = `(${unthrottledTimerWorkerMain.toString()})();`;
-	const workerURL = URL.createObjectURL(new Blob([workerSource], { type: 'text/javascript' }));
-	unthrottledTimerWorker = new Worker(workerURL);
-	URL.revokeObjectURL(workerURL);
+	unthrottledTimerWorker = createWorker('unthrottled-timer', unthrottledTimerWorkerCode);
 
 	unthrottledTimerWorker.onmessage = (event: MessageEvent<UnthrottledTimerEvent>) => {
 		const message = event.data;
@@ -1521,6 +1518,30 @@ const getUnthrottledTimerWorker = () => {
 	};
 
 	return unthrottledTimerWorker;
+};
+
+const workerBlobUrls = new Map<() => void, string>();
+
+export const createWorker = (name: string, workerMain: () => void) => {
+	const workerUrl = (globalThis as Record<symbol, unknown>)[Symbol.for('mediabunny:workerUrl')];
+	if (workerUrl !== undefined && typeof workerUrl !== 'string' && !(workerUrl instanceof URL)) {
+		throw new TypeError(
+			'globalThis[Symbol.for(\'mediabunny:workerUrl\')], when provided, must be a string or URL.',
+		);
+	}
+
+	// For environments that can't run blob: workers. The standalone worker file runs the program matching the name.
+	if (workerUrl !== undefined) {
+		return new Worker(workerUrl, { name });
+	}
+
+	let blobUrl = workerBlobUrls.get(workerMain);
+	if (!blobUrl) {
+		blobUrl = URL.createObjectURL(new Blob([`(${workerMain.toString()})();`], { type: 'text/javascript' }));
+		workerBlobUrls.set(workerMain, blobUrl);
+	}
+
+	return new Worker(blobUrl, { name });
 };
 
 export const setTimeoutUnthrottled = (

@@ -64,47 +64,10 @@ jobs:
           dist/bundles/mediabunny.min.cjs
           dist/bundles/mediabunny.mjs
           dist/bundles/mediabunny.min.mjs
+          dist/bundles/mediabunny.worker.js
           dist/mediabunny.d.ts
-          packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.js
-          packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.min.js
-          packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.mjs
-          packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.min.mjs
-          packages/mp3-encoder/dist/mediabunny-mp3-encoder.d.ts
-          packages/ac3/dist/bundles/mediabunny-ac3.js
-          packages/ac3/dist/bundles/mediabunny-ac3.min.js
-          packages/ac3/dist/bundles/mediabunny-ac3.mjs
-          packages/ac3/dist/bundles/mediabunny-ac3.min.mjs
-          packages/ac3/dist/mediabunny-ac3.d.ts
-          packages/dts/dist/bundles/mediabunny-dts.js
-          packages/dts/dist/bundles/mediabunny-dts.min.js
-          packages/dts/dist/bundles/mediabunny-dts.mjs
-          packages/dts/dist/bundles/mediabunny-dts.min.mjs
-          packages/dts/dist/mediabunny-dts.d.ts
-          packages/truehd/dist/bundles/mediabunny-truehd.js
-          packages/truehd/dist/bundles/mediabunny-truehd.min.js
-          packages/truehd/dist/bundles/mediabunny-truehd.mjs
-          packages/truehd/dist/bundles/mediabunny-truehd.min.mjs
-          packages/truehd/dist/mediabunny-truehd.d.ts
-          packages/aac-encoder/dist/bundles/mediabunny-aac-encoder.js
-          packages/aac-encoder/dist/bundles/mediabunny-aac-encoder.min.js
-          packages/aac-encoder/dist/bundles/mediabunny-aac-encoder.mjs
-          packages/aac-encoder/dist/bundles/mediabunny-aac-encoder.min.mjs
-          packages/aac-encoder/dist/mediabunny-aac-encoder.d.ts
-          packages/flac-encoder/dist/bundles/mediabunny-flac-encoder.js
-          packages/flac-encoder/dist/bundles/mediabunny-flac-encoder.min.js
-          packages/flac-encoder/dist/bundles/mediabunny-flac-encoder.mjs
-          packages/flac-encoder/dist/bundles/mediabunny-flac-encoder.min.mjs
-          packages/flac-encoder/dist/mediabunny-flac-encoder.d.ts
-          packages/prores/dist/bundles/mediabunny-prores.js
-          packages/prores/dist/bundles/mediabunny-prores.min.js
-          packages/prores/dist/bundles/mediabunny-prores.mjs
-          packages/prores/dist/bundles/mediabunny-prores.min.mjs
-          packages/prores/dist/mediabunny-prores.d.ts
-          packages/server/dist/bundles/mediabunny-server.cjs
-          packages/server/dist/bundles/mediabunny-server.min.cjs
-          packages/server/dist/bundles/mediabunny-server.mjs
-          packages/server/dist/bundles/mediabunny-server.min.mjs
-          packages/server/dist/mediabunny-server.d.ts
+          packages/*/dist/bundles/*
+          packages/*/dist/*.d.ts
 
       - name: Publish workspace packages to npm
         run: npm publish --access public --workspaces ${{ github.event.release.prerelease && '--tag beta' || '' }}

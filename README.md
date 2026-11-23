@@ -106,6 +106,10 @@ Alternatively, include it directly with a script tag using one of the [builds](h
 
 Requires any JavaScript environment that can run ECMAScript 2021 or later. Mediabunny is expected to be run in modern browsers. For types, TypeScript 5.7 or later is required.
 
+### Content Security Policy
+
+If your Content Security Policy doesn't allow `blob:` workers, see [Content Security Policy](https://mediabunny.dev/guide/installation#content-security-policy).
+
 ### Read file metadata
 
 ```js

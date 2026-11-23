@@ -28,6 +28,14 @@ Alternatively, directly include them using a script tag:
 
 This will expose the global objects `Mediabunny` and `MediabunnyAacEncoder`. Use `mediabunny-aac-encoder.d.ts` to provide types for these globals. You can download the built distribution files from the [releases page](https://github.com/Vanilagy/mediabunny/releases).
 
+### Content Security Policy
+
+The encoder runs in a Web Worker, which by default is created from a `blob:` URL. If your Content Security Policy doesn't allow that, host `mediabunny-aac-encoder.worker.js` yourself and point the extension to it before encoding starts:
+```js
+globalThis[Symbol.for('@mediabunny/aac-encoder:workerUrl')] = '/path/to/mediabunny-aac-encoder.worker.js';
+```
+The value must be a string or `URL`. You can download the worker file from the [releases page](https://github.com/Vanilagy/mediabunny/releases); it's also included in the npm package under `dist/bundles/`. Since the encoder uses WebAssembly, your policy must also allow `'wasm-unsafe-eval'` in `script-src`.
+
 ## Usage
 
 ```ts

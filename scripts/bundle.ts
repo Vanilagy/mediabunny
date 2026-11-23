@@ -3,6 +3,14 @@ import process from 'node:process';
 import PluginExternalGlobal from 'esbuild-plugin-external-global';
 import { inlineWorkerPlugin } from './esbuild/inlined-workers.js';
 
+const LICENSE_BANNER = `/*!
+ * Copyright (c) 2026-present, Vanilagy and contributors
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */`;
+
 /** Creates UMD and ESM variants, each unminified and minified. */
 const createVariants = async (
 	entryPoint: string,
@@ -22,13 +30,7 @@ const createVariants = async (
 			'import-is-undefined': 'silent', // Warning caused by the disabled "node.ts" import
 		},
 		banner: {
-			js: `/*!
- * Copyright (c) 2026-present, Vanilagy and contributors
- *
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at https://mozilla.org/MPL/2.0/.
- */`,
+			js: LICENSE_BANNER,
 		},
 		legalComments: 'none',
 	};
@@ -99,6 +101,21 @@ const mediabunnyVariants = await createVariants(
 	true,
 );
 
+// Standalone file containing all of Mediabunny's worker programs, for environments that can't run blob: workers
+const mediabunnyWorker = await esbuild.context({
+	entryPoints: ['src/worker.ts'],
+	bundle: true,
+	minify: true,
+	format: 'iife',
+	target: 'es2021',
+	logLevel: 'info',
+	banner: {
+		js: LICENSE_BANNER,
+	},
+	legalComments: 'none',
+	outfile: 'dist/bundles/mediabunny.worker.js',
+});
+
 const mp3EncoderVariants = await createVariants(
 	'packages/mp3-encoder/src/index.ts',
 	'MediabunnyMp3Encoder',
@@ -109,7 +126,7 @@ const mp3EncoderVariants = await createVariants(
 			PluginExternalGlobal.externalGlobalPlugin({
 				mediabunny: 'Mediabunny',
 			}),
-			inlineWorkerPlugin({
+			inlineWorkerPlugin('@mediabunny/mp3-encoder:workerUrl', {
 				define: {
 					'import.meta.url': '""',
 				},
@@ -120,7 +137,7 @@ const mp3EncoderVariants = await createVariants(
 	{
 		external: ['mediabunny'],
 		plugins: [
-			inlineWorkerPlugin({
+			inlineWorkerPlugin('@mediabunny/mp3-encoder:workerUrl', {
 				define: {
 					'import.meta.url': '""',
 				},
@@ -140,7 +157,7 @@ const ac3Variants = await createVariants(
 			PluginExternalGlobal.externalGlobalPlugin({
 				mediabunny: 'Mediabunny',
 			}),
-			inlineWorkerPlugin({
+			inlineWorkerPlugin('@mediabunny/ac3:workerUrl', {
 				define: {
 					'import.meta.url': '""',
 				},
@@ -151,7 +168,7 @@ const ac3Variants = await createVariants(
 	{
 		external: ['mediabunny'],
 		plugins: [
-			inlineWorkerPlugin({
+			inlineWorkerPlugin('@mediabunny/ac3:workerUrl', {
 				define: {
 					'import.meta.url': '""',
 				},
@@ -171,7 +188,7 @@ const dtsVariants = await createVariants(
 			PluginExternalGlobal.externalGlobalPlugin({
 				mediabunny: 'Mediabunny',
 			}),
-			inlineWorkerPlugin({
+			inlineWorkerPlugin('@mediabunny/dts:workerUrl', {
 				define: {
 					'import.meta.url': '""',
 				},
@@ -182,7 +199,7 @@ const dtsVariants = await createVariants(
 	{
 		external: ['mediabunny'],
 		plugins: [
-			inlineWorkerPlugin({
+			inlineWorkerPlugin('@mediabunny/dts:workerUrl', {
 				define: {
 					'import.meta.url': '""',
 				},
@@ -202,7 +219,7 @@ const trueHdVariants = await createVariants(
 			PluginExternalGlobal.externalGlobalPlugin({
 				mediabunny: 'Mediabunny',
 			}),
-			inlineWorkerPlugin({
+			inlineWorkerPlugin('@mediabunny/truehd:workerUrl', {
 				define: {
 					'import.meta.url': '""',
 				},
@@ -213,7 +230,7 @@ const trueHdVariants = await createVariants(
 	{
 		external: ['mediabunny'],
 		plugins: [
-			inlineWorkerPlugin({
+			inlineWorkerPlugin('@mediabunny/truehd:workerUrl', {
 				define: {
 					'import.meta.url': '""',
 				},
@@ -233,7 +250,7 @@ const aacEncoderVariants = await createVariants(
 			PluginExternalGlobal.externalGlobalPlugin({
 				mediabunny: 'Mediabunny',
 			}),
-			inlineWorkerPlugin({
+			inlineWorkerPlugin('@mediabunny/aac-encoder:workerUrl', {
 				define: {
 					'import.meta.url': '""',
 				},
@@ -244,7 +261,7 @@ const aacEncoderVariants = await createVariants(
 	{
 		external: ['mediabunny'],
 		plugins: [
-			inlineWorkerPlugin({
+			inlineWorkerPlugin('@mediabunny/aac-encoder:workerUrl', {
 				define: {
 					'import.meta.url': '""',
 				},
@@ -264,7 +281,7 @@ const flacEncoderVariants = await createVariants(
 			PluginExternalGlobal.externalGlobalPlugin({
 				mediabunny: 'Mediabunny',
 			}),
-			inlineWorkerPlugin({
+			inlineWorkerPlugin('@mediabunny/flac-encoder:workerUrl', {
 				define: {
 					'import.meta.url': '""',
 				},
@@ -275,7 +292,7 @@ const flacEncoderVariants = await createVariants(
 	{
 		external: ['mediabunny'],
 		plugins: [
-			inlineWorkerPlugin({
+			inlineWorkerPlugin('@mediabunny/flac-encoder:workerUrl', {
 				define: {
 					'import.meta.url': '""',
 				},
@@ -322,6 +339,7 @@ const serverVariants = await createVariants(
 
 const contexts = [
 	...mediabunnyVariants,
+	mediabunnyWorker,
 	...mp3EncoderVariants,
 	...ac3Variants,
 	...dtsVariants,

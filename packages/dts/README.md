@@ -28,6 +28,14 @@ Alternatively, directly include them using a script tag:
 
 This will expose the global objects `Mediabunny` and `MediabunnyDts`. Use `mediabunny-dts.d.ts` to provide types for these globals. You can download the built distribution files from the [releases page](https://github.com/Vanilagy/mediabunny/releases).
 
+### Content Security Policy
+
+The decoder and encoder run in a Web Worker, which by default is created from a `blob:` URL. If your Content Security Policy doesn't allow that, host `mediabunny-dts.worker.js` yourself and point the extension to it before decoding or encoding starts:
+```js
+globalThis[Symbol.for('@mediabunny/dts:workerUrl')] = '/path/to/mediabunny-dts.worker.js';
+```
+The value must be a string or `URL`. You can download the worker file from the [releases page](https://github.com/Vanilagy/mediabunny/releases); it's also included in the npm package under `dist/bundles/`. Since the codecs use WebAssembly, your policy must also allow `'wasm-unsafe-eval'` in `script-src`.
+
 ## Usage
 
 ```ts
