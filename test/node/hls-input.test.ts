@@ -130,13 +130,6 @@ test.concurrent('Big Buck Bunny', { timeout: 15_000 }, async () => {
 
 	expect(sourceCount).toBe(1);
 
-	// Force hydration of all tracks by loading actual media data
-	for (const track of tracks) {
-		expect(await track.isRelativeToUnixEpoch()).toBe(false);
-	}
-
-	expect(sourceCount).toBe(1 + 5 + 5);
-
 	for (const track of tracks) {
 		expect(await track.isLive()).toBe(false);
 	}
@@ -190,6 +183,8 @@ test.concurrent('Big Buck Bunny', { timeout: 15_000 }, async () => {
 	}
 
 	expect(Math.min(await videoTracks[0]!.getFirstTimestamp(), await audioTracks[0]!.getFirstTimestamp())).toBe(0.0101);
+
+	expect(sourceCount).toBe(1 + 5 + 5);
 
 	const sink = new EncodedPacketSink(videoTracks[0]!);
 	const lastPacket = await sink.getPacket(Infinity);
@@ -587,6 +582,55 @@ test.concurrent('fMP4', { timeout: 15_000 }, async () => {
 		+ 2 * (1 + 1 + 1 + 1) // For each track: playlist, init, first segment, last segment
 		+ (1 + 1 + 1), // Reference track: playlist, init, first segment
 	);
+});
+
+test.concurrent('fMP4, requests happen in as few waves as possible', { timeout: 15_000 }, async () => {
+	const waves: string[][] = [];
+	using input = createWaveTrackingInput(
+		'https://storage.googleapis.com/shaka-demo-assets/angel-one-hls/hls.m3u8',
+		waves,
+	);
+
+	const tracks = await input.getTracks();
+	const sink = new EncodedPacketSink(tracks[0]!);
+	await sink.getPacket(Infinity);
+
+	expect(waves).toEqual([
+		['hls.m3u8'],
+		[
+			// Reference playlist fetched alongside the playlist we're interested in
+			'playlist_a-eng-0128k-aac-2c.mp4.m3u8',
+			'playlist_v-0144p-0100k-libx264.mp4.m3u8',
+		],
+		[
+			// Init segments fetched alongside media segments, and our first segment isn't needed
+			'a-eng-0128k-aac-2c-init.mp4',
+			'a-eng-0128k-aac-2c-s15.mp4', // Last segment
+			'v-0144p-0100k-libx264-init.mp4',
+			'v-0144p-0100k-libx264-s1.mp4', // Reference's first segment
+		],
+	]);
+});
+
+test.concurrent('MPEG-TS, requests happen in as few waves as possible', { timeout: 15_000 }, async () => {
+	const waves: string[][] = [];
+	using input = createWaveTrackingInput('https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8', waves);
+
+	const tracks = await input.getTracks();
+	const sink = new EncodedPacketSink(tracks[1]!);
+	await sink.getPacket(Infinity);
+
+	expect(waves).toEqual([
+		['x36xhzz.m3u8'],
+		[
+			'url_0/193039199_mp4_h264_aac_hd_7.m3u8',
+			'url_2/193039199_mp4_h264_aac_ld_7.m3u8', // Reference playlist
+		],
+		[
+			'url_0/url_525/193039199_mp4_h264_aac_hd_7.ts', // Last segment
+			'url_2/url_526/193039199_mp4_h264_aac_ld_7.ts', // Reference's first segment
+		],
+	]);
 });
 
 test.concurrent('Track disposition & metadata', { timeout: 15_000 }, async () => {
@@ -1445,6 +1489,47 @@ b.ts
 	expect(types.length).toBeGreaterThan(0);
 	expect(types.every(type => type === 'key')).toBe(true);
 });
+
+// A wave is a batch of requests that are sent off within the same task
+const createWaveTrackingInput = (rootPath: string, waves: string[][]) => {
+	let pending: { path: string; bytes: Promise<Uint8Array>; resolve: (source: BufferSource) => void }[] = [];
+	let arrivalCount = 0;
+
+	const releaseWaveOnceSettled = async () => {
+		const count = ++arrivalCount;
+		await Promise.all(pending.map(x => x.bytes));
+		await new Promise(resolve => setImmediate(resolve));
+
+		if (count !== arrivalCount) {
+			// A later arrival will release the wave instead
+			return;
+		}
+
+		const wave = pending;
+		pending = [];
+		waves.push(wave.map(x => x.path.slice(rootPath.lastIndexOf('/') + 1)).sort());
+
+		for (const request of wave) {
+			request.resolve(new BufferSource(await request.bytes));
+		}
+	};
+
+	return new Input({
+		source: new CustomPathedSource(rootPath, ({ path }) => {
+			const promise = new Promise<BufferSource>((resolve) => {
+				pending.push({
+					path,
+					bytes: fetchBytes(path),
+					resolve,
+				});
+			});
+			void releaseWaveOnceSettled();
+
+			return promise;
+		}),
+		formats: ALL_FORMATS,
+	});
+};
 
 const fetchBytes = async (url: string) => {
 	const response = await fetch(url);

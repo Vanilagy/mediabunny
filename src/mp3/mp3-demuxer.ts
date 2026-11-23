@@ -490,6 +490,11 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 			return null;
 		}
 
+		const fileSize = this.demuxer.reader.fileSize;
+		if (fileSize !== null && rawSample.dataStart + rawSample.dataSize > fileSize) {
+			return null; // Data definitely doesn't fit
+		}
+
 		let data: Uint8Array;
 		if (options.metadataOnly) {
 			data = PLACEHOLDER_DATA;

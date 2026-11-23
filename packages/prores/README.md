@@ -47,6 +47,10 @@ which is generally more permissive but is not supported in Safari (of course).
 
 If you cannot enable cross-origin isolation, `@mediabunny/prores` will fall back to a slower multithreading algorithm.
 
+### Content Security Policy
+
+If your Content Security Policy doesn't allow `blob:` workers, see [TurboRes's Content Security Policy section](https://github.com/Vanilagy/turbores#content-security-policy) for a workaround.
+
 ## Usage
 
 ```ts

@@ -31,6 +31,7 @@ import {
 	CallSerializer,
 	clamp,
 	clearIntervalUnthrottled,
+	createWorker,
 	floorToDivisor,
 	isCodecReclaimedError,
 	isFirefox,
@@ -1239,8 +1240,6 @@ const detectAvcChunkTimestampShift = () => {
 	})();
 };
 
-let splitterWorkerUrl: string | null = null;
-
 /** Utility class for splitting a composite frame into separate color and alpha parts on the CPU in a worker. */
 export class ColorAlphaSplitter {
 	private worker: Worker | null = null;
@@ -1253,15 +1252,7 @@ export class ColorAlphaSplitter {
 
 	split(sourceFrame: VideoFrame): Promise<{ colorFrame: VideoFrame; alphaFrame: VideoFrame }> {
 		if (!this.worker) {
-			if (!splitterWorkerUrl) {
-				const blob = new Blob(
-					[`(${colorAlphaSplitterWorkerCode.toString()})()`],
-					{ type: 'application/javascript' },
-				);
-				splitterWorkerUrl = URL.createObjectURL(blob);
-			}
-
-			this.worker = new Worker(splitterWorkerUrl);
+			this.worker = createWorker('color-alpha-splitter', colorAlphaSplitterWorkerCode);
 
 			this.worker.addEventListener('message', (event: MessageEvent<ColorAlphaSplitterWorkerResponse>) => {
 				const data = event.data;
@@ -1316,7 +1307,7 @@ type ColorAlphaSplitterWorkerResponse =
 	| { id: number; colorFrame: VideoFrame; alphaFrame: VideoFrame }
 	| { id: number; error: string };
 
-const colorAlphaSplitterWorkerCode = () => {
+export const colorAlphaSplitterWorkerCode = () => {
 	// Reused across frames as long as the size matches, since consecutive frames usually share dimensions.
 	let cpuSourceBuffer: Uint8Array | null = null;
 
@@ -3406,7 +3397,7 @@ type MediaStreamTrackProcessorControllerMessage = {
 	trackId: number;
 };
 
-const mediaStreamTrackProcessorWorkerCode = () => {
+export const mediaStreamTrackProcessorWorkerCode = () => {
 	const sendMessage = (message: MediaStreamTrackProcessorWorkerMessage, transfer?: Transferable[]) => {
 		if (transfer) {
 			self.postMessage(message, { transfer });
@@ -3491,13 +3482,7 @@ let nextMediaStreamTrackProcessorWorkerId = 0;
 let mediaStreamTrackProcessorWorker: Worker | null = null;
 
 const initMediaStreamTrackProcessorWorker = () => {
-	const blob = new Blob(
-		[`(${mediaStreamTrackProcessorWorkerCode.toString()})()`],
-		{ type: 'application/javascript' },
-	);
-	const url = URL.createObjectURL(blob);
-
-	mediaStreamTrackProcessorWorker = new Worker(url);
+	mediaStreamTrackProcessorWorker = createWorker('media-stream-track-processor', mediaStreamTrackProcessorWorkerCode);
 };
 
 let mediaStreamTrackProcessorIsSupportedInWorkerCache: boolean | null = null;

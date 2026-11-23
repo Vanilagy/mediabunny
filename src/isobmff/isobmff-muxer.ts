@@ -1128,7 +1128,9 @@ export class IsobmffMuxer extends Muxer {
 			return;
 		}
 
-		const sortedTimestamps = trackData.timestampProcessingQueue.map(x => x.timestamp).sort((a, b) => a - b);
+		const queue = trackData.timestampProcessingQueue;
+		const sortedTimestamps = queue.map(x => x.timestamp).sort((a, b) => a - b);
+		const firstTimestampInTimescale = intoTimescale(sortedTimestamps[0]!, trackData.timescale);
 
 		if (this.isFragmented) {
 			trackData.startTimestampOffset ??= Math.min(sortedTimestamps[0]!, 0);
@@ -1136,17 +1138,29 @@ export class IsobmffMuxer extends Muxer {
 			trackData.startTimestampOffset ??= sortedTimestamps[0]!;
 		}
 
-		for (let i = 0; i < trackData.timestampProcessingQueue.length; i++) {
-			const sample = trackData.timestampProcessingQueue[i]!;
+		// Since the user only supplies presentation time & decode order, we have to reverse-engineer from that a
+		// sensible decode timestamp, which is a concept in ISOBMFF: we hand out the sorted presentation timestamps in
+		// decode order. The first group starts at its lowest timestamp, every following group exactly where the
+		// previous one ended, so that there are no gaps or overlaps in the decode timeline.
+		let groupStartTimescaleUnits: number;
+		if (trackData.lastTimescaleUnits === null) {
+			groupStartTimescaleUnits = firstTimestampInTimescale;
+		} else {
+			assert(trackData.lastSample);
+			groupStartTimescaleUnits = Math.round(trackData.lastTimescaleUnits)
+				+ trackData.lastSample.timescaleUnitsToNextSample;
+		}
 
-			// Since the user only supplies presentation time, but these may be out of order, we reverse-engineer from
-			// that a sensible decode timestamp. The notion of a decode timestamp doesn't really make sense
-			// (presentation timestamp & decode order are all you need), but it is a concept in ISOBMFF so we need to
-			// model it.
-			sample.decodeTimestamp = sortedTimestamps[i]!;
+		for (let i = 0; i < queue.length; i++) {
+			const sample = queue[i]!;
+
+			const decodeTimescaleUnits = groupStartTimescaleUnits
+				+ intoTimescale(sortedTimestamps[i]!, trackData.timescale)
+				- firstTimestampInTimescale;
+			sample.decodeTimestamp = decodeTimescaleUnits / trackData.timescale;
 
 			const sampleCompositionTimeOffset
-				= intoTimescale(sample.timestamp - sample.decodeTimestamp, trackData.timescale);
+				= intoTimescale(sample.timestamp, trackData.timescale) - decodeTimescaleUnits;
 			const durationInTimescale = intoTimescale(sample.duration, trackData.timescale);
 
 			if (trackData.lastTimescaleUnits !== null) {
@@ -1234,16 +1248,12 @@ export class IsobmffMuxer extends Muxer {
 		assert(trackData.lastSample);
 		assert(trackData.lastTimescaleUnits !== null);
 
-		if (nextSample !== undefined && trackData.lastSample.timescaleUnitsToNextSample === 0) {
-			assert(nextSample.type === 'key');
-
-			// Given the next sample, we can make a guess about the duration of the last sample. This avoids having
-			// the last sample's duration in each fragment be "0" for fragmented files. The guess we make here is
-			// actually correct most of the time, since typically, no delta frame with a lower timestamp follows the key
-			// frame (although it can happen).
-			const timescaleUnits = intoTimescale(nextSample.timestamp, trackData.timescale, false);
-			const delta = Math.round(timescaleUnits - trackData.lastTimescaleUnits);
-			trackData.lastSample.timescaleUnitsToNextSample = delta;
+		if (nextSample) {
+			// The last sample fills the time until the next key frame, where the next group starts. The next sample
+			// will also set the last sample's duration, but the last sample may get written before that.
+			const nextTimestampInTimescale = intoTimescale(nextSample.timestamp, trackData.timescale);
+			trackData.lastSample.timescaleUnitsToNextSample
+				= Math.max(nextTimestampInTimescale - Math.round(trackData.lastTimescaleUnits), 0);
 		}
 	}
 

@@ -234,6 +234,7 @@ export class MpegTsDemuxer extends Demuxer {
 			// Some files contain these multiple times, but we only care about their first appearance
 			let hasProgramAssociationTable = false;
 			let hasProgramMap = false;
+			let initDemuxer: MpegTsDemuxer | null = null;
 
 			while (true) {
 				const packetHeader = await this.readPacketHeader(currentPos);
@@ -542,31 +543,41 @@ export class MpegTsDemuxer extends Demuxer {
 						elementaryStream.firstSection = section;
 						elementaryStream.canBeTrustedWithKeyPackets = section.randomAccessIndicator === 1;
 
-						if (this.input._initInput) {
-							const initDemuxer = (await this.input._initInput._getDemuxer()) as MpegTsDemuxer;
-							if (initDemuxer.constructor !== MpegTsDemuxer) {
-								throw new Error('Init input must match the input\'s format.');
-							}
-
-							await initDemuxer.readMetadata();
-
-							const matchingStream = initDemuxer.elementaryStreams.find(x => (
-								x.pid === section.pid && x.info.codec === elementaryStream.info.codec && x.initialized
-							));
-
-							if (matchingStream) {
-								elementaryStream.info = matchingStream.info;
-								elementaryStream.initialized = true;
-
-								break outer; // We have the stream info, we're done
-							}
-						}
-
 						const context = new PacketReadingContext(elementaryStream, section.startPos);
 
 						if (elementaryStream.info.type === 'video') {
+							let packetCount = 0;
+
 							// We loop because in some files, the video parameters are not in the first packet
 							while (true) {
+								if (packetCount === 1 && this.input._initInput) {
+									// The parameters aren't in the first packet, so instead of searching further (which
+									// may take long), get them from the init input
+									if (!initDemuxer) {
+										initDemuxer = (await this.input._initInput._getDemuxer()) as MpegTsDemuxer;
+										if (initDemuxer.constructor !== MpegTsDemuxer) {
+											throw new Error('Init input must match the input\'s format.');
+										}
+
+										await initDemuxer.readMetadata();
+									}
+
+									const matchingStream = initDemuxer.elementaryStreams.find(x => (
+										x.pid === section.pid
+										&& x.info.codec === elementaryStream.info.codec
+										&& x.initialized
+									));
+
+									if (matchingStream) {
+										elementaryStream.info = matchingStream.info;
+										elementaryStream.initialized = true;
+
+										break outer; // We have the stream info, we're done
+									}
+								}
+
+								packetCount++;
+
 								const contextAlias = context; // TyyyyypeScript 😩
 								contextAlias.suppliedPacket = null;
 								await context.markNextPacket();

@@ -16,7 +16,7 @@ import {
 	EncodedVideoPacketSource,
 	TextSubtitleSource,
 } from '../../src/media-source.js';
-import { EncodedPacket } from '../../src/packet.js';
+import { EncodedPacket, PacketType } from '../../src/packet.js';
 import { InputTrack } from '../../src/input-track.js';
 import { IsobmffMuxer } from '../../src/isobmff/isobmff-muxer.js';
 import { Quality } from '../../src/encode.js';
@@ -1225,6 +1225,160 @@ const testWebVttCueAlongsideAudio = async (closeTracks: boolean) => {
 	const payloads = findBoxes(new Uint8Array(output.target.buffer!), 'payl')
 		.map(box => new TextDecoder().decode(box));
 	expect(payloads).toEqual(['Hello']);
+};
+
+test('Decode timeline with reordered frames and a held frame, regular MP4', async () => {
+	await testDecodeTimeline(new Mp4OutputFormat());
+});
+
+test('Decode timeline with reordered frames and a held frame, fragmented MP4', async () => {
+	await testDecodeTimeline(new Mp4OutputFormat({
+		fastStart: 'fragmented',
+		minimumFragmentDuration: 0,
+	}));
+});
+
+const testDecodeTimeline = async (format: Mp4OutputFormat) => {
+	const output = new Output({
+		format,
+		target: new BufferTarget(),
+	});
+
+	const source = new EncodedVideoPacketSource('vp8');
+	output.addVideoTrack(source);
+	await output.start();
+
+	// Two GOPs with B-frames, in decode order (and one fragment each, for fragmented files). The frame at 0.3 s is
+	// held until the next key frame, but claims a duration of only 0.1 s like all other frames.
+	const packets: [PacketType, number][] = [
+		['key', 0],
+		['delta', 0.3],
+		['delta', 0.1],
+		['delta', 0.2],
+		['key', 1],
+		['delta', 1.3],
+		['delta', 1.1],
+		['delta', 1.2],
+	];
+
+	const meta = { decoderConfig: { codec: 'vp8', codedWidth: 1280, codedHeight: 720 } };
+	for (let i = 0; i < packets.length; i++) {
+		const [type, timestamp] = packets[i]!;
+		await source.add(new EncodedPacket(new Uint8Array(1024), type, timestamp, 0.1), i === 0 ? meta : undefined);
+	}
+
+	await output.finalize();
+
+	const samples = readSampleTimings(new Uint8Array(output.target.buffer!));
+
+	expect(samples.map(x => Math.round(1e6 * x.timestamp) / 1e6)).toEqual(packets.map(x => x[1]));
+	expect(samples.map(x => Math.round(1e6 * x.decodeTimestamp) / 1e6)).toEqual([0, 0.1, 0.2, 0.3, 1, 1.1, 1.2, 1.3]);
+
+	// The last sample decoded in the first GOP fills the time until the second GOP starts, so that there's no gap in
+	// the decode timeline
+	expect(samples.map(x => Math.round(1e6 * x.duration) / 1e6)).toEqual([0.1, 0.1, 0.1, 0.7, 0.1, 0.1, 0.1, 0.1]);
+};
+
+// Reads decode & presentation timestamps and durations of the samples of a single-track file, in decode order
+const readSampleTimings = (bytes: Uint8Array) => {
+	const mdhd = toDataView(findBoxes(bytes, 'mdhd')[0]!);
+	const mdhdVersion = mdhd.getUint8(0);
+	const timescale = mdhd.getUint32(mdhdVersion === 1 ? 20 : 12);
+
+	const samples: { decodeTimestamp: number; timestamp: number; duration: number }[] = [];
+	const truns = findBoxes(bytes, 'trun');
+
+	if (truns.length === 0) {
+		const stts = toDataView(findBoxes(bytes, 'stts')[0]!);
+		const sttsEntryCount = stts.getUint32(4);
+		const durations: number[] = [];
+		for (let i = 0; i < sttsEntryCount; i++) {
+			const sampleCount = stts.getUint32(8 + 8 * i);
+			const sampleDelta = stts.getUint32(12 + 8 * i);
+			durations.push(...Array<number>(sampleCount).fill(sampleDelta));
+		}
+
+		const ctts = toDataView(findBoxes(bytes, 'ctts')[0]!);
+		const cttsEntryCount = ctts.getUint32(4);
+		const compositionOffsets: number[] = [];
+		for (let i = 0; i < cttsEntryCount; i++) {
+			const sampleCount = ctts.getUint32(8 + 8 * i);
+			const sampleOffset = ctts.getInt32(12 + 8 * i);
+			compositionOffsets.push(...Array<number>(sampleCount).fill(sampleOffset));
+		}
+
+		let decodeTimestamp = 0;
+		for (let i = 0; i < durations.length; i++) {
+			samples.push({
+				decodeTimestamp: decodeTimestamp / timescale,
+				timestamp: (decodeTimestamp + compositionOffsets[i]!) / timescale,
+				duration: durations[i]! / timescale,
+			});
+			decodeTimestamp += durations[i]!;
+		}
+
+		return samples;
+	}
+
+	const tfhds = findBoxes(bytes, 'tfhd');
+	const tfdts = findBoxes(bytes, 'tfdt');
+
+	for (let i = 0; i < truns.length; i++) {
+		const tfhd = toDataView(tfhds[i]!);
+		const tfhdFlags = tfhd.getUint32(0) & 0xffffff;
+		let tfhdPos = 8; // Skips version, flags and track ID
+		if (tfhdFlags & 0x1) {
+			tfhdPos += 8; // Base data offset
+		}
+		if (tfhdFlags & 0x2) {
+			tfhdPos += 4; // Sample description index
+		}
+		assert(tfhdFlags & 0x8);
+		const defaultSampleDuration = tfhd.getUint32(tfhdPos);
+
+		const tfdt = toDataView(tfdts[i]!);
+		const tfdtVersion = tfdt.getUint8(0);
+		let decodeTimestamp = tfdtVersion === 1 ? Number(tfdt.getBigUint64(4)) : tfdt.getUint32(4);
+
+		const trun = toDataView(truns[i]!);
+		const trunFlags = trun.getUint32(0) & 0xffffff;
+		const sampleCount = trun.getUint32(4);
+		let pos = 8;
+		if (trunFlags & 0x1) {
+			pos += 4; // Data offset
+		}
+		if (trunFlags & 0x4) {
+			pos += 4; // First sample flags
+		}
+
+		for (let j = 0; j < sampleCount; j++) {
+			let duration = defaultSampleDuration;
+			if (trunFlags & 0x100) {
+				duration = trun.getUint32(pos);
+				pos += 4;
+			}
+			if (trunFlags & 0x200) {
+				pos += 4; // Sample size
+			}
+			if (trunFlags & 0x400) {
+				pos += 4; // Sample flags
+			}
+			let compositionOffset = 0;
+			if (trunFlags & 0x800) {
+				compositionOffset = trun.getInt32(pos);
+				pos += 4;
+			}
+
+			samples.push({
+				decodeTimestamp: decodeTimestamp / timescale,
+				timestamp: (decodeTimestamp + compositionOffset) / timescale,
+				duration: duration / timescale,
+			});
+			decodeTimestamp += duration;
+		}
+	}
+
+	return samples;
 };
 
 test('Failure while closing a track', async () => {

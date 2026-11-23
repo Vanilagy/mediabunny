@@ -842,16 +842,19 @@ abstract class HlsInputTrackBacking implements InputTrackBacking {
 	}
 
 	async getFirstPacket(options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
+		this.prefetchReferencePlaylist();
 		await this.hydrate();
 		return this.internalTrack.backingTrack!.getFirstPacket(options);
 	}
 
 	async getPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
+		this.prefetchReferencePlaylist();
 		await this.hydrate();
 		return this.internalTrack.backingTrack!.getPacket(timestamp, options);
 	}
 
 	async getKeyPacket(timestamp: number, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
+		this.prefetchReferencePlaylist();
 		await this.hydrate();
 		return this.internalTrack.backingTrack!.getKeyPacket(timestamp, options);
 	}
@@ -864,6 +867,10 @@ abstract class HlsInputTrackBacking implements InputTrackBacking {
 	async getNextKeyPacket(packet: EncodedPacket, options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
 		await this.hydrate();
 		return this.internalTrack.backingTrack!.getNextKeyPacket(packet, options);
+	}
+
+	prefetchReferencePlaylist() {
+		void this.internalTrack.demuxer.getReferenceSegmentedInput().getFirstSegment().catch(() => {});
 	}
 }
 
