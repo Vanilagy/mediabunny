@@ -1,5 +1,6 @@
 import { expect, test } from 'vitest';
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
 	ALL_FORMATS,
@@ -188,8 +189,11 @@ test('HE-AAC v2 audio config is parsed correctly', async () => {
 test('PCM track with stsc not starting at the first chunk', async () => {
 	// The stsc box's first entry starts at the second chunk, leaving three chunks of PCM audio
 	const filePath = path.join(__dirname, '..', 'public/pcm-stsc-not-first-chunk.mp4');
+	// The fixture contains only metadata, so leave room for its declared PCM chunks
+	const file = new Uint8Array(2048);
+	file.set(readFileSync(filePath));
 	using input = new Input({
-		source: new FilePathSource(filePath),
+		source: new BufferSource(file),
 		formats: ALL_FORMATS,
 	});
 

@@ -3540,6 +3540,11 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			return null;
 		}
 
+		const fileSize = this.internalTrack.demuxer.reader.fileSize;
+		if (fileSize !== null && sampleInfo.sampleOffset + sampleInfo.sampleSize > fileSize) {
+			return null; // Data is definitely outside
+		}
+
 		let data: Uint8Array;
 		if (options.metadataOnly && this.internalTrack.info?.codec !== 'eac3') { // E-AC-3 is split by its data
 			data = PLACEHOLDER_DATA;
@@ -3611,6 +3616,11 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		const trackData = fragment.trackData.get(this.internalTrack.id)!;
 		const fragmentSample = trackData.samples[sampleIndex];
 		assert(fragmentSample);
+
+		const fileSize = this.internalTrack.demuxer.reader.fileSize;
+		if (fileSize !== null && fragmentSample.byteOffset + fragmentSample.byteSize > fileSize) {
+			return null; // Data is definitely outside
+		}
 
 		let data: Uint8Array;
 		if (options.metadataOnly && this.internalTrack.info?.codec !== 'eac3') { // E-AC-3 is split by its data
