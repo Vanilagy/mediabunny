@@ -259,10 +259,8 @@ export const createAes128CbcDecryptStream = (
 	return new ReadableStream<Uint8Array>({
 		pull: async (controller) => {
 			try {
-				if (!initted) {
-					aesContext.init(await getInit());
-					initted = true;
-				}
+				const initPromise = initted ? null : Promise.resolve(getInit());
+				void initPromise?.catch(() => {}); // Awaited below
 
 				const requestedLength = CHUNK_SIZE + BLOCK_SIZE;
 
@@ -284,6 +282,11 @@ export const createAes128CbcDecryptStream = (
 
 				const input = readBytes(nextSlice, bytesToRead);
 				const output = new Uint8Array(bytesToRead);
+
+				if (initPromise) {
+					aesContext.init(await initPromise);
+					initted = true;
+				}
 
 				for (let i = 0; i < bytesToRead; i += 16) {
 					aesContext.in.set(input.subarray(i, i + 16));

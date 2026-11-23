@@ -676,8 +676,16 @@ export class HlsSegmentedInput extends SegmentedInput {
 		}
 
 		let initInput: Input | null = null;
-		if (hlsSegment.initSegment || hlsSegment.firstSegment) {
-			initInput = this.getInputForSegment((hlsSegment.initSegment ?? hlsSegment.firstSegment)!);
+		if (hlsSegment.initSegment) {
+			initInput = this.getInputForSegment(hlsSegment.initSegment);
+
+			// Fetch the init input's data immediately to avoid the serial request chain of first having to go through
+			// the segment before the init section is even requested. Reduces latency.
+			void initInput.getTracks().catch(() => {});
+		} else if (hlsSegment.firstSegment) {
+			// Don't prefetch this one. It's only needed in rare cases, like MPEG-TS segments that are missing media
+			// initialization, so it's not generally worth it to prefetch this.
+			initInput = this.getInputForSegment(hlsSegment.firstSegment);
 		}
 
 		const formatOptions: InputFormatOptions = {
@@ -839,17 +847,19 @@ export class HlsSegmentedInput extends SegmentedInput {
 
 	getFirstSegmentTimestampOffset() {
 		return this.segmentTimestampOffsetPromise ??= (async () => {
-			const firstSegment = await this.getFirstSegment();
-			assert(firstSegment);
-
 			const referenceSegmentedInput = this.demuxer.getReferenceSegmentedInput();
 			if (this === referenceSegmentedInput) {
 				return 0;
 			}
 
+			const [firstSegment, referenceFirstSegment] = await Promise.all([
+				this.getFirstSegment(),
+				referenceSegmentedInput.getFirstSegment(),
+			]);
+			assert(firstSegment);
+
 			// An offset of 0 is only safe (= close enough) if we start at the same point as the reference: either both
 			// of us list all segments since the presentation's start, or both of us are on date-time-based timelines
-			const referenceFirstSegment = await referenceSegmentedInput.getFirstSegment();
 			if (
 				referenceFirstSegment
 				&& (
@@ -867,6 +877,9 @@ export class HlsSegmentedInput extends SegmentedInput {
 			// that we need
 
 			const input = this.getInputForSegment(firstSegment);
+			// Kick this off early so it runs in parallel to loading our own media
+			void this.getMediaOffsetForDiscontinuity(firstSegment.discontinuityNumber).catch(() => {});
+
 			if (await this.getRawTimestampOffset(input) === null) {
 				return 0;
 			}
