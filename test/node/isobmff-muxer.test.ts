@@ -1227,18 +1227,92 @@ const testWebVttCueAlongsideAudio = async (closeTracks: boolean) => {
 	expect(payloads).toEqual(['Hello']);
 };
 
+// Two GOPs with B-frames, in decode order. The frame at 0.3 s is held until the next key frame, but claims a duration
+// of only 0.1 s like all other frames.
+const heldFramePackets: [PacketType, number][] = [
+	['key', 0],
+	['delta', 0.3],
+	['delta', 0.1],
+	['delta', 0.2],
+	['key', 1],
+	['delta', 1.3],
+	['delta', 1.1],
+	['delta', 1.2],
+];
+
 test('Decode timeline with reordered frames and a held frame, regular MP4', async () => {
-	await testDecodeTimeline(new Mp4OutputFormat());
+	await testDecodeTimeline(
+		new Mp4OutputFormat(),
+		heldFramePackets,
+		[0, 0.1, 0.2, 0.3, 1, 1.1, 1.2, 1.3],
+		// The last sample decoded in the first GOP fills the time until the second GOP starts
+		[0.1, 0.1, 0.1, 0.7, 0.1, 0.1, 0.1, 0.1],
+	);
 });
 
 test('Decode timeline with reordered frames and a held frame, fragmented MP4', async () => {
-	await testDecodeTimeline(new Mp4OutputFormat({
-		fastStart: 'fragmented',
-		minimumFragmentDuration: 0,
-	}));
+	await testDecodeTimeline(
+		new Mp4OutputFormat({
+			fastStart: 'fragmented',
+			minimumFragmentDuration: 0,
+		}),
+		heldFramePackets,
+		[0, 0.1, 0.2, 0.3, 1, 1.1, 1.2, 1.3],
+		[0.1, 0.1, 0.1, 0.7, 0.1, 0.1, 0.1, 0.1],
+	);
 });
 
-const testDecodeTimeline = async (format: Mp4OutputFormat) => {
+// A closed GOP, followed by two open GOPs whose leading frames come before their key frame. The first open GOP has
+// three leading frames and the second only one, so the first one's decode timeline ends past the next key frame.
+const openGopPackets: [PacketType, number][] = [
+	['key', 0],
+	['delta', 0.3],
+	['delta', 0.1],
+	['delta', 0.2],
+	['delta', 0.6],
+	['delta', 0.4],
+	['delta', 0.5],
+	['key', 1],
+	['delta', 0.7],
+	['delta', 0.8],
+	['delta', 0.9],
+	['delta', 1.3],
+	['delta', 1.1],
+	['delta', 1.2],
+	['key', 1.5],
+	['delta', 1.4],
+	['delta', 1.7],
+	['delta', 1.6],
+];
+
+test('Decode timeline with open GOPs, regular MP4', async () => {
+	await testDecodeTimeline(
+		new Mp4OutputFormat(),
+		openGopPackets,
+		[0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 1, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2],
+		// The second GOP's last sample still gets a regular decode step, so that no decode timestamp repeats
+		[0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.4, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
+	);
+});
+
+test('Decode timeline with open GOPs, fragmented MP4', async () => {
+	await testDecodeTimeline(
+		new Mp4OutputFormat({
+			fastStart: 'fragmented',
+			minimumFragmentDuration: 0,
+		}),
+		openGopPackets,
+		[0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 1, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2],
+		[0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.4, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
+	);
+});
+
+const testDecodeTimeline = async (
+	format: Mp4OutputFormat,
+	packets: [PacketType, number][],
+	expectedDecodeTimestamps: number[],
+	expectedDurations: number[],
+) => {
 	const output = new Output({
 		format,
 		target: new BufferTarget(),
@@ -1247,19 +1321,6 @@ const testDecodeTimeline = async (format: Mp4OutputFormat) => {
 	const source = new EncodedVideoPacketSource('vp8');
 	output.addVideoTrack(source);
 	await output.start();
-
-	// Two GOPs with B-frames, in decode order (and one fragment each, for fragmented files). The frame at 0.3 s is
-	// held until the next key frame, but claims a duration of only 0.1 s like all other frames.
-	const packets: [PacketType, number][] = [
-		['key', 0],
-		['delta', 0.3],
-		['delta', 0.1],
-		['delta', 0.2],
-		['key', 1],
-		['delta', 1.3],
-		['delta', 1.1],
-		['delta', 1.2],
-	];
 
 	const meta = { decoderConfig: { codec: 'vp8', codedWidth: 1280, codedHeight: 720 } };
 	for (let i = 0; i < packets.length; i++) {
@@ -1272,11 +1333,8 @@ const testDecodeTimeline = async (format: Mp4OutputFormat) => {
 	const samples = readSampleTimings(new Uint8Array(output.target.buffer!));
 
 	expect(samples.map(x => Math.round(1e6 * x.timestamp) / 1e6)).toEqual(packets.map(x => x[1]));
-	expect(samples.map(x => Math.round(1e6 * x.decodeTimestamp) / 1e6)).toEqual([0, 0.1, 0.2, 0.3, 1, 1.1, 1.2, 1.3]);
-
-	// The last sample decoded in the first GOP fills the time until the second GOP starts, so that there's no gap in
-	// the decode timeline
-	expect(samples.map(x => Math.round(1e6 * x.duration) / 1e6)).toEqual([0.1, 0.1, 0.1, 0.7, 0.1, 0.1, 0.1, 0.1]);
+	expect(samples.map(x => Math.round(1e6 * x.decodeTimestamp) / 1e6)).toEqual(expectedDecodeTimestamps);
+	expect(samples.map(x => Math.round(1e6 * x.duration) / 1e6)).toEqual(expectedDurations);
 };
 
 // Reads decode & presentation timestamps and durations of the samples of a single-track file, in decode order
