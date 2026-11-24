@@ -473,7 +473,11 @@ export class IsobmffDemuxer extends Demuxer {
 				currentPos = startPos + boxInfo.totalSize;
 			}
 
-			if (!foundMovieBoxes && this.input._initInput) {
+			if (!foundMovieBoxes) {
+				if (!this.input._initInput) {
+					throw new Error('No "moov" box found; the file is invalid or incomplete.');
+				}
+
 				// A segment file is allowed to hold zero fragments, in which case there's no moof box to key off of.
 				// It's still a perfectly valid segment, so let's take the tracks from the init input.
 				await this.copyMetadataFromInitInput(this.input._initInput);

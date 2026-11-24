@@ -22,6 +22,7 @@ import { BufferTarget, PathedTarget } from '../../src/target.js';
 import { InputAudioTrack, InputVideoTrack } from '../../src/input-track.js';
 import { Conversion } from '../../src/conversion.js';
 import { assert } from '../../src/misc.js';
+import { PAT_PID, PMT_PID } from '../../src/mpeg-ts/mpeg-ts-muxer.js';
 
 type EmptyMediaVariant =
 	| { type: 'mp4'; fastStart: false | 'in-memory' | 'reserve' | 'fragmented' }
@@ -836,3 +837,116 @@ test('Duration next to an empty track', async () => {
 	expect(await audioTrack.computeDurationOrNull()).toBeNull();
 	expect(await input.computeDuration()).toBe(-1);
 });
+
+test('Missing track index, MP4', async () => {
+	const output = new Output({
+		format: new Mp4OutputFormat({ fastStart: false }),
+		target: new BufferTarget(),
+	});
+
+	const videoSource = new EncodedVideoPacketSource('vp8');
+	output.addVideoTrack(videoSource);
+	await output.start();
+	await videoSource.add(new EncodedPacket(new Uint8Array(8), 'key', 0, 0.5), {
+		decoderConfig: {
+			codec: 'vp8',
+			codedWidth: 16,
+			codedHeight: 16,
+		},
+	});
+	await output.finalize();
+
+	// Cut off the moov box at the end
+	const bytes = new Uint8Array(output.target.buffer!);
+	const moovStart = Buffer.from(bytes).indexOf('moov') - 4;
+
+	using input = new Input({
+		source: new BufferSource(bytes.subarray(0, moovStart)),
+		formats: ALL_FORMATS,
+	});
+
+	await expect(input.getTracks()).rejects.toThrow('No "moov" box found');
+});
+
+test('Missing track index, Matroska', async () => {
+	const output = new Output({
+		format: new MkvOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const videoSource = new EncodedVideoPacketSource('vp8');
+	output.addVideoTrack(videoSource);
+	await output.start();
+	await videoSource.add(new EncodedPacket(new Uint8Array(8), 'key', 0, 0.5), {
+		decoderConfig: {
+			codec: 'vp8',
+			codedWidth: 16,
+			codedHeight: 16,
+		},
+	});
+	await output.finalize();
+
+	// Keep only the EBML header
+	const bytes = new Uint8Array(output.target.buffer!);
+	const segmentStart = Buffer.from(bytes).indexOf(Buffer.from([0x18, 0x53, 0x80, 0x67]));
+
+	using input = new Input({
+		source: new BufferSource(bytes.subarray(0, segmentStart)),
+		formats: ALL_FORMATS,
+	});
+
+	await expect(input.getTracks()).rejects.toThrow('No Segment element found');
+});
+
+test('Missing track index, MPEG-TS', async () => {
+	await testMpegTsWithoutPids([PAT_PID, PMT_PID], 'No Program Association Table found');
+});
+
+test('Missing track index, MPEG-TS with Program Association Table', async () => {
+	await testMpegTsWithoutPids([PMT_PID], 'No Program Map Table found');
+});
+
+const testMpegTsWithoutPids = async (droppedPids: number[], expectedError: string) => {
+	const output = new Output({
+		format: new MpegTsOutputFormat(),
+		target: new BufferTarget(),
+	});
+
+	const audioSource = new EncodedAudioPacketSource('mp3');
+	output.addAudioTrack(audioSource);
+	await output.start();
+
+	const frame = new Uint8Array(576);
+	frame.set([0xff, 0xfb, 0x98, 0xc0]);
+	for (let i = 0; i < 10; i++) {
+		await audioSource.add(new EncodedPacket(frame, 'key', 0.036 * i, 0.036), {
+			decoderConfig: {
+				codec: 'mp3',
+				sampleRate: 32000,
+				numberOfChannels: 1,
+			},
+		});
+	}
+	await output.finalize();
+
+	const bytes = new Uint8Array(output.target.buffer!);
+	const packets: Uint8Array[] = [];
+	for (let i = 0; i + 188 <= bytes.length; i += 188) {
+		const pid = ((bytes[i + 1]! & 0x1f) << 8) | bytes[i + 2]!;
+		if (!droppedPids.includes(pid)) {
+			packets.push(bytes.subarray(i, i + 188));
+		}
+	}
+
+	const remainingBytes = new Uint8Array(188 * packets.length);
+	for (let i = 0; i < packets.length; i++) {
+		remainingBytes.set(packets[i]!, 188 * i);
+	}
+
+	using input = new Input({
+		source: new BufferSource(remainingBytes),
+		formats: ALL_FORMATS,
+	});
+
+	await expect(input.getTracks()).rejects.toThrow(expectedError);
+};

@@ -41,8 +41,8 @@ import {
 // Resources:
 // ISO/IEC 13818-1
 
-const PAT_PID = 0x0000;
-const PMT_PID = 0x1000;
+export const PAT_PID = 0x0000;
+export const PMT_PID = 0x1000;
 const FIRST_TRACK_PID = 0x0100;
 
 const VIDEO_STREAM_ID_BASE = 0xE0;
