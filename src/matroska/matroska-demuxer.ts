@@ -438,6 +438,10 @@ export class MatroskaDemuxer extends Demuxer {
 				assertDefinedSize(size);
 				currentPos = dataStartPos + size;
 			}
+
+			if (this.segments.length === 0) {
+				throw new Error('No Segment element found; the file is invalid or incomplete.');
+			}
 		})();
 	}
 

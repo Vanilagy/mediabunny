@@ -1151,6 +1151,8 @@ export class IsobmffMuxer extends Muxer {
 				+ trackData.lastSample.timescaleUnitsToNextSample;
 		}
 
+		let lastDecodeStep = 0;
+
 		for (let i = 0; i < queue.length; i++) {
 			const sample = queue[i]!;
 
@@ -1172,6 +1174,7 @@ export class IsobmffMuxer extends Muxer {
 
 				trackData.lastTimescaleUnits += delta;
 				trackData.lastSample.timescaleUnitsToNextSample = delta;
+				lastDecodeStep = delta;
 
 				if (!this.isFragmented) {
 					let lastTableEntry = last(trackData.timeToSampleTable);
@@ -1252,8 +1255,13 @@ export class IsobmffMuxer extends Muxer {
 			// The last sample fills the time until the next key frame, where the next group starts. The next sample
 			// will also set the last sample's duration, but the last sample may get written before that.
 			const nextTimestampInTimescale = intoTimescale(nextSample.timestamp, trackData.timescale);
-			trackData.lastSample.timescaleUnitsToNextSample
-				= Math.max(nextTimestampInTimescale - Math.round(trackData.lastTimescaleUnits), 0);
+			trackData.lastSample.timescaleUnitsToNextSample = Math.max(
+				nextTimestampInTimescale - Math.round(trackData.lastTimescaleUnits),
+				// With open GOPs, the last sample's decode timestamp may already lie past the next key frame. Then, it
+				// still gets a regular decode step to keep decode timestamps strictly increasing, and the next group
+				// starts later. If we didn't do this, we'd get duplicate DTSs.
+				lastDecodeStep,
+			);
 		}
 	}
 
