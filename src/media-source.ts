@@ -2375,6 +2375,32 @@ class AudioEncoderWrapper {
 		}
 	}
 
+	private emitPacket(packet: EncodedPacket, meta: EncodedAudioChunkMetadata | undefined, sampleRate: number) {
+		// Encoders pad their final frame with silence that reaches past the end of the audio the
+		// source accepted. Bound every packet's end to that end so the padding can't leak into the
+		// file's duration (https://github.com/Vanilagy/mediabunny/issues/676). Only the stream's
+		// final packet can overshoot it; mid-stream packets always fit inside the samples fed in.
+		if (this.lastEndSampleIndex !== null) {
+			const durationToEnd = roundToDivisor(
+				this.lastEndSampleIndex / sampleRate - packet.timestamp,
+				sampleRate,
+			);
+			if (durationToEnd <= 0) {
+				// The packet holds only encoder padding
+				return;
+			}
+			if (durationToEnd < packet.duration) {
+				packet = packet.clone({ duration: durationToEnd });
+			}
+		}
+
+		this.encodingConfig.onEncodedPacket?.(packet, meta);
+		this.lastMuxerPromise = this.muxer!.addEncodedAudioPacket(this.source._connectedTrack!, packet, meta)
+			.catch((error) => {
+				this.setError(error);
+			});
+	}
+
 	private async doPcmEncoding(audioSample: AudioSample, shouldClose: boolean) {
 		assert(this.outputSampleSize);
 		assert(this.writeOutputValue);
@@ -2502,12 +2528,7 @@ class AudioEncoderWrapper {
 						throw new TypeError('The second argument passed to onPacket must be an object or undefined.');
 					}
 
-					this.encodingConfig.onEncodedPacket?.(packet, meta);
-					this.lastMuxerPromise
-						= this.muxer!.addEncodedAudioPacket(this.source._connectedTrack!, packet, meta)
-							.catch((error) => {
-								this.setError(error);
-							});
+					this.emitPacket(packet, meta, encoderConfig.sampleRate);
 				};
 				// @ts-expect-error It's technically readonly
 				this.customEncoder.onError = (error) => {
@@ -2580,12 +2601,7 @@ class AudioEncoderWrapper {
 								opusPreSkip = 0;
 							}
 
-							this.encodingConfig.onEncodedPacket?.(packet, meta);
-							this.lastMuxerPromise
-								= this.muxer!.addEncodedAudioPacket(this.source._connectedTrack!, packet, meta)
-									.catch((error) => {
-										this.setError(error);
-									});
+							this.emitPacket(packet, meta, encoderConfig.sampleRate);
 						} catch (error) {
 							this.setError(error);
 						}

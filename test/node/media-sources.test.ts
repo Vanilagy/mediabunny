@@ -10,10 +10,15 @@ import {
 	VideoSampleSource,
 } from '../../src/media-source.js';
 import { EncodedPacket } from '../../src/packet.js';
-import { CustomAudioEncoder, CustomVideoEncoder, registerEncoder } from '../../src/custom-coder.js';
+import {
+	CustomAudioEncoder,
+	CustomVideoEncoder,
+	customAudioEncoders,
+	registerEncoder,
+} from '../../src/custom-coder.js';
 import { AudioCodec, VideoCodec } from '../../src/codec.js';
 import { AudioSample, VideoSample } from '../../src/sample.js';
-import { Quality } from '../../src/encode.js';
+import { canEncodeAudioMemo, Quality } from '../../src/encode.js';
 import { assert, toDataView, wait } from '../../src/misc.js';
 import { Input } from '../../src/input.js';
 import { BufferSource } from '../../src/source.js';
@@ -538,4 +543,74 @@ test('Add while the source is closing', async () => {
 		.toThrow('Source is closed.');
 
 	await output.finalize();
+});
+
+test('Encoder padding past the end of the added audio is trimmed', async () => {
+	// Fake encoder that emits packets like a WebCodecs AAC encoder: a priming shift at
+	// the start and a silence-padded final frame (https://github.com/Vanilagy/mediabunny/issues/676)
+	class PaddingAudioEncoder extends TestAudioEncoder {
+		private totalFrames = 0;
+		private sampleRate = 48000;
+
+		override encode(audioSample: AudioSample) {
+			this.totalFrames += audioSample.numberOfFrames;
+			this.sampleRate = audioSample.sampleRate;
+		}
+
+		override flush() {
+			const primingFrames = 2112;
+			const totalFrames = Math.ceil((this.totalFrames + primingFrames) / 1024) * 1024;
+			for (let start = 0; start < totalFrames; start += 1024) {
+				this.onPacket(new EncodedPacket(
+					new Uint8Array(16),
+					'key',
+					(start - primingFrames) / this.sampleRate,
+					1024 / this.sampleRate,
+				), AAC_META);
+			}
+		}
+	}
+
+	useAudioEncoder(PaddingAudioEncoder);
+	try {
+		const run = async (numberOfFrames: number) => {
+			const output = new Output({
+				format: new Mp4OutputFormat(),
+				target: new BufferTarget(),
+			});
+
+			const source = new AudioSampleSource({ codec: 'aac', quality: new Quality({ bitrate: 128000 }) });
+			output.addAudioTrack(source);
+			await output.start();
+
+			await source.add(new AudioSample({
+				data: new Float32Array(numberOfFrames),
+				format: 'f32',
+				numberOfChannels: 1,
+				sampleRate: 48000,
+				numberOfFrames,
+				timestamp: 0,
+			}));
+			source.close();
+			await output.finalize();
+
+			using input = new Input({
+				source: new BufferSource(output.target.buffer!),
+				formats: ALL_FORMATS,
+			});
+			const track = await input.getPrimaryAudioTrack();
+			assert(track);
+			return track.computeDuration();
+		};
+
+		// Content ends mid-frame: the trailing padding is trimmed so the media ends
+		// exactly where the added audio ends
+		expect(await run(3 * 48000)).toBe(3);
+		// Content ends exactly on a frame boundary: nothing to trim
+		expect(await run(140 * 1024 - 2112)).toBe((140 * 1024 - 2112) / 48000);
+	} finally {
+		activeAudioEncoder = null;
+		customAudioEncoders.splice(customAudioEncoders.indexOf(PaddingAudioEncoder), 1);
+		canEncodeAudioMemo.clear();
+	}
 });
