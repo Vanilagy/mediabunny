@@ -130,6 +130,7 @@ const TRUEHD_CHANNEL_ASSIGNMENT_COUNTS = [2, 1, 1, 2, 2, 2, 2, 1, 1, 2, 2, 1, 1]
 
 type InternalTrack = {
 	id: number;
+	fallbackTrackIds: Set<number> | null;
 	demuxer: IsobmffDemuxer;
 	trackBacking: InputTrackBacking | null;
 	disposition: TrackDisposition;
@@ -550,6 +551,7 @@ export class IsobmffDemuxer extends Demuxer {
 		for (const foreignTrack of initDemuxer.tracks) {
 			const track: InternalTrack = {
 				id: foreignTrack.id,
+				fallbackTrackIds: foreignTrack.fallbackTrackIds,
 				demuxer: this,
 				trackBacking: null,
 				disposition: foreignTrack.disposition,
@@ -1051,6 +1053,7 @@ export class IsobmffDemuxer extends Demuxer {
 
 				const track = {
 					id: -1,
+					fallbackTrackIds: null,
 					demuxer: this,
 					trackBacking: null,
 					disposition: {
@@ -1101,6 +1104,36 @@ export class IsobmffDemuxer extends Demuxer {
 				}
 
 				this.currentTrack = null;
+			}; break;
+
+			case 'tref': {
+				const track = this.currentTrack;
+				if (!track || this.currentFragment || boxEndPos > slice.end) {
+					break;
+				}
+
+				const references = slice.slice(contentStartPos, boxInfo.contentSize);
+				while (references.remainingLength >= MIN_BOX_HEADER_SIZE) {
+					const referenceStart = references.filePos;
+					const size = readU32Be(references);
+					references.filePos = referenceStart;
+					if (size === 1 && references.remainingLength < MAX_BOX_HEADER_SIZE) {
+						break;
+					}
+
+					const reference = readBoxHeader(references);
+					if (!reference || reference.contentSize > references.remainingLength) {
+						break;
+					}
+
+					if (reference.name === 'fall' && reference.contentSize % 4 === 0) {
+						const ids = track.fallbackTrackIds ??= new Set();
+						for (let i = 0; i < reference.contentSize; i += 4) {
+							ids.add(readU32Be(references));
+						}
+					}
+					references.filePos = referenceStart + reference.totalSize;
+				}
 			}; break;
 
 			case 'tkhd': {
@@ -4029,6 +4062,18 @@ class IsobmffAudioTrackBacking extends IsobmffTrackBacking implements InputAudio
 
 	override getCodec(): AudioCodec | null {
 		return this.internalTrack.info.codec;
+	}
+
+	getFallbackTrackBackings() {
+		const track = this.internalTrack;
+		const backings: InputTrackBacking[] = [];
+		for (const id of track.fallbackTrackIds ?? []) {
+			const target = track.demuxer.idToTrack.get(id);
+			if (id !== 0 && target !== track && target?.trackBacking) {
+				backings.push(target.trackBacking);
+			}
+		}
+		return backings;
 	}
 
 	getNumberOfChannels() {

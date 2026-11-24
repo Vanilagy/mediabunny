@@ -1099,6 +1099,7 @@ export interface InputAudioTrackBacking extends InputTrackBacking {
 	getCodec(): MaybePromise<AudioCodec | null>;
 	getNumberOfChannels(): MaybePromise<number>;
 	getSampleRate(): MaybePromise<number>;
+	getFallbackTrackBackings?(): MaybePromise<InputTrackBacking[]>;
 	getDecoderConfig(): Promise<AudioDecoderConfig | null>;
 }
 
@@ -1151,6 +1152,18 @@ export class InputAudioTrack extends InputTrack {
 	 */
 	get numberOfChannels() {
 		return requireSync(this._backing.getNumberOfChannels(), 'numberOfChannels', 'getNumberOfChannels');
+	}
+
+	/**
+	 * Returns the audio tracks explicitly referenced as fallbacks for this track, in reference order.
+	 *
+	 * Currently reads the QuickTime/MP4 `fall` track reference. Returns an empty array when the format or track
+	 * provides no usable fallback references.
+	 */
+	async getFallbackTracks(): Promise<InputAudioTrack[]> {
+		const backings = await this._backing.getFallbackTrackBackings?.() ?? [];
+		return backings.map(backing => this.input._wrapBackingAsTrack(backing))
+			.filter(track => track.isAudioTrack());
 	}
 
 	/** Returns the track's audio sample rate in hertz. */

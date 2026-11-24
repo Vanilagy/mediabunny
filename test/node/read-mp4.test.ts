@@ -10,6 +10,7 @@ import {
 	CustomSource,
 	EncodedPacket,
 	EncodedPacketSink,
+	EncodedAudioPacketSource,
 	EncodedVideoPacketSource,
 	FilePathSource,
 	Input,
@@ -19,6 +20,8 @@ import {
 	Output,
 } from '../../src/index.js';
 import { assert, toUint8Array } from '../../src/misc.js';
+import { FileSlice } from '../../src/reader.js';
+import { readBoxHeader } from '../../src/isobmff/isobmff-reader.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
@@ -828,3 +831,70 @@ const u16 = (value: number) => [(value >>> 8) & 0xff, value & 0xff];
 const u8 = (value: number) => [value & 0xff];
 const ascii = (text: string) => [...text].map(char => char.charCodeAt(0));
 const zeros = (length: number) => new Uint8Array(length);
+
+test('MOV audio fallback references resolve file track IDs to audio track objects', async () => {
+	const output = new Output({
+		format: new MovOutputFormat({ fastStart: false }),
+		target: new BufferTarget(),
+	});
+	const sources = [new EncodedAudioPacketSource('pcm-s16'), new EncodedAudioPacketSource('pcm-s16')];
+	for (const source of sources) {
+		output.addAudioTrack(source);
+	}
+	await output.start();
+	for (const source of sources) {
+		await source.add(new EncodedPacket(new Uint8Array(4), 'key', 0, 1 / 48000), {
+			decoderConfig: { codec: 'pcm-s16', numberOfChannels: 2, sampleRate: 48000 },
+		});
+	}
+	await output.finalize();
+
+	const sourceBytes = new Uint8Array(output.target.buffer!);
+	const findBox = (slice: FileSlice, name: string) => {
+		while (slice.remainingLength >= 8) {
+			const start = slice.filePos;
+			const box = readBoxHeader(slice);
+			assert(box);
+			if (box.name === name) {
+				return { start, totalSize: box.totalSize, content: slice.slice(slice.filePos, box.contentSize) };
+			}
+			slice.filePos = start + box.totalSize;
+		}
+		throw new Error(`Missing ${name} box`);
+	};
+	const moov = findBox(FileSlice.tempFromBytes(sourceBytes), 'moov');
+	const first = findBox(moov.content, 'trak');
+	moov.content.filePos = first.start + first.totalSize;
+	const second = findBox(moov.content, 'trak');
+	const firstHeader = findBox(first.content, 'tkhd');
+
+	// moov sits at EOF, so extending the final trak does not move any sample data.
+	const tref = new Uint8Array(28);
+	const header = new DataView(tref.buffer);
+	header.setUint32(0, tref.length);
+	header.setUint32(8, tref.length - 8);
+	const encoder = new TextEncoder();
+	tref.set(encoder.encode('tref'), 4);
+	tref.set(encoder.encode('fall'), 12);
+	const fallbackIds = new DataView(tref.buffer, 16);
+	fallbackIds.setUint32(0, 99); // No such track.
+	fallbackIds.setUint32(4, 2); // Self reference.
+	fallbackIds.setUint32(8, 42); // Track ID from tkhd, distinct from InputTrack.id.
+	const bytes = new Uint8Array(sourceBytes.length + tref.length);
+	bytes.set(sourceBytes);
+	bytes.set(tref, sourceBytes.length);
+	const view = new DataView(bytes.buffer);
+	view.setUint32(moov.start, moov.totalSize + tref.length);
+	view.setUint32(second.start, second.totalSize + tref.length);
+	view.setUint32(firstHeader.content.start + 12, 42); // v0 tkhd track ID after version, flags, and timestamps.
+
+	using input = new Input({ source: new BufferSource(bytes), formats: ALL_FORMATS });
+	const [fallback, primary] = await input.getAudioTracks();
+	assert(primary && fallback);
+	expect(fallback.id).toBe(1);
+	expect(primary.id).toBe(2);
+	const fallbacks = await primary.getFallbackTracks();
+	expect(fallbacks.map(track => track.id)).toEqual([fallback.id]);
+	expect(fallbacks.includes(fallback)).toBe(true);
+	expect(await fallback.getFallbackTracks()).toEqual([]);
+});
