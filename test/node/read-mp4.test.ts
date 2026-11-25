@@ -186,6 +186,26 @@ test('HE-AAC v2 audio config is parsed correctly', async () => {
 	expect([...toUint8Array(decoderConfig.description!)]).toEqual([0xeb, 0x8a, 0x08, 0x00]);
 });
 
+test('iTunSMPB priming offset', async () => {
+	const filePath = path.join(__dirname, '..', 'public/sync-avf.m4a');
+	using input = new Input({
+		source: new FilePathSource(filePath),
+		formats: ALL_FORMATS,
+	});
+
+	const tags = await input.getMetadataTags();
+	expect(tags.raw?.['iTunSMPB']).toMatch(/^ 00000000 00000840 /);
+
+	const track = await input.getPrimaryAudioTrack();
+	assert(track);
+
+	expect(await track.getFirstTimestamp()).toBe(-2112 / 48000);
+
+	const sink = new EncodedPacketSink(track);
+	const firstPacket = (await sink.getFirstPacket())!;
+	expect(firstPacket.timestamp).toBe(-2112 / 48000);
+});
+
 test('PCM track with stsc not starting at the first chunk', async () => {
 	// The stsc box's first entry starts at the second chunk, leaving three chunks of PCM audio
 	const filePath = path.join(__dirname, '..', 'public/pcm-stsc-not-first-chunk.mp4');

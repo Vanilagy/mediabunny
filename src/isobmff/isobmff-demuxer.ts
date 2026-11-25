@@ -155,8 +155,8 @@ type InternalTrack = {
 	}[];
 	/** The segment durations of all edit list entries leading up to the main one (from which the offset is taken.) */
 	editListPreviousSegmentDurations: number;
-	/** The media time offset of the main edit list entry (with media time !== -1) */
-	editListOffset: number;
+	/** Subtracted from media timestamps to get presentation timestamps, in the track timescale */
+	timestampOffset: number;
 	/** Set when the track's samples are encrypted using a supported scheme (cenc/cens/cbcs), parsed from sinf/tenc. */
 	encryptionInfo: TrackEncryptionInfo | null;
 	/** For non-fragmented encrypted tracks: parsed saiz+saio from stbl; aux info is fetched lazily on first use. */
@@ -439,12 +439,28 @@ export class IsobmffDemuxer extends Demuxer {
 						throw new Error('Invalid moov box: missing mvhd box.');
 					}
 
+					// A special metadata tag used by iTunes to communicate priming delay and other things
+					const iTunSmpb = this.metadataTags.raw?.['iTunSMPB'];
+
 					for (const track of this.tracks) {
-						// Modify the edit list offset based on the previous segment durations. They are in different
-						// timescales, so we first convert to seconds and then into the track timescale.
+						if (
+							typeof iTunSmpb === 'string'
+							&& track.info?.type === 'audio'
+							&& track.info.codec === 'aac'
+							&& track.timestampOffset === 0 // Only apply it if we don't already have an offset
+						) {
+							const priming = Number.parseInt(iTunSmpb.trim().split(/\s+/)[1] ?? '', 16);
+							if (priming > 0) {
+								const primingInSeconds = priming / track.info.sampleRate;
+								track.timestampOffset = Math.round(primingInSeconds * track.timescale);
+							}
+						}
+
+						// Modify the timestamp offset based on the previous edit list segment durations. They are in
+						// different timescales, so we first convert to seconds and then into the track timescale.
 						const previousSegmentDurationsInSeconds
 							= track.editListPreviousSegmentDurations / this.movieTimescale;
-						track.editListOffset -= Math.round(previousSegmentDurationsInSeconds * track.timescale);
+						track.timestampOffset -= Math.round(previousSegmentDurationsInSeconds * track.timescale);
 					}
 
 					lookForMfraBox = this.isFragmented
@@ -569,7 +585,7 @@ export class IsobmffDemuxer extends Demuxer {
 				fragmentLookupTable: [],
 				fragmentPositionCache: [],
 				editListPreviousSegmentDurations: foreignTrack.editListPreviousSegmentDurations,
-				editListOffset: foreignTrack.editListOffset,
+				timestampOffset: foreignTrack.timestampOffset,
 				encryptionInfo: foreignTrack.encryptionInfo,
 				encryptionAuxInfo: null,
 				frmaCodecString: null,
@@ -1074,7 +1090,7 @@ export class IsobmffDemuxer extends Demuxer {
 					fragmentLookupTable: [],
 					fragmentPositionCache: [],
 					editListPreviousSegmentDurations: 0,
-					editListOffset: 0,
+					timestampOffset: 0,
 					encryptionInfo: null,
 					encryptionAuxInfo: null,
 					frmaCodecString: null,
@@ -1183,7 +1199,7 @@ export class IsobmffDemuxer extends Demuxer {
 					}
 
 					track.editListPreviousSegmentDurations = previousSegmentDurations;
-					track.editListOffset = mediaTime;
+					track.timestampOffset = mediaTime;
 					relevantEntryFound = true;
 				}
 			}; break;
@@ -3018,7 +3034,37 @@ export class IsobmffDemuxer extends Demuxer {
 						metadataKey = this.currentMetadataKeys.get(nameAsNumber)!;
 					}
 
-					const data = readDataBox(slice);
+					let data: ReturnType<typeof readDataBox> = null;
+
+					if (metadataKey === '----') {
+						// Freeform atom, made up of a 'mean' (namespace), a 'name' and a 'data' atom
+						let name: string | null = null;
+
+						const freeformSlice = slice.slice(slice.filePos, boxInfo.contentSize);
+						const childIterator = this.iterateContiguousBoxes(freeformSlice);
+
+						for (const { boxInfo: childBoxInfo, slice: childSlice } of childIterator) {
+							if (childBoxInfo.name === 'name' && name === null) {
+								if (childBoxInfo.contentSize < 4) {
+									throw new Error('Invalid \'name\' box: too small.');
+								}
+
+								childSlice.skip(4); // Version + flags
+								name = textDecoder.decode(readBytes(childSlice, childBoxInfo.contentSize - 4));
+							} else if (childBoxInfo.name === 'data' && data === null) {
+								childSlice.filePos -= childBoxInfo.headerSize;
+								data = readDataBox(childSlice);
+							}
+						}
+
+						if (name === null) {
+							continue;
+						}
+
+						metadataKey = name;
+					} else {
+						data = readDataBox(slice);
+					}
 
 					this.metadataTags.raw ??= {};
 					this.metadataTags.raw[metadataKey] ??= data;
@@ -3301,7 +3347,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		// Do a little rounding to catch cases where the result is very close to an integer. If it is, it's likely
 		// that the number was originally an integer divided by the timescale. For stability, it's best
 		// to return the integer in this case.
-		return roundIfAlmostInteger(timestamp * this.internalTrack.timescale) + this.internalTrack.editListOffset;
+		return roundIfAlmostInteger(timestamp * this.internalTrack.timescale) + this.internalTrack.timestampOffset;
 	}
 
 	async getPacket(timestamp: number, options: PacketRetrievalOptions) {
@@ -3586,7 +3632,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			}
 		}
 
-		const timestamp = (sampleInfo.presentationTimestamp - this.internalTrack.editListOffset)
+		const timestamp = (sampleInfo.presentationTimestamp - this.internalTrack.timestampOffset)
 			/ this.internalTrack.timescale;
 		const duration = sampleInfo.duration / this.internalTrack.timescale;
 		const packet = new EncodedPacket(
@@ -3650,7 +3696,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			}
 		}
 
-		const timestamp = (fragmentSample.presentationTimestamp - this.internalTrack.editListOffset)
+		const timestamp = (fragmentSample.presentationTimestamp - this.internalTrack.timestampOffset)
 			/ this.internalTrack.timescale;
 		const duration = fragmentSample.duration / this.internalTrack.timescale;
 		const packet = new EncodedPacket(
@@ -3835,7 +3881,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			size: samplePacket.data.byteLength,
 			blockCount: 6,
 		}];
-		const searchTimestampInSeconds = (searchTimestamp - this.internalTrack.editListOffset)
+		const searchTimestampInSeconds = (searchTimestamp - this.internalTrack.timestampOffset)
 			/ this.internalTrack.timescale;
 
 		let match: EncodedPacket | null = null;
