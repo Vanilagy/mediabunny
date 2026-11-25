@@ -15,7 +15,7 @@ import {
 	VideoCodec,
 	VideoSample,
 } from 'mediabunny';
-import { assert } from '../../../src/misc';
+import { assert, clamp } from '../../../src/misc';
 
 class MjpegDecoder extends CustomVideoDecoder {
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -83,8 +83,7 @@ class MjpegEncoder extends CustomVideoEncoder {
 	canvas?: OffscreenCanvas;
 	context?: OffscreenCanvasRenderingContext2D;
 	metadata?: EncodedVideoChunkMetadata;
-	framerate?: number;
-	targetSize?: number;
+	calibratedTargetSizeBytes?: number; // Bytes per frame at the last calibration.
 	bitrateState: BitrateState = { actualBytes: 0, targetBytes: 0, smoothedError: 0 };
 
 	static override supports(codec: VideoCodec, config: VideoEncoderConfig): boolean {
@@ -94,10 +93,6 @@ class MjpegEncoder extends CustomVideoEncoder {
 	init() {
 		assert(this.config.width && this.config.height);
 		assert(this.config.displayWidth && this.config.displayHeight);
-		this.framerate = this.config.framerate;
-		if (this.config.bitrate !== undefined && this.framerate !== undefined) {
-			this.targetSize = this.config.bitrate / (8 * this.framerate);
-		}
 		this.metadata = {
 			decoderConfig: {
 				codec: 'jpeg',
@@ -118,30 +113,38 @@ class MjpegEncoder extends CustomVideoEncoder {
 		return this.canvas.convertToBlob({ type: 'image/jpeg', quality });
 	}
 
-	private async calibrateFrame(videoSample: VideoSample, targetSize: number) {
+	// Blob.size is in bytes; all quality values and search bounds are unitless, from 0 to 1.
+	private async calibrateFrame(videoSample: VideoSample, targetSizeBytes: number) {
 		let quality = 1;
 		let imageBlob = await this.encodeAtQuality(videoSample, quality);
-		if (imageBlob.size <= targetSize) {
+		if (imageBlob.size <= targetSizeBytes) {
 			return { quality, imageBlob };
 		}
 
-		quality = 0;
-		imageBlob = await this.encodeAtQuality(videoSample, quality);
-		if (imageBlob.size >= targetSize) {
-			return { quality, imageBlob };
+		const minimumBlob = await this.encodeAtQuality(videoSample, 0);
+		if (minimumBlob.size >= targetSizeBytes) {
+			return { quality: 0, imageBlob: minimumBlob };
 		}
 
-		let lower = 0;
-		let upper = 1;
+		if (Math.abs(minimumBlob.size - targetSizeBytes) < Math.abs(imageBlob.size - targetSizeBytes)) {
+			quality = 0;
+			imageBlob = minimumBlob;
+		}
+
+		let lowerQuality = 0;
+		let upperQuality = 1;
 		for (let i = 0; i < 7; i++) {
-			const candidateQuality = (lower + upper) / 2;
+			const candidateQuality = (lowerQuality + upperQuality) / 2;
 			const candidate = await this.encodeAtQuality(videoSample, candidateQuality);
-			if (candidate.size <= targetSize) {
-				lower = candidateQuality;
+			// Bitrate is an average target, so keep the closest result on either side.
+			if (Math.abs(candidate.size - targetSizeBytes) < Math.abs(imageBlob.size - targetSizeBytes)) {
 				quality = candidateQuality;
 				imageBlob = candidate;
+			}
+			if (candidate.size <= targetSizeBytes) {
+				lowerQuality = candidateQuality;
 			} else {
-				upper = candidateQuality;
+				upperQuality = candidateQuality;
 			}
 		}
 		return { quality, imageBlob };
@@ -156,35 +159,41 @@ class MjpegEncoder extends CustomVideoEncoder {
 		if (this.config.bitrate === undefined) {
 			return this.encodeAtQuality(videoSample, 1);
 		}
-		if (this.targetSize === undefined) {
-			this.framerate ??= videoSample.duration > 0 ? 1 / videoSample.duration : 30;
-			this.targetSize = this.config.bitrate / (8 * this.framerate);
-		}
+		const targetSizeBytes = (this.config.bitrate * videoSample.duration) / 8;
+		const errorRepaymentFrames = 30;
+		const accumulatedErrorBytes = this.bitrateState.targetBytes - this.bitrateState.actualBytes;
+		const frameErrorRatio = targetSizeBytes !== 0
+			? clamp(accumulatedErrorBytes / (errorRepaymentFrames * targetSizeBytes), -1, 1)
+			: 0;
 
 		let quality = this.bitrateState.quality;
 		let imageBlob: Blob;
-		if (quality === undefined) {
-			const calibratedFrame = await this.calibrateFrame(videoSample, this.targetSize);
+		if (
+			quality === undefined
+			|| this.calibratedTargetSizeBytes === undefined
+			|| Math.abs(targetSizeBytes / this.calibratedTargetSizeBytes - 1) > 0.1
+		) {
+			const calibrationTargetSizeBytes = targetSizeBytes * (1 + frameErrorRatio);
+			const calibratedFrame = await this.calibrateFrame(videoSample, calibrationTargetSizeBytes);
 			quality = calibratedFrame.quality;
 			imageBlob = calibratedFrame.imageBlob;
+			this.calibratedTargetSizeBytes = targetSizeBytes;
+			this.bitrateState.smoothedError = 0;
 		} else {
 			imageBlob = await this.encodeAtQuality(videoSample, quality);
 		}
 
 		this.bitrateState.actualBytes += imageBlob.size;
-		this.bitrateState.targetBytes += this.targetSize;
-		const frameError = (this.targetSize - imageBlob.size) / this.targetSize;
+		this.bitrateState.targetBytes += targetSizeBytes;
+		const frameError = (targetSizeBytes - imageBlob.size) / targetSizeBytes;
 		this.bitrateState.smoothedError = 0.5 * this.bitrateState.smoothedError + 0.5 * frameError;
-		// Repay accumulated bitrate error gradually, without letting it dominate after an unattainable target.
-		const accumulatedError = Math.max(
-			-1,
-			Math.min(1, (this.bitrateState.targetBytes - this.bitrateState.actualBytes) / (30 * this.targetSize)),
+		const maxQualityChange = 0.05;
+		const qualityAdjustment = clamp(
+			0.15 * this.bitrateState.smoothedError + 0.05 * frameErrorRatio,
+			-maxQualityChange,
+			maxQualityChange,
 		);
-		const adjustment = Math.max(
-			-0.05,
-			Math.min(0.05, 0.15 * this.bitrateState.smoothedError + 0.05 * accumulatedError),
-		);
-		this.bitrateState.quality = Math.max(0, Math.min(1, quality + adjustment));
+		this.bitrateState.quality = clamp(quality + qualityAdjustment, 0, 1);
 		return imageBlob;
 	}
 
