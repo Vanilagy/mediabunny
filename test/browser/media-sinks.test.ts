@@ -472,7 +472,8 @@ const getAnamorphicBt601Sample = async (track: InputVideoTrack, keepAlpha: boole
 	const remuxedTrack = await remuxedInput.getPrimaryVideoTrack();
 	assert(remuxedTrack);
 
-	const sample = await new VideoSampleSink(remuxedTrack).getSample(0.5);
+	// Alpha decoding happens in software, so the opaque sample must too for the two to be comparable
+	const sample = await new VideoSampleSink(remuxedTrack, { hardwareAcceleration: 'prefer-software' }).getSample(0.5);
 	assert(sample);
 
 	return sample;

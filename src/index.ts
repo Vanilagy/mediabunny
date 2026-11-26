@@ -102,6 +102,7 @@ export {
 	AudioPacketDecoder,
 	type ExtendedVideoDecoderConfig,
 	type ExtendedAudioDecoderConfig,
+	type VideoPacketDecoderOptions,
 	canDecode,
 	canDecodeVideo,
 	canDecodeAudio,

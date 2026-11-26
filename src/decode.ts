@@ -54,6 +54,7 @@ import {
 	customVideoDecoders,
 } from './custom-coder';
 import {
+	arrayCount,
 	assert,
 	assertNever,
 	binarySearchLessOrEqual,
@@ -62,6 +63,7 @@ import {
 	COLOR_PRIMARIES_MAP,
 	colorSpaceIsComplete,
 	createWorker,
+	DeepReadonly,
 	getInt24,
 	getUint24,
 	insertSorted,
@@ -81,6 +83,7 @@ import {
 	toDataView,
 	toUint8Array,
 	TRANSFER_CHARACTERISTICS_MAP,
+	uint8ArraysAreEqual,
 } from './misc';
 import { EncodedPacket } from './packet';
 import { fromAlaw, fromUlaw } from './pcm';
@@ -150,6 +153,19 @@ export type ExtendedAudioDecoderConfig = {
 	sampleRate: number;
 	/** The number of audio channels. */
 	numberOfChannels: number;
+};
+
+export type VideoPacketDecoderOptions = {
+	/**
+	 * A hint that configures the hardware acceleration method of the decoder. This is best left on `'no-preference'`,
+	 * the default.
+	 */
+	hardwareAcceleration?: 'no-preference' | 'prefer-hardware' | 'prefer-software';
+	/**
+	 * Hint that the selected decoder should be configured to minimize the number of packets that have to be decoded
+	 * before video frames are output.
+	 */
+	optimizeForLatency?: boolean;
 };
 
 export const validateExtendedVideoDecoderConfig = (
@@ -484,7 +500,27 @@ export const validateExtendedAudioDecoderConfig = (
 	}
 };
 
+export const validateVideoPacketDecoderOptions = (options: VideoPacketDecoderOptions, subject: string) => {
+	if (!options || typeof options !== 'object') {
+		throw new TypeError(`${subject} must be an object.`);
+	}
+	if (
+		options.hardwareAcceleration !== undefined
+		&& !['no-preference', 'prefer-hardware', 'prefer-software'].includes(options.hardwareAcceleration)
+	) {
+		throw new TypeError(
+			`${subject}.hardwareAcceleration, when provided, must be 'no-preference', 'prefer-hardware' or`
+			+ ` 'prefer-software'.`,
+		);
+	}
+	if (options.optimizeForLatency !== undefined && typeof options.optimizeForLatency !== 'boolean') {
+		throw new TypeError(`${subject}.optimizeForLatency, when provided, must be a boolean.`);
+	}
+};
+
 const MAX_QUEUE_SIZE = 4;
+
+type AnyDecoderConfig = DeepReadonly<ExtendedVideoDecoderConfig | ExtendedAudioDecoderConfig>;
 
 export abstract class PacketDecoder<
 	MediaSample extends VideoSample | AudioSample,
@@ -496,13 +532,17 @@ export abstract class PacketDecoder<
 	/** @internal */
 	_backpressure: ReturnType<typeof promiseWithResolvers<void>> | null = null;
 	/** @internal */
-	_pendingInputs: (EncodedPacket | null)[] = [];
+	_pendingInputs: (EncodedPacket | AnyDecoderConfig | null)[] = [];
 	/** @internal */
 	_flushInProgress = false;
 	/** @internal */
 	_dirty = false;
 	/** @internal */
 	_needsKeyPacket = true;
+	/** @internal */
+	_needsDecoderConfig = true;
+	/** @internal */
+	_lastDecoderConfig: AnyDecoderConfig | null = null;
 	/** @internal */
 	_error: unknown = null;
 	/** @internal */
@@ -527,6 +567,13 @@ export abstract class PacketDecoder<
 	}
 
 	/** @internal */
+	abstract _type: 'video' | 'audio';
+
+	/** @internal */
+	abstract _decoderConfigsAreEqual(a: AnyDecoderConfig, b: AnyDecoderConfig): boolean;
+	/** @internal */
+	abstract _configure(decoderConfig: AnyDecoderConfig): void;
+	/** @internal */
 	abstract _decodePacket(packet: EncodedPacket): void;
 	/** @internal */
 	abstract _flush(): Promise<void>;
@@ -548,19 +595,49 @@ export abstract class PacketDecoder<
 			throw new Error('Cannot push after the decoder has been ended or closed.');
 		}
 
+		let changedDecoderConfig: AnyDecoderConfig | null = null;
 		if (packet) {
+			const decoderConfig = packet.decoderConfig;
+			if (decoderConfig) {
+				if (decoderConfig.type !== this._type) {
+					throw new TypeError(`Packets for this decoder must have a ${this._type} decoder config.`);
+				}
+
+				// Comparing references is enough for the common case of packets sharing one config object
+				if (
+					decoderConfig !== this._lastDecoderConfig
+					&& (
+						this._lastDecoderConfig === null
+						|| !this._decoderConfigsAreEqual(decoderConfig, this._lastDecoderConfig)
+					)
+				) {
+					changedDecoderConfig = decoderConfig;
+				}
+			} else if (this._needsDecoderConfig) {
+				throw new Error('The first packet of a packet stream must have a decoder config.');
+			}
+
 			if (this._needsKeyPacket && packet.type !== 'key') {
-				throw new Error(
-					'The first packet of a packet stream must be a key packet.',
-				);
+				throw new Error('The first packet of a packet stream must be a key packet.');
+			}
+			if (changedDecoderConfig && packet.type !== 'key') {
+				throw new Error('A packet that changes the decoder config must be a key packet.');
 			}
 
 			this._needsKeyPacket = false;
+			this._needsDecoderConfig = false;
+			if (decoderConfig) {
+				this._lastDecoderConfig = decoderConfig;
+			}
 		} else {
 			this._needsKeyPacket = true;
+			this._needsDecoderConfig = true;
 		}
 
-		if (
+		if (changedDecoderConfig) {
+			this._pendingInputs.push(changedDecoderConfig, packet);
+			this._processInputs();
+		} else if (
 			this._pendingInputs.length === 0
 			&& !this._flushInProgress
 			&& (!packet || this._getAdmittedQueueSize() < MAX_QUEUE_SIZE)
@@ -635,7 +712,7 @@ export abstract class PacketDecoder<
 			const input = this._pendingInputs[0]!;
 
 			// Packets wait here until the decoder has room, since handing them over copies their data
-			if (input && this._getAdmittedQueueSize() >= MAX_QUEUE_SIZE) {
+			if (input instanceof EncodedPacket && this._getAdmittedQueueSize() >= MAX_QUEUE_SIZE) {
 				break;
 			}
 
@@ -645,14 +722,34 @@ export abstract class PacketDecoder<
 	}
 
 	/** @internal */
-	_processInput(input: EncodedPacket | null) {
-		if (input) {
+	_processInput(input: EncodedPacket | AnyDecoderConfig | null) {
+		if (input instanceof EncodedPacket) {
 			this._dirty = true;
 
 			try {
 				this._decodePacket(input);
 			} catch (error) {
 				this._handleError(error);
+			}
+		} else if (input) {
+			if (!this._dirty) {
+				this._applyDecoderConfig(input);
+			} else {
+				// Flush out what was decoded with the old config first, but without emitting a flush marker
+				this._dirty = false;
+				this._flushInProgress = true;
+
+				void this._flush().then(() => {
+					this._flushInProgress = false;
+					if (this._released) {
+						return;
+					}
+
+					this._applyDecoderConfig(input);
+					this._processInputs();
+				}, (error) => {
+					this._handleError(error);
+				});
 			}
 		} else {
 			// The flush queued by end() is always the last input
@@ -676,6 +773,15 @@ export abstract class PacketDecoder<
 					this._handleError(error);
 				});
 			}
+		}
+	}
+
+	/** @internal */
+	_applyDecoderConfig(decoderConfig: AnyDecoderConfig) {
+		try {
+			this._configure(decoderConfig);
+		} catch (error) {
+			this._handleError(error);
 		}
 	}
 
@@ -754,26 +860,12 @@ export abstract class PacketDecoder<
 
 	/** @internal */
 	_getQueueSize() {
-		let size = this._getAdmittedQueueSize();
-		for (const input of this._pendingInputs) {
-			if (input) {
-				size++;
-			}
-		}
-
-		return size;
+		return this._getAdmittedQueueSize() + arrayCount(this._pendingInputs, x => x instanceof EncodedPacket);
 	}
 
 	/** @internal */
 	_getAdmittedQueueSize() {
-		let size = this._getDecoderQueueSize();
-		for (const result of this._results) {
-			if (result) {
-				size++;
-			}
-		}
-
-		return size;
+		return this._getDecoderQueueSize() + arrayCount(this._results, x => x !== null);
 	}
 
 	/** @internal */
@@ -826,13 +918,17 @@ export abstract class PacketDecoder<
 
 export class VideoPacketDecoder extends PacketDecoder<VideoSample> {
 	/** @internal */
-	_codec: VideoCodec;
+	_type = 'video' as const;
 	/** @internal */
-	_decoderConfig: VideoDecoderConfig;
+	_options: VideoPacketDecoderOptions;
 	/** @internal */
-	_rotation: Rotation;
+	_codec!: VideoCodec;
 	/** @internal */
-	_flip: boolean;
+	_decoderConfig!: VideoDecoderConfig;
+	/** @internal */
+	_rotation: Rotation = 0;
+	/** @internal */
+	_flip = false;
 
 	/** @internal */
 	_decoder: VideoDecoder | null = null;
@@ -888,27 +984,81 @@ export class VideoPacketDecoder extends PacketDecoder<VideoSample> {
 	/** @internal */
 	_frameCopyContext: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null;
 
-	constructor(config: ExtendedVideoDecoderConfig) {
-		validateExtendedVideoDecoderConfig(config, 'Decoder configuration');
+	constructor(options: VideoPacketDecoderOptions = {}) {
+		validateVideoPacketDecoderOptions(options, 'options');
 
 		super();
+
+		this._options = options;
+	}
+
+	/** @internal */
+	_decoderConfigsAreEqual(a: AnyDecoderConfig, b: AnyDecoderConfig) {
+		assert(a.type === 'video' && b.type === 'video');
+
+		return a.codec === b.codec
+			&& descriptionsAreEqual(a.description, b.description)
+			&& a.codedWidth === b.codedWidth
+			&& a.codedHeight === b.codedHeight
+			&& a.displayAspectWidth === b.displayAspectWidth
+			&& a.displayAspectHeight === b.displayAspectHeight
+			&& (a.colorSpace?.primaries ?? null) === (b.colorSpace?.primaries ?? null)
+			&& (a.colorSpace?.transfer ?? null) === (b.colorSpace?.transfer ?? null)
+			&& (a.colorSpace?.matrix ?? null) === (b.colorSpace?.matrix ?? null)
+			&& (a.colorSpace?.fullRange ?? null) === (b.colorSpace?.fullRange ?? null)
+			&& (a.hardwareAcceleration ?? 'no-preference') === (b.hardwareAcceleration ?? 'no-preference')
+			&& (a.optimizeForLatency ?? false) === (b.optimizeForLatency ?? false)
+			&& (a.rotation ?? 0) === (b.rotation ?? 0)
+			&& (a.flip ?? false) === (b.flip ?? false);
+	}
+
+	/** @internal */
+	_configure(config: AnyDecoderConfig) {
+		assert(config.type === 'video');
 
 		const { rotation, flip, ...decoderConfig } = config;
 		const codec = inferCodecFromCodecString(decoderConfig.codec) as VideoCodec;
 		this._codec = codec;
-		this._decoderConfig = decoderConfig;
+		this._decoderConfig = {
+			...decoderConfig,
+			hardwareAcceleration: this._options.hardwareAcceleration ?? decoderConfig.hardwareAcceleration,
+			optimizeForLatency: this._options.optimizeForLatency ?? decoderConfig.optimizeForLatency,
+		};
 		const alignedRotation = 90 * Math.round((rotation ?? 0) / 90);
 		this._rotation = (alignedRotation - 360 * Math.floor(alignedRotation / 360)) as Rotation;
 		this._flip = flip ?? false;
 
-		const MatchingCustomDecoder = customVideoDecoders.find(x => x.supports(codec, config));
+		// Decoders of the previous config are torn down, except for the main WebCodecs decoder, which gets reconfigured
+		if (this._customDecoder) {
+			const customDecoder = this._customDecoder;
+			void this._customDecoderCallSerializer
+				.call(() => customDecoder.close())
+				.catch(() => {});
+			this._customDecoder = null;
+		}
+		if (this._alphaDecoder) {
+			this._alphaDecoder.close();
+			this._alphaDecoder = null;
+		}
+
+		const customDecoderConfig = {
+			...config,
+			hardwareAcceleration: this._decoderConfig.hardwareAcceleration,
+			optimizeForLatency: this._decoderConfig.optimizeForLatency,
+		};
+		const MatchingCustomDecoder = customVideoDecoders.find(x => x.supports(codec, customDecoderConfig));
 		if (MatchingCustomDecoder) {
+			if (this._decoder) {
+				this._decoder.close();
+				this._decoder = null;
+			}
+
 			// @ts-expect-error "Can't create instance of abstract class 🤓"
 			this._customDecoder = new MatchingCustomDecoder() as CustomVideoDecoder;
 			// @ts-expect-error It's technically readonly
 			this._customDecoder.codec = codec;
 			// @ts-expect-error It's technically readonly
-			this._customDecoder.config = config;
+			this._customDecoder.config = customDecoderConfig;
 			// @ts-expect-error It's technically readonly
 			this._customDecoder.onSample = (sample) => {
 				if (!(sample instanceof VideoSample)) {
@@ -926,18 +1076,6 @@ export class VideoPacketDecoder extends PacketDecoder<VideoSample> {
 				.call(() => this._customDecoder!.init())
 				.catch(error => this._handleError(error));
 		} else {
-			const colorHandler = (frame: VideoFrame) => {
-				if (this._alphaQueue.length > 0) {
-					// Even when no alpha data is present (most of the time), there will be nulls in this queue
-					const alphaFrame = this._alphaQueue.shift();
-					assert(alphaFrame !== undefined);
-
-					void this._mergeAlpha(frame, alphaFrame);
-				} else {
-					this._colorQueue.push(frame);
-				}
-			};
-
 			if (isChromium()) {
 				if (codec === 'avc' && this._decoderConfig.description) {
 					const record = deserializeAvcDecoderConfigurationRecord(
@@ -994,24 +1132,41 @@ export class VideoPacketDecoder extends PacketDecoder<VideoSample> {
 				}
 			}
 
-			const stack = new Error('Decoding error').stack;
+			if (this._decoder) {
+				this._decoder.reset();
+			} else {
+				const colorHandler = (frame: VideoFrame) => {
+					if (this._alphaQueue.length > 0) {
+						// Even when no alpha data is present (most of the time), there will be nulls in this queue
+						const alphaFrame = this._alphaQueue.shift();
+						assert(alphaFrame !== undefined);
 
-			this._decoder = new VideoDecoder({
-				output: (frame) => {
-					try {
-						colorHandler(this._copyFrameIfNeeded(frame));
-					} catch (error) {
-						this._handleError(error);
+						void this._mergeAlpha(frame, alphaFrame);
+					} else {
+						this._colorQueue.push(frame);
 					}
-				},
-				error: (error) => {
-					error.stack = stack; // Provide a more useful stack trace, the default one sucks
-					this._handleError(error);
-				},
-			});
-			this._decoder.addEventListener('dequeue', () => {
-				this._handleDequeue();
-			});
+				};
+
+				const stack = new Error('Decoding error').stack;
+
+				this._decoder = new VideoDecoder({
+					output: (frame) => {
+						try {
+							colorHandler(this._copyFrameIfNeeded(frame));
+						} catch (error) {
+							this._handleError(error);
+						}
+					},
+					error: (error) => {
+						error.stack = stack; // Provide a more useful stack trace, the default one sucks
+						this._handleError(error);
+					},
+				});
+				this._decoder.addEventListener('dequeue', () => {
+					this._handleDequeue();
+				});
+			}
+
 			this._decoder.configure(this._decoderConfig);
 		}
 	}
@@ -1059,6 +1214,20 @@ export class VideoPacketDecoder extends PacketDecoder<VideoSample> {
 				if (fixedData) {
 					packet = packet.clone({ data: fixedData });
 				}
+			}
+
+			if (
+				this._currentPacketIndex === 0
+				&& packet.sideData.alpha
+				&& (this._decoderConfig.hardwareAcceleration ?? 'no-preference') === 'no-preference'
+			) {
+				// Merging color and alpha reads both frames back into memory, which is much faster with frames that
+				// are already in RAM
+				this._decoderConfig = {
+					...this._decoderConfig,
+					hardwareAcceleration: 'prefer-software',
+				};
+				this._decoder.configure(this._decoderConfig);
 			}
 
 			this._decoder.decode(packet.toEncodedVideoChunk());
@@ -1174,6 +1343,10 @@ export class VideoPacketDecoder extends PacketDecoder<VideoSample> {
 			});
 			this._alphaDecoder.configure({
 				...this._decoderConfig,
+				// For the same reason as with the color decoder
+				hardwareAcceleration: (this._decoderConfig.hardwareAcceleration ?? 'no-preference') === 'no-preference'
+					? 'prefer-software'
+					: this._decoderConfig.hardwareAcceleration,
 				// Alpha is always full range, regardless of what the color track says. The decoder only honors the
 				// override if all fields are set tho.
 				colorSpace: {
@@ -1426,13 +1599,13 @@ export class VideoPacketDecoder extends PacketDecoder<VideoSample> {
 	_getDecoderQueueSize() {
 		if (this._customDecoder) {
 			return this._customDecoderQueueSize;
-		} else {
-			assert(this._decoder);
-
+		} else if (this._decoder) {
 			return Math.max(
 				this._decoder.decodeQueueSize,
 				this._alphaDecoder?.decodeQueueSize ?? 0,
 			) + this._finalSamples.length;
+		} else {
+			return 0; // Not configured yet
 		}
 	}
 
@@ -1442,9 +1615,7 @@ export class VideoPacketDecoder extends PacketDecoder<VideoSample> {
 			void this._customDecoderCallSerializer
 				.call(() => this._customDecoder!.close())
 				.catch(() => {});
-		} else {
-			assert(this._decoder);
-
+		} else if (this._decoder) {
 			if (this._decoder.state !== 'closed') {
 				this._decoder.close();
 			}
@@ -1872,9 +2043,11 @@ const PCM_FORMAT_F64_BE = 19;
 
 export class AudioPacketDecoder extends PacketDecoder<AudioSample> {
 	/** @internal */
-	_codec: AudioCodec;
+	_type = 'audio' as const;
 	/** @internal */
-	_decoderConfig: AudioDecoderConfig;
+	_codec!: AudioCodec;
+	/** @internal */
+	_decoderConfig!: AudioDecoderConfig;
 
 	/** @internal */
 	_decoder: AudioDecoder | null = null;
@@ -1912,18 +2085,27 @@ export class AudioPacketDecoder extends PacketDecoder<AudioSample> {
 	_timestampOffset = 0;
 	// Index of the packet, since the last flush, whose timestamp the first decoded audio sample has
 	/** @internal */
-	_referencePacketIndex: number;
+	_referencePacketIndex = 0;
 	/** @internal */
 	_packetsSinceFlush = 0;
 	/** @internal */
 	_inputTimestampShift = 0;
 	/** @internal */
-	_opusPreSkip: number;
+	_opusPreSkip = 0;
 
-	constructor(config: ExtendedAudioDecoderConfig) {
-		validateExtendedAudioDecoderConfig(config, 'Decoder configuration');
+	/** @internal */
+	_decoderConfigsAreEqual(a: AnyDecoderConfig, b: AnyDecoderConfig) {
+		assert(a.type === 'audio' && b.type === 'audio');
 
-		super();
+		return a.codec === b.codec
+			&& descriptionsAreEqual(a.description, b.description)
+			&& a.sampleRate === b.sampleRate
+			&& a.numberOfChannels === b.numberOfChannels;
+	}
+
+	/** @internal */
+	_configure(config: AnyDecoderConfig) {
+		assert(config.type === 'audio');
 
 		const codec = inferCodecFromCodecString(config.codec) as AudioCodec;
 		this._codec = codec;
@@ -1937,7 +2119,22 @@ export class AudioPacketDecoder extends PacketDecoder<AudioSample> {
 			? parseOpusIdentificationHeader(toUint8Array(config.description)).preSkip / OPUS_SAMPLE_RATE
 			: 0;
 
+		// Decoders of the previous config are torn down, except for the WebCodecs decoder, which gets reconfigured
+		if (this._customDecoder) {
+			const customDecoder = this._customDecoder;
+			void this._customDecoderCallSerializer
+				.call(() => customDecoder.close())
+				.catch(() => {});
+			this._customDecoder = null;
+		}
+		this._isPcmDecoder = false;
+
 		if ((PCM_AUDIO_CODECS as readonly string[]).includes(codec)) {
+			if (this._decoder) {
+				this._decoder.close();
+				this._decoder = null;
+			}
+
 			this._isPcmDecoder = true;
 
 			const { dataType, sampleSize, littleEndian } = parsePcmCodec(codec as PcmAudioCodec);
@@ -2049,6 +2246,11 @@ export class AudioPacketDecoder extends PacketDecoder<AudioSample> {
 		} else {
 			const MatchingCustomDecoder = customAudioDecoders.find(x => x.supports(codec, config));
 			if (MatchingCustomDecoder) {
+				if (this._decoder) {
+					this._decoder.close();
+					this._decoder = null;
+				}
+
 				// @ts-expect-error "Can't create instance of abstract class 🤓"
 				this._customDecoder = new MatchingCustomDecoder() as CustomAudioDecoder;
 				// @ts-expect-error It's technically readonly
@@ -2072,25 +2274,30 @@ export class AudioPacketDecoder extends PacketDecoder<AudioSample> {
 					.call(() => this._customDecoder!.init())
 					.catch(error => this._handleError(error));
 			} else {
-				const stack = new Error('Decoding error').stack;
+				if (this._decoder) {
+					this._decoder.reset();
+				} else {
+					const stack = new Error('Decoding error').stack;
 
-				this._decoder = new AudioDecoder({
-					output: (data) => {
-						try {
-							this._handleSample(new AudioSample(data));
-						} catch (error) {
+					this._decoder = new AudioDecoder({
+						output: (data) => {
+							try {
+								this._handleSample(new AudioSample(data));
+							} catch (error) {
+								this._handleError(error);
+							}
+						},
+						error: (error) => {
+							error.stack = stack; // Provide a more useful stack trace, the default one sucks
 							this._handleError(error);
-						}
-					},
-					error: (error) => {
-						error.stack = stack; // Provide a more useful stack trace, the default one sucks
-						this._handleError(error);
-					},
-				});
-				this._decoder.addEventListener('dequeue', () => {
-					this._handleDequeue();
-				});
-				this._decoder.configure(config);
+						},
+					});
+					this._decoder.addEventListener('dequeue', () => {
+						this._handleDequeue();
+					});
+				}
+
+				this._decoder.configure(this._decoderConfig);
 			}
 		}
 	}
@@ -2306,13 +2513,12 @@ export class AudioPacketDecoder extends PacketDecoder<AudioSample> {
 
 	/** @internal */
 	_getDecoderQueueSize() {
-		if (this._isPcmDecoder) {
-			return 0;
-		} else if (this._customDecoder) {
+		if (this._customDecoder) {
 			return this._customDecoderQueueSize;
-		} else {
-			assert(this._decoder);
+		} else if (this._decoder) {
 			return this._decoder.decodeQueueSize;
+		} else {
+			return 0; // PCM, or not configured yet
 		}
 	}
 
@@ -2322,15 +2528,15 @@ export class AudioPacketDecoder extends PacketDecoder<AudioSample> {
 			void this._customDecoderCallSerializer
 				.call(() => this._customDecoder!.close())
 				.catch(() => {});
-		} else if (!this._isPcmDecoder) {
-			assert(this._decoder);
-
-			if (this._decoder.state !== 'closed') {
-				this._decoder.close();
-			}
+		} else if (this._decoder && this._decoder.state !== 'closed') {
+			this._decoder.close();
 		}
 	}
 }
+
+const descriptionsAreEqual = (a: AllowSharedBufferSource | undefined, b: AllowSharedBufferSource | undefined) => {
+	return a === b || (!!a && !!b && uint8ArraysAreEqual(toUint8Array(a), toUint8Array(b)));
+};
 
 /**
  * Checks if the browser is able to decode the given codec.

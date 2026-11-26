@@ -17,7 +17,7 @@ import { ALL_FORMATS } from '../../src/input-format.js';
 import { InputAudioTrack, InputVideoTrack } from '../../src/input-track.js';
 import { Input } from '../../src/input.js';
 import { EncodedPacketSink } from '../../src/media-sink.js';
-import { assert, isThenable, MaybePromise, promiseWithResolvers } from '../../src/misc.js';
+import { assert, isThenable, last, MaybePromise, promiseWithResolvers } from '../../src/misc.js';
 import { EncodedPacket, PacketType } from '../../src/packet.js';
 import { fromAlaw, fromUlaw } from '../../src/pcm.js';
 import { AudioSample, VideoSample } from '../../src/sample.js';
@@ -36,12 +36,17 @@ afterEach(() => {
 
 type AnyPacketDecoder = PacketDecoder<VideoSample> | PacketDecoder<AudioSample>;
 
+type AnyDecoderConfig = ExtendedVideoDecoderConfig | ExtendedAudioDecoderConfig;
+
 type DecoderType = {
 	globalName: 'VideoDecoder' | 'AudioDecoder';
 	getMockClass: () => typeof MockVideoDecoder | typeof MockAudioDecoder;
 	getCustomDecoderClass: () => typeof TestCustomVideoDecoder | typeof TestCustomAudioDecoder;
 	createDecoder: () => AnyPacketDecoder;
-	createPacket: (index: number, type?: PacketType) => EncodedPacket;
+	createPacket: (index: number, type?: PacketType, decoderConfig?: AnyDecoderConfig | null) => EncodedPacket;
+	decoderConfig: AnyDecoderConfig;
+	otherDecoderConfig: AnyDecoderConfig;
+	foreignDecoderConfig: AnyDecoderConfig;
 	packetDuration: number;
 };
 
@@ -51,21 +56,36 @@ const AUDIO_SAMPLE_RATE = 48000;
 const AUDIO_CHANNELS = 2;
 const AUDIO_PACKET_FRAMES = Math.round(AUDIO_SAMPLE_RATE * AUDIO_PACKET_DURATION);
 
+const VIDEO_DECODER_CONFIG: ExtendedVideoDecoderConfig = {
+	type: 'video',
+	codec: 'vp8',
+};
+const AUDIO_DECODER_CONFIG: ExtendedAudioDecoderConfig = {
+	type: 'audio',
+	codec: 'opus',
+	sampleRate: AUDIO_SAMPLE_RATE,
+	numberOfChannels: AUDIO_CHANNELS,
+};
+
 const VIDEO: DecoderType = {
 	globalName: 'VideoDecoder',
 	getMockClass: () => MockVideoDecoder,
 	getCustomDecoderClass: () => TestCustomVideoDecoder,
-	createDecoder: () => new VideoPacketDecoder({
-		type: 'video',
-		codec: 'vp8',
-	}),
-	// The first byte marks the VP8 frame as shown
-	createPacket: (index, type = 'key') => new EncodedPacket({
-		data: new Uint8Array([0x10]),
+	createDecoder: () => new VideoPacketDecoder(),
+	// The byte marks the frame as shown, in VP8 as well as in VP9
+	createPacket: (index, type = 'key', decoderConfig = VIDEO_DECODER_CONFIG) => new EncodedPacket({
+		data: new Uint8Array([0x92]),
 		type,
 		timestamp: VIDEO_PACKET_DURATION * index,
 		duration: VIDEO_PACKET_DURATION,
+		decoderConfig: decoderConfig ?? undefined,
 	}),
+	decoderConfig: VIDEO_DECODER_CONFIG,
+	otherDecoderConfig: {
+		type: 'video',
+		codec: 'vp09.00.10.08',
+	},
+	foreignDecoderConfig: AUDIO_DECODER_CONFIG,
 	packetDuration: VIDEO_PACKET_DURATION,
 };
 
@@ -73,18 +93,22 @@ const AUDIO: DecoderType = {
 	globalName: 'AudioDecoder',
 	getMockClass: () => MockAudioDecoder,
 	getCustomDecoderClass: () => TestCustomAudioDecoder,
-	createDecoder: () => new AudioPacketDecoder({
-		type: 'audio',
-		codec: 'opus',
-		sampleRate: AUDIO_SAMPLE_RATE,
-		numberOfChannels: AUDIO_CHANNELS,
-	}),
-	createPacket: (index, type = 'key') => new EncodedPacket({
+	createDecoder: () => new AudioPacketDecoder(),
+	createPacket: (index, type = 'key', decoderConfig = AUDIO_DECODER_CONFIG) => new EncodedPacket({
 		data: new Uint8Array(8),
 		type,
 		timestamp: AUDIO_PACKET_DURATION * index,
 		duration: AUDIO_PACKET_DURATION,
+		decoderConfig: decoderConfig ?? undefined,
 	}),
+	decoderConfig: AUDIO_DECODER_CONFIG,
+	otherDecoderConfig: {
+		type: 'audio',
+		codec: 'mp4a.40.2',
+		sampleRate: AUDIO_SAMPLE_RATE,
+		numberOfChannels: AUDIO_CHANNELS,
+	},
+	foreignDecoderConfig: VIDEO_DECODER_CONFIG,
 	packetDuration: AUDIO_PACKET_DURATION,
 };
 
@@ -406,11 +430,11 @@ test('Video end without packets', () => testEndWithoutPackets(VIDEO));
 test('Audio end without packets', () => testEndWithoutPackets(AUDIO));
 
 const testEndWithoutPackets = (type: DecoderType) => {
-	const { decoder, mock } = createMockedDecoder(type);
+	const { decoder } = createMockedDecoder(type);
 
+	// Without a decoder config, no WebCodecs decoder was ever needed
 	void decoder.end();
-	expect(mock.state).toBe('closed');
-	expect(mock.flushCount).toBe(0);
+	expect(mockInstances.length).toBe(0);
 	expect(decoder.pull()).toBe(null);
 	expect(decoder.done).toBe(true);
 };
@@ -633,32 +657,76 @@ const testInvalidDecodeArguments = (type: DecoderType) => {
 test('Video configure throwing', () => testConfigureThrowing(VIDEO));
 test('Audio configure throwing', () => testConfigureThrowing(AUDIO));
 
-const testConfigureThrowing = (type: DecoderType) => {
-	expect(() => createMockedDecoder(type, { configureThrows: true })).toThrow('Invalid configuration.');
+const testConfigureThrowing = async (type: DecoderType) => {
+	const first = createMockedDecoder(type, { rejectedConfigIndex: 0 });
+
+	expect(() => first.decoder.push(type.createPacket(0))).toThrow('Invalid configuration.');
+	expect(first.decoder.ended).toBe(true);
+	expect(() => first.decoder.pull()).toThrow('Invalid configuration.');
+
+	// With nothing left to flush, a config change happens right within push()
+	const second = createMockedDecoder(type, { rejectedConfigIndex: 1 });
+
+	void second.decoder.push(type.createPacket(0));
+	void second.decoder.push(null);
+	await tick();
+	(await second.decoder.pull())!.close();
+	expect(second.decoder.pull()).toBe(null);
+	expect(() => second.decoder.push(type.createPacket(1, 'key', type.otherDecoderConfig))).toThrow(
+		'Invalid configuration.',
+	);
+	expect(second.decoder.ended).toBe(true);
+
+	// Otherwise, it happens after the flush, so the error comes out of pull()
+	const third = createMockedDecoder(type, { rejectedConfigIndex: 1 });
+
+	void third.decoder.push(type.createPacket(0));
+	expect(third.decoder.push(type.createPacket(1, 'key', type.otherDecoderConfig))).toBe(null);
+	await tick();
+	expect(() => third.decoder.pull()).toThrow('Invalid configuration.');
+	expect(() => third.decoder.push(type.createPacket(2, 'key', null))).toThrow('Invalid configuration.');
+
+	// The sample from the old config was decoded, but got discarded with the error
+	expect(third.mock.outputs.length).toBe(1);
 };
 
 test('Video unsupported config', () => testUnsupportedConfig(VIDEO));
 test('Audio unsupported config', () => testUnsupportedConfig(AUDIO));
 
 const testUnsupportedConfig = async (type: DecoderType) => {
-	const { decoder } = createMockedDecoder(type, { configureFails: true });
+	const first = createMockedDecoder(type, { failingConfigIndex: 0 });
 
-	await expect(decoder.pull()).rejects.toThrow('Unsupported configuration.');
-	expect(decoder.ended).toBe(true);
-	expect(decoder.done).toBe(true);
-	expect(() => decoder.push(type.createPacket(0))).toThrow('Unsupported configuration.');
-	expect(() => decoder.pull()).toThrow('Unsupported configuration.');
+	void first.decoder.push(type.createPacket(0));
+	await expect(first.decoder.pull()).rejects.toThrow('Unsupported configuration.');
+	expect(first.decoder.ended).toBe(true);
+	expect(first.decoder.done).toBe(true);
+	expect(() => first.decoder.push(type.createPacket(0))).toThrow('Unsupported configuration.');
+	expect(() => first.decoder.pull()).toThrow('Unsupported configuration.');
+
+	// A config change that turns out to be unsupported
+	const second = createMockedDecoder(type, { failingConfigIndex: 1 });
+
+	void second.decoder.push(type.createPacket(0));
+	void second.decoder.push(type.createPacket(1, 'key', type.otherDecoderConfig));
+	await tick();
+	await tick();
+	expect(() => second.decoder.pull()).toThrow('Unsupported configuration.');
+	expect(second.decoder.ended).toBe(true);
+
+	// The sample from the old config was decoded, but got discarded with the error
+	expect(second.mock.outputs.length).toBe(1);
 };
 
 test('Video error after setup', () => testErrorAfterSetup(VIDEO));
 test('Audio error after setup', () => testErrorAfterSetup(AUDIO));
 
 const testErrorAfterSetup = (type: DecoderType) => {
-	const { decoder, mock } = createMockedDecoder(type);
+	const { decoder, mock } = createMockedDecoder(type, { paused: true });
 
+	void decoder.push(type.createPacket(0));
 	mock.fail(new DOMException('Codec reclaimed.', 'QuotaExceededError'));
 	expect(decoder.ended).toBe(true);
-	expect(() => decoder.push(type.createPacket(0))).toThrow('Codec reclaimed.');
+	expect(() => decoder.push(type.createPacket(1))).toThrow('Codec reclaimed.');
 
 	// Only pulling delivers the error to the consumer
 	expect(decoder.done).toBe(false);
@@ -767,8 +835,10 @@ const testErrorWithBackpressure = async (type: DecoderType) => {
 
 type MockOptions = {
 	paused?: boolean;
-	configureThrows?: boolean;
-	configureFails?: boolean;
+	// configure() throws synchronously for the config at this index
+	rejectedConfigIndex?: number;
+	// Configuring with the config at this index fails the decoder
+	failingConfigIndex?: number;
 	// decode() throws synchronously for the chunk at this index
 	rejectedChunkIndex?: number;
 	// Decoding the chunk at this index fails the decoder
@@ -778,14 +848,27 @@ type MockOptions = {
 let mockOptions: MockOptions = {};
 const mockInstances: MockDecoder<VideoFrame | AudioData>[] = [];
 
-const createMockedDecoder = (type: DecoderType, options: MockOptions = {}) => {
+const createMockedDecoder = (
+	type: DecoderType,
+	options: MockOptions = {},
+	createDecoder = type.createDecoder,
+) => {
 	mockOptions = options;
 	mockInstances.length = 0;
 	vi.stubGlobal(type.globalName, type.getMockClass());
 
-	const decoder = type.createDecoder();
-	const mock = mockInstances[0];
-	assert(mock);
+	const decoder = createDecoder();
+
+	// The WebCodecs decoder only comes into existence with the first decoder config, so this looks it up on use
+	const mock = new Proxy({} as MockDecoder<VideoFrame | AudioData>, {
+		get: (_, key) => {
+			const instance = mockInstances[0];
+			assert(instance);
+
+			const value: unknown = Reflect.get(instance, key);
+			return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(instance) : value;
+		},
+	});
 
 	return { decoder, mock };
 };
@@ -805,7 +888,9 @@ abstract class MockDecoder<
 	paused = mockOptions.paused ?? false;
 	decodedChunks: Chunk[] = [];
 	outputs: Output[] = [];
+	configs: (VideoDecoderConfig | AudioDecoderConfig)[] = [];
 	flushCount = 0;
+	resetCount = 0;
 	controlQueue: MockControlMessage<Chunk>[] = [];
 	keyChunkRequired = true;
 	processingScheduled = false;
@@ -817,18 +902,19 @@ abstract class MockDecoder<
 
 	abstract createOutput(chunk: Chunk): Output;
 
-	configure() {
+	configure(config: VideoDecoderConfig | AudioDecoderConfig) {
 		if (this.state === 'closed') {
 			throw new DOMException('Cannot configure a closed codec.', 'InvalidStateError');
 		}
-		if (mockOptions.configureThrows) {
+		if (this.configs.length === mockOptions.rejectedConfigIndex) {
 			throw new TypeError('Invalid configuration.');
 		}
 
+		this.configs.push(config);
 		this.state = 'configured';
 		this.keyChunkRequired = true;
 
-		if (mockOptions.configureFails) {
+		if (this.configs.length - 1 === mockOptions.failingConfigIndex) {
 			setTimeout(() => this.fail(new DOMException('Unsupported configuration.', 'NotSupportedError')));
 		}
 	}
@@ -872,6 +958,7 @@ abstract class MockDecoder<
 
 		this.abortControlQueue(new DOMException('Aborted due to reset.', 'AbortError'));
 		this.state = 'unconfigured';
+		this.resetCount++;
 	}
 
 	close() {
@@ -1224,15 +1311,323 @@ class TestCustomAudioDecoder extends CustomAudioDecoder {
 	}
 }
 
+test('Video decoder config requirement', () => testDecoderConfigRequirement(VIDEO));
+test('Audio decoder config requirement', () => testDecoderConfigRequirement(AUDIO));
+
+const testDecoderConfigRequirement = async (type: DecoderType) => {
+	const { decoder, mock } = createMockedDecoder(type);
+	const message = 'The first packet of a packet stream must have a decoder config.';
+
+	expect(() => decoder.push(type.createPacket(0, 'key', null))).toThrow(message);
+	expect(() => decoder.push(type.createPacket(0, 'key', type.foreignDecoderConfig))).toThrow(
+		`Packets for this decoder must have a ${type.decoderConfig.type} decoder config.`,
+	);
+	expect(decoder.ended).toBe(false);
+
+	// Packets without a config keep using the current one
+	void decoder.push(type.createPacket(0));
+	void decoder.push(type.createPacket(1, 'delta', null));
+	void decoder.push(type.createPacket(2, 'key', null));
+
+	// A flush starts a new packet stream, which needs a config again
+	void decoder.push(null);
+	expect(() => decoder.push(type.createPacket(3, 'key', null))).toThrow(message);
+	void decoder.push(type.createPacket(3));
+	void decoder.end();
+
+	const results = await pullCount(decoder, 6);
+	expect(results.map(x => x === null)).toEqual([false, false, false, true, false, true]);
+	results.forEach(x => x?.close());
+	expect(mock.configs.length).toBe(1);
+};
+
+test('Video unchanged decoder config', () => testUnchangedDecoderConfig(VIDEO));
+test('Audio unchanged decoder config', () => testUnchangedDecoderConfig(AUDIO));
+
+const testUnchangedDecoderConfig = async (type: DecoderType) => {
+	const { decoder, mock } = createMockedDecoder(type);
+	const withDescription = (lastByte: number) => ({
+		...type.decoderConfig,
+		description: new Uint8Array([...new Uint8Array(18), lastByte]),
+	});
+
+	// The same object, an equal copy, and an equal copy after a flush all leave the decoder as it is
+	void decoder.push(type.createPacket(0));
+	void decoder.push(type.createPacket(1, 'delta', type.decoderConfig));
+	void decoder.push(type.createPacket(2, 'delta', { ...type.decoderConfig }));
+	void decoder.push(null);
+	void decoder.push(type.createPacket(3, 'key', { ...type.decoderConfig }));
+
+	// Descriptions are compared by their bytes
+	void decoder.push(type.createPacket(4, 'key', withDescription(1)));
+	void decoder.push(type.createPacket(5, 'key', withDescription(1)));
+	void decoder.push(type.createPacket(6, 'key', withDescription(2)));
+	void decoder.end();
+
+	const results = await pullCount(decoder, 9);
+	expect(results.map(x => x === null)).toEqual([false, false, false, true, false, false, false, false, true]);
+	results.forEach(x => x?.close());
+	expect(mock.configs.length).toBe(3);
+	expect(mock.resetCount).toBe(2);
+};
+
+test('Video decoder config change', () => testDecoderConfigChange(VIDEO));
+test('Audio decoder config change', () => testDecoderConfigChange(AUDIO));
+
+const testDecoderConfigChange = async (type: DecoderType) => {
+	const { decoder, mock } = createMockedDecoder(type, { paused: true });
+
+	void decoder.push(type.createPacket(0));
+	void decoder.push(type.createPacket(1, 'delta', null));
+	expect(() => decoder.push(type.createPacket(2, 'delta', type.otherDecoderConfig))).toThrow(
+		'A packet that changes the decoder config must be a key packet.',
+	);
+
+	// The packets for the new config wait for the old one to be flushed out, and the config doesn't count as a packet
+	expect(decoder.push(type.createPacket(2, 'key', type.otherDecoderConfig))).toBe(null);
+	void decoder.push(type.createPacket(3, 'delta', null));
+	expect(decoder._pendingInputs.length).toBe(2);
+	expect(mock.decodedChunks.length).toBe(2);
+	expect(mock.flushCount).toBe(1);
+
+	mock.resume();
+	void decoder.end();
+
+	// That flush doesn't show up as a flush marker
+	const results = await pullCount(decoder, 5);
+	expect(results.map(x => x?.timestamp ?? null)).toEqual([
+		0,
+		expect.closeTo(type.packetDuration, 10),
+		expect.closeTo(2 * type.packetDuration, 10),
+		expect.closeTo(3 * type.packetDuration, 10),
+		null,
+	]);
+	results.forEach(x => x?.close());
+
+	// The same WebCodecs decoder was reset and reconfigured
+	expect(mockInstances.length).toBe(1);
+	expect(mock.resetCount).toBe(1);
+	expect(mock.configs.map(x => x.codec)).toEqual([type.decoderConfig.codec, type.otherDecoderConfig.codec]);
+	expect(mock.decodedChunks.length).toBe(4);
+	expect(mock.flushCount).toBe(2);
+};
+
+test('Video decoder config change after flush', () => testDecoderConfigChangeAfterFlush(VIDEO));
+test('Audio decoder config change after flush', () => testDecoderConfigChangeAfterFlush(AUDIO));
+
+const testDecoderConfigChangeAfterFlush = async (type: DecoderType) => {
+	const { decoder, mock } = createMockedDecoder(type);
+
+	// Everything was flushed already, so the decoder is reconfigured right away
+	void decoder.push(type.createPacket(0));
+	void decoder.push(null);
+	void decoder.push(type.createPacket(1, 'key', type.otherDecoderConfig));
+	void decoder.end();
+
+	const results = await pullCount(decoder, 4);
+	expect(results.map(x => x === null)).toEqual([false, true, false, true]);
+	results.forEach(x => x?.close());
+	expect(mock.flushCount).toBe(2);
+	expect(mock.configs.length).toBe(2);
+};
+
+test('Video custom decoder config changes', () => testCustomDecoderConfigChanges(VIDEO));
+test('Audio custom decoder config changes', () => testCustomDecoderConfigChanges(AUDIO));
+
+const testCustomDecoderConfigChanges = async (type: DecoderType) => {
+	registerCustomDecoder(type);
+	const { decoder, mock } = createMockedDecoder(type);
+
+	// Custom decoders can't be reconfigured, so each config gets a fresh one. Configs they don't support go to
+	// WebCodecs instead.
+	void decoder.push(type.createPacket(0));
+	void decoder.push(type.createPacket(1, 'key', {
+		...type.decoderConfig,
+		description: new Uint8Array(19),
+	}));
+	void decoder.push(type.createPacket(2, 'key', type.otherDecoderConfig));
+	void decoder.push(type.createPacket(3));
+	void decoder.end();
+
+	const results = await pullCount(decoder, 5);
+	expect(results.map(x => x?.timestamp ?? null)).toEqual([
+		0,
+		expect.closeTo(type.packetDuration, 10),
+		expect.closeTo(2 * type.packetDuration, 10),
+		expect.closeTo(3 * type.packetDuration, 10),
+		null,
+	]);
+	results.forEach(x => x?.close());
+
+	await tick();
+	expect(customCalls).toEqual([
+		'init', 'decode', 'flush', 'close',
+		'init', 'decode', 'flush', 'close',
+		'init', 'decode', 'flush', 'close',
+	]);
+	expect(mock.decodedChunks.length).toBe(1);
+	expect(mock.state).toBe('closed');
+};
+
+test('Video decoder options', async () => {
+	expect(() => new VideoPacketDecoder(5 as never)).toThrow('options must be an object.');
+	expect(() => new VideoPacketDecoder({ hardwareAcceleration: 'fast' } as never)).toThrow(
+		'options.hardwareAcceleration, when provided, must be \'no-preference\', \'prefer-hardware\' or'
+		+ ' \'prefer-software\'.',
+	);
+	expect(() => new VideoPacketDecoder({ optimizeForLatency: 1 } as never)).toThrow(
+		'options.optimizeForLatency, when provided, must be a boolean.',
+	);
+
+	const { decoder, mock } = createMockedDecoder(VIDEO, {}, () => new VideoPacketDecoder({
+		optimizeForLatency: true,
+	}));
+
+	// The options override the packets' configs where they're set. Since these hints configure the decoder, a
+	// change in them is a config change too.
+	void decoder.push(VIDEO.createPacket(0, 'key', {
+		...VIDEO_DECODER_CONFIG,
+		hardwareAcceleration: 'prefer-hardware',
+		optimizeForLatency: false,
+	}));
+	void decoder.push(VIDEO.createPacket(1, 'key', {
+		...VIDEO_DECODER_CONFIG,
+		hardwareAcceleration: 'prefer-software',
+		optimizeForLatency: false,
+	}));
+	void decoder.end();
+
+	const results = await pullCount(decoder, 3);
+	results.forEach(x => x?.close());
+	expect((mock.configs as VideoDecoderConfig[]).map(x => [x.hardwareAcceleration, x.optimizeForLatency])).toEqual([
+		['prefer-hardware', true],
+		['prefer-software', true],
+	]);
+
+	// Custom decoders find the result in their config
+	registerCustomDecoder(VIDEO);
+	const customDecoder = new VideoPacketDecoder({ hardwareAcceleration: 'prefer-software' });
+	void customDecoder.push(VIDEO.createPacket(0, 'key', {
+		...VIDEO_DECODER_CONFIG,
+		hardwareAcceleration: 'prefer-hardware',
+		optimizeForLatency: true,
+	}));
+	expect(customDecoder._customDecoder!.config).toMatchObject({
+		hardwareAcceleration: 'prefer-software',
+		optimizeForLatency: true,
+	});
+	customDecoder.close();
+});
+
+test('Video alpha decoding in software', () => {
+	const createAlphaPacket = (index: number, decoderConfig: ExtendedVideoDecoderConfig | null) => {
+		const packet = VIDEO.createPacket(index, 'key', decoderConfig);
+		return packet.clone({ sideData: { alpha: new Uint8Array([0x92]) } });
+	};
+	const getHardwareAccelerations = () => mockInstances.map(x => (last(x.configs) as VideoDecoderConfig)
+		.hardwareAcceleration);
+
+	// Without a preference, both decoders are pulled to software decoding, which makes the merging much faster
+	const first = createMockedDecoder(VIDEO, { paused: true });
+	void first.decoder.push(createAlphaPacket(0, VIDEO_DECODER_CONFIG));
+	expect(getHardwareAccelerations()).toEqual([
+		'prefer-software',
+		'prefer-software',
+	]);
+	first.decoder.close();
+
+	// An explicit preference is left alone
+	const second = createMockedDecoder(VIDEO, { paused: true });
+	void second.decoder.push(createAlphaPacket(0, {
+		...VIDEO_DECODER_CONFIG,
+		hardwareAcceleration: 'prefer-hardware',
+	}));
+	expect(getHardwareAccelerations()).toEqual([
+		'prefer-hardware',
+		'prefer-hardware',
+	]);
+	second.decoder.close();
+
+	// When alpha only comes in later, it's too late for the color decoder, but not for the alpha decoder
+	const third = createMockedDecoder(VIDEO, { paused: true });
+	void third.decoder.push(VIDEO.createPacket(0));
+	void third.decoder.push(createAlphaPacket(1, null));
+	expect(getHardwareAccelerations()).toEqual([
+		undefined,
+		'prefer-software',
+	]);
+	third.decoder.close();
+});
+
+test('Video rotation and flip changes', async () => {
+	const { decoder, mock } = createMockedDecoder(VIDEO);
+
+	void decoder.push(VIDEO.createPacket(0));
+	void decoder.push(VIDEO.createPacket(1, 'key', {
+		...VIDEO_DECODER_CONFIG,
+		rotation: 90,
+		flip: true,
+	}));
+	void decoder.push(VIDEO.createPacket(2, 'delta', null));
+	void decoder.end();
+
+	const results = await pullCount(decoder, 4);
+	const samples = results.slice(0, 3) as VideoSample[];
+	expect(samples.map(x => [x.rotation, x.flip])).toEqual([[0, false], [90, true], [90, true]]);
+	results.forEach(x => x?.close());
+
+	// They're applied to the samples, not handed to WebCodecs
+	expect(mock.configs.length).toBe(2);
+	expect(mock.configs[1]).not.toHaveProperty('rotation');
+	expect(mock.configs[1]).not.toHaveProperty('flip');
+});
+
+test('Audio PCM decoder config changes', async () => {
+	createMockedDecoder(AUDIO);
+	const decoder = new AudioPacketDecoder();
+	const pcmPacket = new EncodedPacket({
+		data: new Uint8Array(2 * AUDIO_CHANNELS * AUDIO_PACKET_FRAMES),
+		type: 'key',
+		timestamp: AUDIO_PACKET_DURATION,
+		duration: AUDIO_PACKET_DURATION,
+		decoderConfig: {
+			type: 'audio',
+			codec: 'pcm-s16',
+			sampleRate: AUDIO_SAMPLE_RATE,
+			numberOfChannels: AUDIO_CHANNELS,
+		},
+	});
+
+	// Switching to PCM closes the WebCodecs decoder, so switching back needs a new one
+	void decoder.push(AUDIO.createPacket(0));
+	void decoder.push(pcmPacket);
+	void decoder.push(AUDIO.createPacket(2));
+	void decoder.end();
+
+	const results = await pullCount(decoder, 4);
+	expect(results.map(x => x?.format ?? null)).toEqual(['f32', 's16', 'f32', null]);
+	expectTimestamps(results.slice(0, 3), [0, AUDIO_PACKET_DURATION, 2 * AUDIO_PACKET_DURATION]);
+	results.forEach(x => x?.close());
+
+	expect(mockInstances.length).toBe(2);
+	expect(mockInstances.every(x => x.state === 'closed')).toBe(true);
+});
+
 test('Invalid video configs', () => {
-	const expectInvalid = (config: unknown, message: string) => {
-		const tagged = config && typeof config === 'object' ? { type: 'video', ...config } : config;
-		expect(() => new VideoPacketDecoder(tagged as ExtendedVideoDecoderConfig)).toThrow(message);
+	const expectInvalid = (config: object, message: string) => {
+		expect(() => new EncodedPacket({
+			data: new Uint8Array(1),
+			type: 'key',
+			timestamp: 0,
+			duration: 0,
+			decoderConfig: {
+				type: 'video',
+				...config,
+			} as ExtendedVideoDecoderConfig,
+		})).toThrow(message);
 	};
 
-	expectInvalid(null, 'Decoder configuration must be an object.');
-	expectInvalid({ type: 'audio', codec: 'vp8' }, 'Decoder configuration type must be \'video\'.');
-	expectInvalid({ codec: 5 }, 'Decoder configuration must specify a codec string.');
+	expectInvalid({ codec: 5 }, 'decoderConfig must specify a codec string.');
 	expectInvalid({ codec: 'mp3' }, 'codec string must be a valid video codec string');
 	expectInvalid({ codec: 'avc1.xyz' }, 'codec string for AVC must be a valid AVC codec string');
 	expectInvalid({ codec: 'vp8', codedWidth: 0, codedHeight: 2 }, 'codedWidth, when defined, must be a positive');
@@ -1251,15 +1646,21 @@ test('Invalid video configs', () => {
 });
 
 test('Invalid audio configs', () => {
-	const expectInvalid = (config: unknown, message: string) => {
-		const tagged = config && typeof config === 'object' ? { type: 'audio', ...config } : config;
-		expect(() => new AudioPacketDecoder(tagged as ExtendedAudioDecoderConfig)).toThrow(message);
+	const expectInvalid = (config: object, message: string) => {
+		expect(() => new EncodedPacket({
+			data: new Uint8Array(1),
+			type: 'key',
+			timestamp: 0,
+			duration: 0,
+			decoderConfig: {
+				type: 'audio',
+				...config,
+			} as ExtendedAudioDecoderConfig,
+		})).toThrow(message);
 	};
 	const base = { sampleRate: 48000, numberOfChannels: 2 };
 
-	expectInvalid(undefined, 'Decoder configuration must be an object.');
-	expectInvalid({ ...base, type: 'video', codec: 'opus' }, 'Decoder configuration type must be \'audio\'.');
-	expectInvalid({ ...base, codec: null }, 'Decoder configuration must specify a codec string.');
+	expectInvalid({ ...base, codec: null }, 'decoderConfig must specify a codec string.');
 	expectInvalid({ ...base, codec: 'vp8' }, 'codec string must be a valid audio codec string');
 	expectInvalid({ ...base, codec: 'mp4a.40.99' }, 'codec string for AAC must be a valid AAC codec string');
 	expectInvalid({ ...base, codec: 'opus', sampleRate: 0 }, 'must specify a valid sampleRate (positive integer).');
@@ -1282,7 +1683,7 @@ test('Video decoding with WebCodecs', async () => {
 	const track = await input.getPrimaryVideoTrack();
 	assert(track);
 
-	const { packets, results } = await decodeTrack(await createDecoderForTrack(track), track, () => 0);
+	const { packets, results } = await decodeTrack(createDecoderForTrack(track), track, () => 0);
 	expect(results.length).toBe(packets.length + 1);
 	expect(results.at(-1)).toBe(null);
 
@@ -1299,7 +1700,7 @@ test('Audio decoding with WebCodecs', async () => {
 	const track = await input.getPrimaryAudioTrack();
 	assert(track);
 
-	const { results } = await decodeTrack(await createDecoderForTrack(track), track, () => 0);
+	const { results } = await decodeTrack(createDecoderForTrack(track), track, () => 0);
 	expect(results.at(-1)).toBe(null);
 
 	const samples = results.slice(0, -1) as AudioSample[];
@@ -1334,7 +1735,7 @@ const testFlushPatternsWithWebCodecs = async (trackType: 'video' | 'audio') => {
 	const getFlushCount = (packet: EncodedPacket, index: number) => {
 		return packet.type === 'key' && index > 0 && index % 25 === 0 ? 1 + (index / 25) % 2 : 0;
 	};
-	const { packets, results } = await decodeTrack(await createDecoderForTrack(track), track, getFlushCount);
+	const { packets, results } = await decodeTrack(createDecoderForTrack(track), track, getFlushCount);
 
 	const batchSizes: number[] = [0];
 	for (const result of results) {
@@ -1416,7 +1817,7 @@ const testCloseWithWebCodecs = async (trackType: 'video' | 'audio') => {
 	});
 	const track = trackType === 'video' ? await input.getPrimaryVideoTrack() : await input.getPrimaryAudioTrack();
 	assert(track);
-	const decoder = await createDecoderForTrack(track);
+	const decoder = createDecoderForTrack(track);
 
 	let decodedCount = 0;
 	for await (const packet of new EncodedPacketSink(track).packets()) {
@@ -1438,18 +1839,8 @@ const testCloseWithWebCodecs = async (trackType: 'video' | 'audio') => {
 	expect(decoder.done).toBe(true);
 };
 
-const createDecoderForTrack = async (track: InputVideoTrack | InputAudioTrack) => {
-	if (track.isVideoTrack()) {
-		const decoderConfig = await track.getDecoderConfig();
-		assert(decoderConfig);
-
-		return new VideoPacketDecoder(decoderConfig);
-	} else {
-		const decoderConfig = await track.getDecoderConfig();
-		assert(decoderConfig);
-
-		return new AudioPacketDecoder(decoderConfig);
-	}
+const createDecoderForTrack = (track: InputVideoTrack | InputAudioTrack) => {
+	return track.isVideoTrack() ? new VideoPacketDecoder() : new AudioPacketDecoder();
 };
 
 test('Video rotation and flip', async () => {
@@ -1469,8 +1860,14 @@ test('Video rotation and flip', async () => {
 	expect(decoderConfig.flip).toBe(false);
 
 	const decodeFirstSample = async (rotation: number | undefined, flip: boolean | undefined) => {
-		const decoder = new VideoPacketDecoder({ ...decoderConfig, rotation, flip });
-		void decoder.push(packet);
+		const decoder = new VideoPacketDecoder();
+		void decoder.push(packet.clone({
+			decoderConfig: {
+				...decoderConfig,
+				rotation,
+				flip,
+			},
+		}));
 		void decoder.end();
 
 		const sample = await decoder.pull();
@@ -1501,7 +1898,7 @@ test('Video timing from packets', async () => {
 	const track = await input.getPrimaryVideoTrack();
 	assert(track);
 
-	const { packets, results } = await decodeTrack(await createDecoderForTrack(track), track, () => 0);
+	const { packets, results } = await decodeTrack(createDecoderForTrack(track), track, () => 0);
 	const samples = results.slice(0, -1) as VideoSample[];
 
 	// WebCodecs works in microseconds, which can't hold 24 FPS timings exactly, so they're taken from the packets
@@ -1542,17 +1939,18 @@ test('PCM decoding', async () => {
 	};
 
 	const decodeValue = async (codec: string, bytes: number[]) => {
-		const decoder = new AudioPacketDecoder({
-			type: 'audio',
-			codec,
-			sampleRate: 8000,
-			numberOfChannels: 1,
-		});
+		const decoder = new AudioPacketDecoder();
 		void decoder.push(new EncodedPacket({
 			data: new Uint8Array(bytes),
 			type: 'key',
 			timestamp: 0,
 			duration: 1 / 8000,
+			decoderConfig: {
+				type: 'audio',
+				codec,
+				sampleRate: 8000,
+				numberOfChannels: 1,
+			},
 		}));
 		void decoder.end();
 
@@ -1582,18 +1980,20 @@ test('PCM decoding', async () => {
 });
 
 test('PCM timestamps', async () => {
-	const decoder = new AudioPacketDecoder({
+	const decoder = new AudioPacketDecoder();
+	const decoderConfig: ExtendedAudioDecoderConfig = {
 		type: 'audio',
 		codec: 'pcm-s16',
 		sampleRate: 3,
 		numberOfChannels: 2,
-	});
+	};
 	const createPacket = (frameCount: number, timestamp: number, extraBytes = 0) => {
 		return new EncodedPacket({
 			data: new Uint8Array(4 * frameCount + extraBytes),
 			type: 'key',
 			timestamp,
 			duration: frameCount / 3,
+			decoderConfig,
 		});
 	};
 
