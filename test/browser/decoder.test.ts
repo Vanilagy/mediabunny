@@ -6,7 +6,13 @@ import {
 	registerDecoder,
 	unregisterDecoder,
 } from '../../src/custom-coder.js';
-import { AudioPacketDecoder, PacketDecoder, VideoPacketDecoder } from '../../src/decode.js';
+import {
+	AudioPacketDecoder,
+	ExtendedAudioDecoderConfig,
+	ExtendedVideoDecoderConfig,
+	PacketDecoder,
+	VideoPacketDecoder,
+} from '../../src/decode.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { InputAudioTrack, InputVideoTrack } from '../../src/input-track.js';
 import { Input } from '../../src/input.js';
@@ -49,14 +55,17 @@ const VIDEO: DecoderType = {
 	globalName: 'VideoDecoder',
 	getMockClass: () => MockVideoDecoder,
 	getCustomDecoderClass: () => TestCustomVideoDecoder,
-	createDecoder: () => new VideoPacketDecoder({ codec: 'vp8' }),
+	createDecoder: () => new VideoPacketDecoder({
+		type: 'video',
+		codec: 'vp8',
+	}),
 	// The first byte marks the VP8 frame as shown
-	createPacket: (index, type = 'key') => new EncodedPacket(
-		new Uint8Array([0x10]),
+	createPacket: (index, type = 'key') => new EncodedPacket({
+		data: new Uint8Array([0x10]),
 		type,
-		VIDEO_PACKET_DURATION * index,
-		VIDEO_PACKET_DURATION,
-	),
+		timestamp: VIDEO_PACKET_DURATION * index,
+		duration: VIDEO_PACKET_DURATION,
+	}),
 	packetDuration: VIDEO_PACKET_DURATION,
 };
 
@@ -65,16 +74,17 @@ const AUDIO: DecoderType = {
 	getMockClass: () => MockAudioDecoder,
 	getCustomDecoderClass: () => TestCustomAudioDecoder,
 	createDecoder: () => new AudioPacketDecoder({
+		type: 'audio',
 		codec: 'opus',
 		sampleRate: AUDIO_SAMPLE_RATE,
 		numberOfChannels: AUDIO_CHANNELS,
 	}),
-	createPacket: (index, type = 'key') => new EncodedPacket(
-		new Uint8Array(8),
+	createPacket: (index, type = 'key') => new EncodedPacket({
+		data: new Uint8Array(8),
 		type,
-		AUDIO_PACKET_DURATION * index,
-		AUDIO_PACKET_DURATION,
-	),
+		timestamp: AUDIO_PACKET_DURATION * index,
+		duration: AUDIO_PACKET_DURATION,
+	}),
 	packetDuration: AUDIO_PACKET_DURATION,
 };
 
@@ -1216,10 +1226,12 @@ class TestCustomAudioDecoder extends CustomAudioDecoder {
 
 test('Invalid video configs', () => {
 	const expectInvalid = (config: unknown, message: string) => {
-		expect(() => new VideoPacketDecoder(config as VideoDecoderConfig)).toThrow(message);
+		const tagged = config && typeof config === 'object' ? { type: 'video', ...config } : config;
+		expect(() => new VideoPacketDecoder(tagged as ExtendedVideoDecoderConfig)).toThrow(message);
 	};
 
 	expectInvalid(null, 'Decoder configuration must be an object.');
+	expectInvalid({ type: 'audio', codec: 'vp8' }, 'Decoder configuration type must be \'video\'.');
 	expectInvalid({ codec: 5 }, 'Decoder configuration must specify a codec string.');
 	expectInvalid({ codec: 'mp3' }, 'codec string must be a valid video codec string');
 	expectInvalid({ codec: 'avc1.xyz' }, 'codec string for AVC must be a valid AVC codec string');
@@ -1240,11 +1252,13 @@ test('Invalid video configs', () => {
 
 test('Invalid audio configs', () => {
 	const expectInvalid = (config: unknown, message: string) => {
-		expect(() => new AudioPacketDecoder(config as AudioDecoderConfig)).toThrow(message);
+		const tagged = config && typeof config === 'object' ? { type: 'audio', ...config } : config;
+		expect(() => new AudioPacketDecoder(tagged as ExtendedAudioDecoderConfig)).toThrow(message);
 	};
 	const base = { sampleRate: 48000, numberOfChannels: 2 };
 
 	expectInvalid(undefined, 'Decoder configuration must be an object.');
+	expectInvalid({ ...base, type: 'video', codec: 'opus' }, 'Decoder configuration type must be \'audio\'.');
 	expectInvalid({ ...base, codec: null }, 'Decoder configuration must specify a codec string.');
 	expectInvalid({ ...base, codec: 'vp8' }, 'codec string must be a valid audio codec string');
 	expectInvalid({ ...base, codec: 'mp4a.40.99' }, 'codec string for AAC must be a valid AAC codec string');
@@ -1528,8 +1542,18 @@ test('PCM decoding', async () => {
 	};
 
 	const decodeValue = async (codec: string, bytes: number[]) => {
-		const decoder = new AudioPacketDecoder({ codec, sampleRate: 8000, numberOfChannels: 1 });
-		void decoder.push(new EncodedPacket(new Uint8Array(bytes), 'key', 0, 1 / 8000));
+		const decoder = new AudioPacketDecoder({
+			type: 'audio',
+			codec,
+			sampleRate: 8000,
+			numberOfChannels: 1,
+		});
+		void decoder.push(new EncodedPacket({
+			data: new Uint8Array(bytes),
+			type: 'key',
+			timestamp: 0,
+			duration: 1 / 8000,
+		}));
 		void decoder.end();
 
 		const sample = await decoder.pull();
@@ -1558,9 +1582,19 @@ test('PCM decoding', async () => {
 });
 
 test('PCM timestamps', async () => {
-	const decoder = new AudioPacketDecoder({ codec: 'pcm-s16', sampleRate: 3, numberOfChannels: 2 });
+	const decoder = new AudioPacketDecoder({
+		type: 'audio',
+		codec: 'pcm-s16',
+		sampleRate: 3,
+		numberOfChannels: 2,
+	});
 	const createPacket = (frameCount: number, timestamp: number, extraBytes = 0) => {
-		return new EncodedPacket(new Uint8Array(4 * frameCount + extraBytes), 'key', timestamp, frameCount / 3);
+		return new EncodedPacket({
+			data: new Uint8Array(4 * frameCount + extraBytes),
+			type: 'key',
+			timestamp,
+			duration: frameCount / 3,
+		});
 	};
 
 	void decoder.push(createPacket(1, 0));

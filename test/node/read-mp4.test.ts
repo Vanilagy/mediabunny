@@ -62,7 +62,12 @@ test('MP4 nclx color information', async () => {
 
 	await output.start();
 	await source.add(
-		new EncodedPacket(new Uint8Array(1024), 'key', 0, 0.1),
+		new EncodedPacket({
+			data: new Uint8Array(1024),
+			type: 'key',
+			timestamp: 0,
+			duration: 0.1,
+		}),
 		{
 			decoderConfig: {
 				codec: 'vp8',
@@ -109,7 +114,12 @@ test('QuickTime nclc color information', async () => {
 
 	await output.start();
 	await source.add(
-		new EncodedPacket(new Uint8Array(1024), 'key', 0, 0.1),
+		new EncodedPacket({
+			data: new Uint8Array(1024),
+			type: 'key',
+			timestamp: 0,
+			duration: 0.1,
+		}),
 		{
 			decoderConfig: {
 				codec: 'vp8',
@@ -717,7 +727,7 @@ const moovSamplesThenFragment = (withTfdt: boolean) => {
 	const moov = (dataOffset: number) => box('moov',
 		mvhd(),
 		trak('vide', fullBox('mdhd', 0, 0, zeros(8), u32(1000), u32(120), zeros(4)),
-			fullBox('stsd', 0, 0, u32(1), videoSampleEntry('avc1')),
+			fullBox('stsd', 0, 0, u32(1), videoSampleEntry('vp08')),
 			fullBox('stts', 0, 0, u32(1), u32(3), u32(40)),
 			fullBox('stss', 0, 0, u32(1), u32(1)),
 			fullBox('stsc', 0, 0, u32(1), u32(1), u32(3), u32(1)),
@@ -755,7 +765,7 @@ test('Fragments with omitted tfhd offsets and an ignored track first', async () 
 				box('minf', box('stbl', fullBox('stsd', 0, 0, u32(0)))),
 			),
 		),
-		trak('vide', mdhd(1000), fullBox('stsd', 0, 0, u32(1), videoSampleEntry('avc1'))),
+		trak('vide', mdhd(1000), fullBox('stsd', 0, 0, u32(1), videoSampleEntry('vp08'))),
 		box('mvex',
 			fullBox('trex', 0, 0, u32(1), u32(1), u32(40), u32(4), u32(0)),
 			fullBox('trex', 0, 0, u32(2), u32(1), u32(40), u32(4), u32(0)),

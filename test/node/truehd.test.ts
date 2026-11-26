@@ -625,7 +625,12 @@ test('Decode packets holding several access units', async () => {
 			offset += x.data.byteLength;
 		}
 
-		await source.add(new EncodedPacket(data, group[0]!.type, group[0]!.timestamp, 3 * 40 / 48000), {
+		await source.add(new EncodedPacket({
+			data,
+			type: group[0]!.type,
+			timestamp: group[0]!.timestamp,
+			duration: 3 * 40 / 48000,
+		}), {
 			decoderConfig,
 		});
 		group = [];

@@ -337,9 +337,24 @@ await output.start();
 
 // 10 FPS starting on 1 Jan 2024, midnight UTC.
 // The timestamps *are* Unix timestamps:
-await source.add(new EncodedPacket(data, type, 1704067200.0, 0.1));
-await source.add(new EncodedPacket(data, type, 1704067200.1, 0.1));
-await source.add(new EncodedPacket(data, type, 1704067200.2, 0.1));
+await source.add(new EncodedPacket({
+    data,
+    type,
+    timestamp: 1704067200.0,
+    duration: 0.1,
+}));
+await source.add(new EncodedPacket({
+    data,
+    type,
+    timestamp: 1704067200.1,
+    duration: 0.1,
+}));
+await source.add(new EncodedPacket({
+    data,
+    type,
+    timestamp: 1704067200.2,
+    duration: 0.1,
+}));
 // ...
 ```
 

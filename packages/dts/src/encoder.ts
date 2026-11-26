@@ -162,12 +162,12 @@ class DtsEncoder extends CustomAudioEncoder {
 			},
 		}, [audioData]).then((result) => {
 			// We always get exactly one packet because we encode the correct frame size
-			const packet = new EncodedPacket(
-				new Uint8Array(result.encodedData),
-				'key',
-				result.pts / this.sampleRate,
-				result.duration / this.sampleRate,
-			);
+			const packet = new EncodedPacket({
+				data: new Uint8Array(result.encodedData),
+				type: 'key',
+				timestamp: result.pts / this.sampleRate,
+				duration: result.duration / this.sampleRate,
+			});
 
 			this.onPacket(
 				packet,

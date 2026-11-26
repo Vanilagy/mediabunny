@@ -141,10 +141,30 @@ test('Zero start timestamp, regular MP4', async () => {
 
 	const meta = { decoderConfig: { codec: 'vp8', codedWidth: 1280, codedHeight: 720 } };
 
-	await source.add(new EncodedPacket(new Uint8Array(1024), 'key', 0, 0.1), meta);
-	await source.add(new EncodedPacket(new Uint8Array(1024), 'delta', 0.1, 0.1));
-	await source.add(new EncodedPacket(new Uint8Array(1024), 'delta', 0.2, 0.1));
-	await source.add(new EncodedPacket(new Uint8Array(1024), 'delta', 0.3, 0.1));
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(1024),
+		type: 'key',
+		timestamp: 0,
+		duration: 0.1,
+	}), meta);
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(1024),
+		type: 'delta',
+		timestamp: 0.1,
+		duration: 0.1,
+	}));
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(1024),
+		type: 'delta',
+		timestamp: 0.2,
+		duration: 0.1,
+	}));
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(1024),
+		type: 'delta',
+		timestamp: 0.3,
+		duration: 0.1,
+	}));
 
 	await output.finalize();
 
@@ -166,10 +186,30 @@ test('Non-zero start timestamp, regular MP4', async () => {
 
 	const meta = { decoderConfig: { codec: 'vp8', codedWidth: 1280, codedHeight: 720 } };
 
-	await source.add(new EncodedPacket(new Uint8Array(1024), 'key', 1, 0.1), meta);
-	await source.add(new EncodedPacket(new Uint8Array(1024), 'delta', 1.1, 0.1));
-	await source.add(new EncodedPacket(new Uint8Array(1024), 'delta', 1.2, 0.1));
-	await source.add(new EncodedPacket(new Uint8Array(1024), 'delta', 1.3, 0.1));
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(1024),
+		type: 'key',
+		timestamp: 1,
+		duration: 0.1,
+	}), meta);
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(1024),
+		type: 'delta',
+		timestamp: 1.1,
+		duration: 0.1,
+	}));
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(1024),
+		type: 'delta',
+		timestamp: 1.2,
+		duration: 0.1,
+	}));
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(1024),
+		type: 'delta',
+		timestamp: 1.3,
+		duration: 0.1,
+	}));
 
 	await output.finalize();
 
@@ -210,10 +250,30 @@ test('Non-zero start timestamp, fragmented MP4', async () => {
 
 	const meta = { decoderConfig: { codec: 'vp8', codedWidth: 1280, codedHeight: 720 } };
 
-	await source.add(new EncodedPacket(new Uint8Array(1024), 'key', 1, 0.1), meta);
-	await source.add(new EncodedPacket(new Uint8Array(1024), 'delta', 1.1, 0.1));
-	await source.add(new EncodedPacket(new Uint8Array(1024), 'delta', 1.2, 0.1));
-	await source.add(new EncodedPacket(new Uint8Array(1024), 'delta', 1.3, 0.1));
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(1024),
+		type: 'key',
+		timestamp: 1,
+		duration: 0.1,
+	}), meta);
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(1024),
+		type: 'delta',
+		timestamp: 1.1,
+		duration: 0.1,
+	}));
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(1024),
+		type: 'delta',
+		timestamp: 1.2,
+		duration: 0.1,
+	}));
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(1024),
+		type: 'delta',
+		timestamp: 1.3,
+		duration: 0.1,
+	}));
 
 	await output.finalize();
 
@@ -273,12 +333,12 @@ const testNegativeTimestampRoundTrip = async (
 	await output.start();
 
 	const meta = { decoderConfig: { codec: 'vp8', codedWidth: 1280, codedHeight: 720 } };
-	const inputPackets = timestamps.map((timestamp, index) => new EncodedPacket(
-		new Uint8Array(1024).fill(index),
-		'key',
+	const inputPackets = timestamps.map((timestamp, index) => new EncodedPacket({
+		data: new Uint8Array(1024).fill(index),
+		type: 'key',
 		timestamp,
 		duration,
-	));
+	}));
 
 	for (let i = 0; i < inputPackets.length; i++) {
 		await source.add(inputPackets[i]!, i === 0 ? meta : undefined);
@@ -335,7 +395,12 @@ test('PCM audio', async () => {
 
 	const meta = { decoderConfig: { codec: 'pcm-s16', numberOfChannels: 2, sampleRate: 48000 } };
 
-	await source.add(new EncodedPacket(new Uint8Array(1024), 'key', 0, 1024 / 2 / 2 / 48000), meta);
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(1024),
+		type: 'key',
+		timestamp: 0,
+		duration: 1024 / 2 / 2 / 48000,
+	}), meta);
 
 	await output.finalize();
 
@@ -362,7 +427,12 @@ test('PCM audio with non-zero timestamp', async () => {
 
 	const meta = { decoderConfig: { codec: 'pcm-s16', numberOfChannels: 2, sampleRate: 48000 } };
 
-	await source.add(new EncodedPacket(new Uint8Array(1024), 'key', 1, 1024 / 2 / 2 / 48000), meta);
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(1024),
+		type: 'key',
+		timestamp: 1,
+		duration: 1024 / 2 / 2 / 48000,
+	}), meta);
 
 	await output.finalize();
 
@@ -390,8 +460,18 @@ test('PCM audio, silence padding', async () => {
 	const meta = { decoderConfig: { codec: 'pcm-s16', numberOfChannels: 2, sampleRate: 48000 } };
 
 	// A gap of several seconds, which gets padded a second at a time
-	await source.add(new EncodedPacket(new Uint8Array(1024), 'key', 0, 1024 / 2 / 2 / 48000), meta);
-	await source.add(new EncodedPacket(new Uint8Array(1024), 'key', 2.5, 1024 / 2 / 2 / 48000), meta);
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(1024),
+		type: 'key',
+		timestamp: 0,
+		duration: 1024 / 2 / 2 / 48000,
+	}), meta);
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(1024),
+		type: 'key',
+		timestamp: 2.5,
+		duration: 1024 / 2 / 2 / 48000,
+	}), meta);
 
 	await output.finalize();
 
@@ -429,9 +509,19 @@ test('PCM audio, no silence padding with approximate timestamps', async () => {
 
 	const meta = { decoderConfig: { codec: 'pcm-s16', numberOfChannels: 2, sampleRate: 48000 } };
 
-	await source.add(new EncodedPacket(new Uint8Array(1024), 'key', 0, 1024 / 2 / 2 / 48000), meta);
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(1024),
+		type: 'key',
+		timestamp: 0,
+		duration: 1024 / 2 / 2 / 48000,
+	}), meta);
 	// 0.006 is 256/48000 "rounded up", but it's close enough for silence padding not to kick in
-	await source.add(new EncodedPacket(new Uint8Array(1024), 'key', 0.006, 1024 / 2 / 2 / 48000), meta);
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(1024),
+		type: 'key',
+		timestamp: 0.006,
+		duration: 1024 / 2 / 2 / 48000,
+	}), meta);
 
 	await output.finalize();
 
@@ -466,7 +556,12 @@ test('xHE-AAC decoder config', async () => {
 	output.addAudioTrack(source);
 	await output.start();
 
-	const packet = new EncodedPacket(new Uint8Array(16), 'key', 0, 1024 / 48000);
+	const packet = new EncodedPacket({
+		data: new Uint8Array(16),
+		type: 'key',
+		timestamp: 0,
+		duration: 1024 / 48000,
+	});
 	await source.add(packet, {
 		decoderConfig: {
 			codec: 'mp4a.40.42',
@@ -505,8 +600,18 @@ test('At least one track is enabled even if all are added disabled', async () =>
 
 	await output.start();
 
-	await source1.add(new EncodedPacket(new Uint8Array(1024), 'key', 0, 0.1), meta);
-	await source2.add(new EncodedPacket(new Uint8Array(1024), 'key', 0, 0.1), meta);
+	await source1.add(new EncodedPacket({
+		data: new Uint8Array(1024),
+		type: 'key',
+		timestamp: 0,
+		duration: 0.1,
+	}), meta);
+	await source2.add(new EncodedPacket({
+		data: new Uint8Array(1024),
+		type: 'key',
+		timestamp: 0,
+		duration: 0.1,
+	}), meta);
 
 	await output.finalize();
 
@@ -679,13 +784,23 @@ const testChunkOrder = async (fastStart: false | 'in-memory' | 'reserve') => {
 	// Add all video before all audio, so the muxer can't just write chunks in the order they complete
 	const videoMeta = { decoderConfig: { codec: 'vp8', codedWidth: 1280, codedHeight: 720 } };
 	for (let i = 0; i < 150; i++) {
-		const packet = new EncodedPacket(new Uint8Array(8), i === 0 ? 'key' : 'delta', i / 30, 1 / 30);
+		const packet = new EncodedPacket({
+			data: new Uint8Array(8),
+			type: i === 0 ? 'key' : 'delta',
+			timestamp: i / 30,
+			duration: 1 / 30,
+		});
 		await videoSource.add(packet, videoMeta);
 	}
 
 	const audioMeta = { decoderConfig: { codec: 'mp3', numberOfChannels: 2, sampleRate: 48000 } };
 	for (let i = 0; i < 200; i++) {
-		const packet = new EncodedPacket(new Uint8Array(8), 'key', 0.01 + 1152 * i / 48000, 1152 / 48000);
+		const packet = new EncodedPacket({
+			data: new Uint8Array(8),
+			type: 'key',
+			timestamp: 0.01 + 1152 * i / 48000,
+			duration: 1152 / 48000,
+		});
 		await audioSource.add(packet, audioMeta);
 	}
 
@@ -751,11 +866,21 @@ test('Reserved Fast Start with a B-frame GOP completed before all tracks are kno
 	const videoTimestamps = [0, 0.2, 0.1, 0.3];
 	for (let i = 0; i < videoTimestamps.length; i++) {
 		const type = i === 0 || i === 3 ? 'key' : 'delta';
-		await videoSource.add(new EncodedPacket(new Uint8Array(8), type, videoTimestamps[i]!, 0.1), videoMeta);
+		await videoSource.add(new EncodedPacket({
+			data: new Uint8Array(8),
+			type,
+			timestamp: videoTimestamps[i]!,
+			duration: 0.1,
+		}), videoMeta);
 	}
 
 	const audioMeta = { decoderConfig: { codec: 'mp3', numberOfChannels: 2, sampleRate: 48000 } };
-	await audioSource.add(new EncodedPacket(new Uint8Array(8), 'key', 0, 1152 / 48000), audioMeta);
+	await audioSource.add(new EncodedPacket({
+		data: new Uint8Array(8),
+		type: 'key',
+		timestamp: 0,
+		duration: 1152 / 48000,
+	}), audioMeta);
 
 	await output.finalize();
 
@@ -791,7 +916,12 @@ test('In-memory Fast Start with an append-only target', async () => {
 	await output.start();
 
 	for (let i = 0; i < 10; i++) {
-		const packet = new EncodedPacket(new Uint8Array(100).fill(i), i === 0 ? 'key' : 'delta', i / 10, 0.1);
+		const packet = new EncodedPacket({
+			data: new Uint8Array(100).fill(i),
+			type: i === 0 ? 'key' : 'delta',
+			timestamp: i / 10,
+			duration: 0.1,
+		});
 		await source.add(packet, vp8Meta);
 	}
 
@@ -837,7 +967,12 @@ test('In-memory Fast Start writes the media data chunk by chunk', async () => {
 	await output.start();
 
 	for (let i = 0; i < 30; i++) {
-		const packet = new EncodedPacket(new Uint8Array(1000), i === 0 ? 'key' : 'delta', i / 10, 0.1);
+		const packet = new EncodedPacket({
+			data: new Uint8Array(1000),
+			type: i === 0 ? 'key' : 'delta',
+			timestamp: i / 10,
+			duration: 0.1,
+		});
 		await source.add(packet, vp8Meta);
 	}
 
@@ -866,7 +1001,12 @@ test('onMoov data with reserved Fast Start', async () => {
 	await output.start();
 
 	for (let i = 0; i < 10; i++) {
-		await source.add(new EncodedPacket(new Uint8Array(8), i === 0 ? 'key' : 'delta', i / 10, 0.1), vp8Meta);
+		await source.add(new EncodedPacket({
+			data: new Uint8Array(8),
+			type: i === 0 ? 'key' : 'delta',
+			timestamp: i / 10,
+			duration: 0.1,
+		}), vp8Meta);
 	}
 
 	await output.finalize();
@@ -893,12 +1033,22 @@ test('Fragmented MP4, track starting later at a negative timestamp', async () =>
 	// The video alone spans more than the minimum fragment duration before the audio's first packet
 	const videoTimestamps = [-2, -1.5, -1, -0.5, 0, 0.5];
 	for (const timestamp of videoTimestamps) {
-		await videoSource.add(new EncodedPacket(new Uint8Array(8), 'key', timestamp, 0.5), vp8Meta);
+		await videoSource.add(new EncodedPacket({
+			data: new Uint8Array(8),
+			type: 'key',
+			timestamp,
+			duration: 0.5,
+		}), vp8Meta);
 	}
 
 	const audioTimestamps = [-0.75, -0.25, 0.25];
 	for (const timestamp of audioTimestamps) {
-		await audioSource.add(new EncodedPacket(new Uint8Array(8), 'key', timestamp, 0.5), mp3Meta);
+		await audioSource.add(new EncodedPacket({
+			data: new Uint8Array(8),
+			type: 'key',
+			timestamp,
+			duration: 0.5,
+		}), mp3Meta);
 	}
 
 	await output.finalize();
@@ -944,7 +1094,12 @@ test('Fragment start timestamps with a negative start timestamp', async () => {
 	await output.start();
 
 	for (const timestamp of [-1, -0.5, 0, 0.5, 1, 1.5]) {
-		await source.add(new EncodedPacket(new Uint8Array(8), 'key', timestamp, 0.5), vp8Meta);
+		await source.add(new EncodedPacket({
+			data: new Uint8Array(8),
+			type: 'key',
+			timestamp,
+			duration: 0.5,
+		}), vp8Meta);
 	}
 
 	await output.finalize();
@@ -967,7 +1122,12 @@ test('Fragmented MP4 with an mdat larger than 4 GiB', async () => {
 	// All packets share the same buffer, so this stays cheap on memory
 	const data = new Uint8Array(2 ** 28);
 	for (let i = 0; i < 17; i++) {
-		await source.add(new EncodedPacket(data, 'key', i / 30, 1 / 30), vp8Meta);
+		await source.add(new EncodedPacket({
+			data,
+			type: 'key',
+			timestamp: i / 30,
+			duration: 1 / 30,
+		}), vp8Meta);
 	}
 
 	await output.finalize();
@@ -1057,8 +1217,18 @@ test('CMAF segment over 20.7 hours', async () => {
 	output.addVideoTrack(source);
 	await output.start();
 
-	await source.add(new EncodedPacket(new Uint8Array(16), 'key', 0, 1), vp8Meta);
-	await source.add(new EncodedPacket(new Uint8Array(16), 'key', 75_000, 1), vp8Meta);
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(16),
+		type: 'key',
+		timestamp: 0,
+		duration: 1,
+	}), vp8Meta);
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(16),
+		type: 'key',
+		timestamp: 75_000,
+		duration: 1,
+	}), vp8Meta);
 
 	// sidx can't express this duration at our timescale
 	await expect(output.finalize()).rejects.toThrow('CMAF segments must be shorter than 20.712612 hours.');
@@ -1082,7 +1252,12 @@ test('Traf data more than 2 GiB past its moof', async () => {
 	// The small track's data comes after all of the huge track's data in the one and only fragment, too far away from
 	// the moof for trun's signed 32-bit data offset
 	await addHugePackets(hugeSource);
-	await smallSource.add(new EncodedPacket(new Uint8Array(8), 'key', 0, 1), vp8Meta);
+	await smallSource.add(new EncodedPacket({
+		data: new Uint8Array(8),
+		type: 'key',
+		timestamp: 0,
+		duration: 1,
+	}), vp8Meta);
 	await expect(output.finalize()).rejects.toThrow('must start less than 2 GiB after its moof box');
 });
 
@@ -1090,7 +1265,12 @@ const addHugePackets = async (source: EncodedVideoPacketSource) => {
 	// Reusing one buffer keeps memory in check, since the muxer only holds references to packet data
 	const data = new Uint8Array(2 ** 28);
 	for (let i = 0; i < 9; i++) {
-		await source.add(new EncodedPacket(data, i === 0 ? 'key' : 'delta', i, 1), vp8Meta);
+		await source.add(new EncodedPacket({
+			data,
+			type: i === 0 ? 'key' : 'delta',
+			timestamp: i,
+			duration: 1,
+		}), vp8Meta);
 	}
 };
 
@@ -1212,7 +1392,12 @@ const testWebVttCueAlongsideAudio = async (closeTracks: boolean) => {
 
 	await subtitleSource.add('WEBVTT\n\n00:00.500 --> 00:01.500\nHello\n');
 	for (let i = 0; i < 100; i++) {
-		await audioSource.add(new EncodedPacket(new Uint8Array(100), 'key', 0.024 * i, 0.024), mp3Meta);
+		await audioSource.add(new EncodedPacket({
+			data: new Uint8Array(100),
+			type: 'key',
+			timestamp: 0.024 * i,
+			duration: 0.024,
+		}), mp3Meta);
 	}
 
 	if (closeTracks) {
@@ -1325,7 +1510,12 @@ const testDecodeTimeline = async (
 	const meta = { decoderConfig: { codec: 'vp8', codedWidth: 1280, codedHeight: 720 } };
 	for (let i = 0; i < packets.length; i++) {
 		const [type, timestamp] = packets[i]!;
-		await source.add(new EncodedPacket(new Uint8Array(1024), type, timestamp, 0.1), i === 0 ? meta : undefined);
+		await source.add(new EncodedPacket({
+			data: new Uint8Array(1024),
+			type,
+			timestamp,
+			duration: 0.1,
+		}), i === 0 ? meta : undefined);
 	}
 
 	await output.finalize();
@@ -1459,11 +1649,21 @@ test('Failure while closing a track', async () => {
 	// Lets the failed write of the file header surface, so that the next flush throws
 	await new Promise(resolve => setTimeout(resolve, 0));
 
-	await audioSource.add(new EncodedPacket(new Uint8Array(8), 'key', 0, 0.1), mp3Meta);
+	await audioSource.add(new EncodedPacket({
+		data: new Uint8Array(8),
+		type: 'key',
+		timestamp: 0,
+		duration: 0.1,
+	}), mp3Meta);
 
 	// The audio track ran dry, so these stay queued
 	for (let i = 0; i < 10; i++) {
-		await videoSource.add(new EncodedPacket(new Uint8Array(8), i === 0 ? 'key' : 'delta', i / 10, 0.1), vp8Meta);
+		await videoSource.add(new EncodedPacket({
+			data: new Uint8Array(8),
+			type: i === 0 ? 'key' : 'delta',
+			timestamp: i / 10,
+			duration: 0.1,
+		}), vp8Meta);
 	}
 
 	// Closing the audio track writes out the queued video packets. The muxer is called directly since
@@ -1541,7 +1741,12 @@ const writeVideoPacket = async (output: Output) => {
 	output.addVideoTrack(source);
 	await output.start();
 
-	await source.add(new EncodedPacket(new Uint8Array(1024), 'key', 0, 0.1), vp8Meta);
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(1024),
+		type: 'key',
+		timestamp: 0,
+		duration: 0.1,
+	}), vp8Meta);
 	await output.finalize();
 };
 
@@ -1576,7 +1781,12 @@ test('24-bit PCM sample entry, MP4', async () => {
 		numberOfChannels: 2,
 		sampleRate: 48000,
 	};
-	await source.add(new EncodedPacket(new Uint8Array(6 * 1024), 'key', 0, 1024 / 48000), { decoderConfig });
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(6 * 1024),
+		type: 'key',
+		timestamp: 0,
+		duration: 1024 / 48000,
+	}), { decoderConfig });
 	await output.finalize();
 
 	// QuickTime's extended version 1 layout has no place in an ISO sample entry, Apple drops the track if it's there
@@ -1615,7 +1825,12 @@ test('AAC sample entry above 65535 Hz, MOV', async () => {
 		sampleRate: 96000,
 		description: new Uint8Array([0x10, 0x10]), // AAC-LC, 96 kHz, stereo
 	};
-	await source.add(new EncodedPacket(new Uint8Array(100), 'key', 0, 1024 / 96000), { decoderConfig });
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(100),
+		type: 'key',
+		timestamp: 0,
+		duration: 1024 / 96000,
+	}), { decoderConfig });
 	await output.finalize();
 
 	const bytes = new Uint8Array(output.target.buffer!);
@@ -1652,7 +1867,12 @@ test('24-bit FLAC sample entry above 65535 Hz, MP4', async () => {
 			...new Uint8Array(16),
 		]),
 	};
-	await source.add(new EncodedPacket(new Uint8Array(100), 'key', 0, 4096 / 96000), { decoderConfig });
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(100),
+		type: 'key',
+		timestamp: 0,
+		duration: 4096 / 96000,
+	}), { decoderConfig });
 	await output.finalize();
 
 	const bytes = new Uint8Array(output.target.buffer!);
@@ -1777,7 +1997,12 @@ test('Key frames in the middle of a fragment', async () => {
 	// Key frames every half second, so each one-second fragment contains two of them
 	const types = Array.from({ length: 60 }, (_, i) => i % 15 === 0 ? 'key' as const : 'delta' as const);
 	for (let i = 0; i < types.length; i++) {
-		await source.add(new EncodedPacket(new Uint8Array(1024), types[i]!, i / 30, 1 / 30), vp8Meta);
+		await source.add(new EncodedPacket({
+			data: new Uint8Array(1024),
+			type: types[i]!,
+			timestamp: i / 30,
+			duration: 1 / 30,
+		}), vp8Meta);
 	}
 
 	await output.finalize();
@@ -1827,7 +2052,12 @@ const testPcmAbove65535Hz = async (format: IsobmffOutputFormat) => {
 		sampleRate: 96000,
 	};
 	const data = new Uint8Array(6 * 960).map((_, i) => i);
-	await source.add(new EncodedPacket(data, 'key', 0, 960 / 96000), { decoderConfig });
+	await source.add(new EncodedPacket({
+		data,
+		type: 'key',
+		timestamp: 0,
+		duration: 960 / 96000,
+	}), { decoderConfig });
 	await output.finalize();
 
 	using input = new Input({
@@ -1866,7 +2096,12 @@ test('Multichannel PCM, MOV', async () => {
 		numberOfChannels: 6,
 		sampleRate: 48000,
 	};
-	await source.add(new EncodedPacket(new Uint8Array(12 * 480), 'key', 0, 480 / 48000), { decoderConfig });
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(12 * 480),
+		type: 'key',
+		timestamp: 0,
+		duration: 480 / 48000,
+	}), { decoderConfig });
 	await output.finalize();
 
 	// The version 1 sound description is only specified for mono and stereo, so this needs version 2, with lpcm
@@ -1950,7 +2185,12 @@ test('Opus with a demixing matrix', async () => {
 		1, 4, 0x38, 0x01, 0x80, 0xbb, 0x00, 0x00, 0x00, 0x00, 3, 2, 2,
 		...Array.from({ length: 32 }, (_, i) => i + 1),
 	]);
-	await source.add(new EncodedPacket(new Uint8Array([0xfc, 0xff, 0xfe]), 'key', 0, 0.02), {
+	await source.add(new EncodedPacket({
+		data: new Uint8Array([0xfc, 0xff, 0xfe]),
+		type: 'key',
+		timestamp: 0,
+		duration: 0.02,
+	}), {
 		decoderConfig: {
 			codec: 'opus',
 			numberOfChannels: 4,

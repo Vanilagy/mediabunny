@@ -19,14 +19,14 @@ import {
 	TransformationMatrix,
 } from './misc';
 import { MetadataTags, TrackDisposition, validateMetadataTags, validateTrackDisposition } from './metadata';
-import { Muxer } from './muxer';
+import { Muxer, validateAudioTrackDecoderConfig, validateVideoTrackDecoderConfig } from './muxer';
 import { OutputFormat } from './output-format';
 import { AudioSource, MediaSource, SubtitleSource, VideoSource } from './media-source';
 import { PathedTarget, Target, TargetRequest } from './target';
 import { Writer } from './writer';
 import { Logging } from './logging';
 import { EncodedPacket } from './packet';
-import { validateAudioChunkMetadata, validateVideoChunkMetadata } from './codec';
+import { validateExtendedAudioDecoderConfig, validateExtendedVideoDecoderConfig } from './decode';
 
 /**
  * List of all track types.
@@ -716,7 +716,8 @@ export class Output<
 			throw new TypeError('metadata.canBeTransparent, when provided, must be a boolean.');
 		}
 		if (metadata.decoderConfig !== undefined) {
-			validateVideoChunkMetadata({ decoderConfig: metadata.decoderConfig }, source._codec);
+			validateExtendedVideoDecoderConfig(metadata.decoderConfig, 'metadata.decoderConfig', { type: true });
+			validateVideoTrackDecoderConfig(metadata.decoderConfig, source._codec);
 		}
 		if (metadata.primingPacket !== undefined) {
 			if (!(metadata.primingPacket instanceof EncodedPacket)) {
@@ -742,7 +743,8 @@ export class Output<
 		}
 		validateBaseTrackMetadata(metadata);
 		if (metadata.decoderConfig !== undefined) {
-			validateAudioChunkMetadata({ decoderConfig: metadata.decoderConfig }, source._codec);
+			validateExtendedAudioDecoderConfig(metadata.decoderConfig, 'metadata.decoderConfig', { type: true });
+			validateAudioTrackDecoderConfig(metadata.decoderConfig, source._codec);
 		}
 		if (metadata.primingPacket !== undefined) {
 			if (!(metadata.primingPacket instanceof EncodedPacket)) {

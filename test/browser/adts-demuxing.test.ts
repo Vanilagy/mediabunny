@@ -24,6 +24,7 @@ test('ADTS demuxing', async () => {
 	assert(decoderConfig);
 
 	expect(decoderConfig).toEqual({
+		type: 'audio',
 		codec: 'mp4a.40.2',
 		sampleRate: 44100,
 		numberOfChannels: 2,

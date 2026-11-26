@@ -49,6 +49,7 @@ test('MPEG-TS metadata reading', async () => {
 
 	const videoDecoderConfig = await videoTrack.getDecoderConfig();
 	expect(videoDecoderConfig).toEqual({
+		type: 'video',
 		codec: 'avc1.640020',
 		codedWidth: 720,
 		codedHeight: 720,
@@ -75,6 +76,7 @@ test('MPEG-TS metadata reading', async () => {
 
 	const audioDecoderConfig = await audioTrack.getDecoderConfig();
 	expect(audioDecoderConfig).toEqual({
+		type: 'audio',
 		codec: 'mp4a.40.2',
 		numberOfChannels: 2,
 		sampleRate: 48000,
@@ -564,6 +566,7 @@ test('MPEG-TS with HEVC video', async () => {
 
 	const videoDecoderConfig = await videoTrack.getDecoderConfig();
 	expect(videoDecoderConfig).toEqual({
+		type: 'video',
 		codec: 'hev1.1.6.L120.90',
 		codedWidth: 1920,
 		codedHeight: 1080,
@@ -603,6 +606,7 @@ test('MPEG-TS with MP3 audio', async () => {
 
 	const audioDecoderConfig = await audioTrack.getDecoderConfig();
 	expect(audioDecoderConfig).toEqual({
+		type: 'audio',
 		codec: 'mp3',
 		numberOfChannels: 2,
 		sampleRate: 48000,
@@ -637,6 +641,7 @@ test('MPEG-TS with AC-3 audio (System A)', async () => {
 
 	const audioDecoderConfig = await audioTrack.getDecoderConfig();
 	expect(audioDecoderConfig).toEqual({
+		type: 'audio',
 		codec: 'ac-3',
 		numberOfChannels: 6,
 		sampleRate: 48000,
@@ -672,6 +677,7 @@ test('MPEG-TS with AC-3 audio (System B)', async () => {
 
 	const audioDecoderConfig = await audioTrack.getDecoderConfig();
 	expect(audioDecoderConfig).toEqual({
+		type: 'audio',
 		codec: 'ac-3',
 		numberOfChannels: 6,
 		sampleRate: 48000,
@@ -707,6 +713,7 @@ test('MPEG-TS with E-AC-3 audio (System A)', async () => {
 
 	const audioDecoderConfig = await audioTrack.getDecoderConfig();
 	expect(audioDecoderConfig).toEqual({
+		type: 'audio',
 		codec: 'ec-3',
 		numberOfChannels: 6,
 		sampleRate: 48000,
@@ -742,6 +749,7 @@ test('MPEG-TS with E-AC-3 audio (System B)', async () => {
 
 	const audioDecoderConfig = await audioTrack.getDecoderConfig();
 	expect(audioDecoderConfig).toEqual({
+		type: 'audio',
 		codec: 'ec-3',
 		numberOfChannels: 6,
 		sampleRate: 48000,
@@ -1539,12 +1547,12 @@ const muxAvc = async (codec: string, packets: EncodedPacket[]) => {
 	return new Uint8Array(output.target.buffer);
 };
 
-const avcPacket = (nalUnits: Uint8Array[], frame: number, type: PacketType = 'delta') => new EncodedPacket(
-	concatNalUnitsInAnnexB(nalUnits),
+const avcPacket = (nalUnits: Uint8Array[], frame: number, type: PacketType = 'delta') => new EncodedPacket({
+	data: concatNalUnitsInAnnexB(nalUnits),
 	type,
-	frame * FRAME_DURATION,
-	FRAME_DURATION,
-);
+	timestamp: frame * FRAME_DURATION,
+	duration: FRAME_DURATION,
+});
 
 test('HEVC end of sequence NAL unit', async () => {
 	// Parameter sets and IDR slice of a 64x64 gray frame encoded by x265
@@ -1571,7 +1579,12 @@ test('HEVC end of sequence NAL unit', async () => {
 	await output.start();
 
 	for (const [i, nalUnits] of [[vps, sps, pps, idrSlice, endOfSequence], [vps, sps, pps, idrSlice]].entries()) {
-		const packet = new EncodedPacket(concatNalUnitsInAnnexB(nalUnits), 'key', i * FRAME_DURATION, FRAME_DURATION);
+		const packet = new EncodedPacket({
+			data: concatNalUnitsInAnnexB(nalUnits),
+			type: 'key',
+			timestamp: i * FRAME_DURATION,
+			duration: FRAME_DURATION,
+		});
 		await source.add(packet, {
 			decoderConfig: {
 				codec: 'hev1.1.6.L30.90',
@@ -1621,7 +1634,12 @@ test('Multiple 44.1 kHz AAC frames per PES packet', async () => {
 	await output.start();
 
 	// The ADTS data gets written as-is, so all frames end up in one PES packet
-	await source.add(new EncodedPacket(data, 'key', 0, 1024 * frameCount / 44100), {
+	await source.add(new EncodedPacket({
+		data,
+		type: 'key',
+		timestamp: 0,
+		duration: 1024 * frameCount / 44100,
+	}), {
 		decoderConfig: {
 			codec: 'mp4a.40.2',
 			numberOfChannels: 2,

@@ -21,7 +21,6 @@ import {
 	ProresCodecInfo,
 	Vp9CodecInfo,
 } from './codec-data';
-import { validateExtendedAudioDecoderConfig, validateExtendedVideoDecoderConfig } from './decode';
 import {
 	COLOR_PRIMARIES_MAP,
 	COLOR_PRIMARIES_MAP_INVERSE,
@@ -39,7 +38,6 @@ import {
 	toDataView,
 	toUint8Array,
 } from './misc';
-import { SubtitleMetadata } from './subtitles';
 import { PCM_ENCODER_PACKET_SIZE } from './media-source';
 
 /**
@@ -1163,73 +1161,4 @@ export const getAudioEncoderConfigExtension = (codec: AudioCodec) => {
 	}
 
 	return {};
-};
-
-export const validateVideoChunkMetadata = (
-	metadata: EncodedVideoChunkMetadata | undefined,
-	trackCodec: VideoCodec | null,
-) => {
-	if (!metadata) {
-		throw new TypeError('Video chunk metadata must be provided.');
-	}
-	if (typeof metadata !== 'object') {
-		throw new TypeError('Video chunk metadata must be an object.');
-	}
-	if (!metadata.decoderConfig) {
-		throw new TypeError('Video chunk metadata must include a decoder configuration.');
-	}
-	validateExtendedVideoDecoderConfig(metadata.decoderConfig, 'Video chunk metadata decoder configuration');
-
-	// Muxers need the dimensions, so unlike WebCodecs, we require them
-	if (metadata.decoderConfig.codedWidth === undefined || metadata.decoderConfig.codedHeight === undefined) {
-		throw new TypeError('Video chunk metadata decoder configuration must specify codedWidth and codedHeight.');
-	}
-
-	if (trackCodec !== null && inferCodecFromCodecString(metadata.decoderConfig.codec) !== trackCodec) {
-		throw new TypeError(
-			`Video chunk metadata decoder configuration codec string '${metadata.decoderConfig.codec}' does not fit to`
-			+ ` the track codec '${trackCodec}'.`,
-		);
-	}
-};
-
-export const validateAudioChunkMetadata = (
-	metadata: EncodedAudioChunkMetadata | undefined,
-	trackCodec: AudioCodec | null,
-) => {
-	if (!metadata) {
-		throw new TypeError('Audio chunk metadata must be provided.');
-	}
-	if (typeof metadata !== 'object') {
-		throw new TypeError('Audio chunk metadata must be an object.');
-	}
-	if (!metadata.decoderConfig) {
-		throw new TypeError('Audio chunk metadata must include a decoder configuration.');
-	}
-	validateExtendedAudioDecoderConfig(metadata.decoderConfig, 'Audio chunk metadata decoder configuration');
-
-	if (trackCodec !== null && inferCodecFromCodecString(metadata.decoderConfig.codec) !== trackCodec) {
-		throw new TypeError(
-			`Audio chunk metadata decoder configuration codec string '${metadata.decoderConfig.codec}' does not fit to`
-			+ ` the track codec '${trackCodec}'.`,
-		);
-	}
-};
-
-export const validateSubtitleMetadata = (metadata: SubtitleMetadata | undefined) => {
-	if (!metadata) {
-		throw new TypeError('Subtitle metadata must be provided.');
-	}
-	if (typeof metadata !== 'object') {
-		throw new TypeError('Subtitle metadata must be an object.');
-	}
-	if (!metadata.config) {
-		throw new TypeError('Subtitle metadata must include a config object.');
-	}
-	if (typeof metadata.config !== 'object') {
-		throw new TypeError('Subtitle metadata config must be an object.');
-	}
-	if (typeof metadata.config.description !== 'string') {
-		throw new TypeError('Subtitle metadata config description must be a string.');
-	}
 };

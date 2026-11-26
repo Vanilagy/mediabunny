@@ -587,7 +587,12 @@ const createVideoFile = async (appendOnly: boolean) => {
 		},
 	};
 	for (let i = 0; i < 4; i++) {
-		const packet = new EncodedPacket(new Uint8Array(64).fill(i), 'key', i / 4, 1 / 4);
+		const packet = new EncodedPacket({
+			data: new Uint8Array(64).fill(i),
+			type: 'key',
+			timestamp: i / 4,
+			duration: 1 / 4,
+		});
 		await source.add(packet, i === 0 ? meta : undefined);
 	}
 

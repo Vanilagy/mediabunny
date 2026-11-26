@@ -825,9 +825,11 @@ export type SetRequired<T, K extends keyof T> = T & Required<Pick<T, K>>;
  * @group Miscellaneous
  * @public
  */
-export type DeepReadonly<T> = T extends object ? {
-	readonly [K in keyof T]: DeepReadonly<T[K]>;
-} : T;
+export type DeepReadonly<T> = T extends ArrayBufferLike | ArrayBufferView
+	? T
+	: T extends object
+		? { readonly [K in keyof T]: DeepReadonly<T[K]> }
+		: T;
 
 /**
  * Sets all keys K of T to be optional.

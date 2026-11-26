@@ -184,12 +184,12 @@ class TrueHdEncoder extends CustomAudioEncoder {
 			// Only access units carrying a major sync are restart points
 			const syncWord = encodedData.byteLength >= 8 ? new DataView(encodedData).getUint32(4) : null;
 
-			const packet = new EncodedPacket(
-				new Uint8Array(encodedData),
-				syncWord === TRUEHD_MAJOR_SYNC_WORD ? 'key' : 'delta',
-				pts / this.sampleRate,
-				duration / this.sampleRate,
-			);
+			const packet = new EncodedPacket({
+				data: new Uint8Array(encodedData),
+				type: syncWord === TRUEHD_MAJOR_SYNC_WORD ? 'key' : 'delta',
+				timestamp: pts / this.sampleRate,
+				duration: duration / this.sampleRate,
+			});
 
 			this.onPacket(
 				packet,

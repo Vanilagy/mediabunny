@@ -7,7 +7,6 @@
  */
 
 import { buildAdtsHeaderTemplate, parseAacAudioSpecificConfig, writeAdtsFrameLength } from '../../shared/aac-misc';
-import { validateAudioChunkMetadata, validateVideoChunkMetadata } from '../codec';
 import {
 	AC3_REGISTRATION_DESCRIPTOR,
 	AvcDecoderConfigurationRecord,
@@ -25,7 +24,7 @@ import {
 } from '../codec-data';
 import { Bitstream } from '../../shared/bitstream';
 import { assert, promiseWithResolvers, setUint24, toDataView, toUint8Array } from '../misc';
-import { Muxer } from '../muxer';
+import { Muxer, validateAudioTrackDecoderConfig, validateVideoTrackDecoderConfig } from '../muxer';
 import { Output, OutputAudioTrack, OutputTrack, OutputVideoTrack } from '../output';
 import { MpegTsOutputFormat } from '../output-format';
 import { EncodedPacket } from '../packet';
@@ -112,14 +111,13 @@ export class MpegTsMuxer extends Muxer {
 		return buildMpegTsMimeType(this.trackDatas.map(x => x.codecString));
 	}
 
-	private getVideoTrackData(track: OutputVideoTrack, meta?: EncodedVideoChunkMetadata) {
+	private getVideoTrackData(track: OutputVideoTrack, packet: EncodedPacket) {
 		const existingTrackData = this.trackDatas.find(x => x.track === track);
 		if (existingTrackData) {
 			return existingTrackData;
 		}
 
-		validateVideoChunkMetadata(meta, track.source._codec);
-		assert(meta?.decoderConfig);
+		const decoderConfig = validateVideoTrackDecoderConfig(packet.decoderConfig, track.source._codec);
 
 		const codec = track.source._codec;
 		assert(codec === 'avc' || codec === 'hevc');
@@ -137,7 +135,7 @@ export class MpegTsMuxer extends Muxer {
 			pid,
 			streamType,
 			streamId,
-			codecString: meta.decoderConfig.codec,
+			codecString: decoderConfig.codec,
 			timestampProcessingQueue: [],
 			reorderDelay: 0,
 			lastDecodeTimestamp: -Infinity,
@@ -160,14 +158,13 @@ export class MpegTsMuxer extends Muxer {
 		return newTrackData;
 	}
 
-	private getAudioTrackData(track: OutputAudioTrack, meta?: EncodedAudioChunkMetadata) {
+	private getAudioTrackData(track: OutputAudioTrack, packet: EncodedPacket) {
 		const existingTrackData = this.trackDatas.find(x => x.track === track);
 		if (existingTrackData) {
 			return existingTrackData;
 		}
 
-		validateAudioChunkMetadata(meta, track.source._codec);
-		assert(meta?.decoderConfig);
+		const decoderConfig = validateAudioTrackDecoderConfig(packet.decoderConfig, track.source._codec);
 
 		const codec = track.source._codec;
 		assert(codec === 'aac' || codec === 'mp3' || codec === 'ac3' || codec === 'eac3' || codec === 'dts');
@@ -211,7 +208,7 @@ export class MpegTsMuxer extends Muxer {
 			pid,
 			streamType,
 			streamId,
-			codecString: meta.decoderConfig.codec,
+			codecString: decoderConfig.codec,
 			timestampProcessingQueue: [],
 			reorderDelay: 0,
 			lastDecodeTimestamp: -Infinity,
@@ -234,15 +231,11 @@ export class MpegTsMuxer extends Muxer {
 		return newTrackData;
 	}
 
-	async addEncodedVideoPacket(
-		track: OutputVideoTrack,
-		packet: EncodedPacket,
-		meta?: EncodedVideoChunkMetadata,
-	) {
+	async addEncodedVideoPacket(track: OutputVideoTrack, packet: EncodedPacket) {
 		const release = await this.mutex.acquire();
 
 		try {
-			const trackData = this.getVideoTrackData(track, meta);
+			const trackData = this.getVideoTrackData(track, packet);
 
 			this.validateTimestamp(
 				trackData.track,
@@ -250,7 +243,7 @@ export class MpegTsMuxer extends Muxer {
 				packet.type === 'key',
 			);
 
-			const preparedData = this.prepareVideoPacket(trackData, packet, meta);
+			const preparedData = this.prepareVideoPacket(trackData, packet);
 
 			if (packet.type === 'key') {
 				await this.flushTimestampQueue(trackData);
@@ -267,15 +260,11 @@ export class MpegTsMuxer extends Muxer {
 		}
 	}
 
-	async addEncodedAudioPacket(
-		track: OutputAudioTrack,
-		packet: EncodedPacket,
-		meta?: EncodedAudioChunkMetadata,
-	) {
+	async addEncodedAudioPacket(track: OutputAudioTrack, packet: EncodedPacket) {
 		const release = await this.mutex.acquire();
 
 		try {
-			const trackData = this.getAudioTrackData(track, meta);
+			const trackData = this.getAudioTrackData(track, packet);
 
 			this.validateTimestamp(
 				trackData.track,
@@ -283,7 +272,7 @@ export class MpegTsMuxer extends Muxer {
 				packet.type === 'key',
 			);
 
-			const preparedData = this.prepareAudioPacket(trackData, packet, meta);
+			const preparedData = this.prepareAudioPacket(trackData, packet);
 
 			if (packet.type === 'key') {
 				await this.flushTimestampQueue(trackData);
@@ -304,16 +293,12 @@ export class MpegTsMuxer extends Muxer {
 		throw new Error('MPEG-TS does not support subtitles.');
 	}
 
-	private prepareVideoPacket(
-		trackData: MpegTsTrackData,
-		packet: EncodedPacket,
-		meta?: EncodedVideoChunkMetadata,
-	): Uint8Array {
+	private prepareVideoPacket(trackData: MpegTsTrackData, packet: EncodedPacket): Uint8Array {
 		const codec = (trackData.track as OutputVideoTrack).source._codec;
 
 		if (trackData.inputIsAnnexB === null) {
 			// This is the first packet
-			const description = meta?.decoderConfig?.description;
+			const description = packet.decoderConfig?.description;
 
 			if (description) {
 				const bytes = toUint8Array(description);
@@ -431,11 +416,7 @@ export class MpegTsMuxer extends Muxer {
 		return new Uint8Array([0x46, temporalIdPlusOne, 0x50]); // AUD_NUT, layer 0, pic_type 2 plus stop bit
 	}
 
-	private prepareAudioPacket(
-		trackData: MpegTsTrackData,
-		packet: EncodedPacket,
-		meta?: EncodedAudioChunkMetadata,
-	): Uint8Array {
+	private prepareAudioPacket(trackData: MpegTsTrackData, packet: EncodedPacket): Uint8Array {
 		const codec = (trackData.track as OutputAudioTrack).source._codec;
 
 		if (codec === 'mp3' || codec === 'ac3' || codec === 'eac3' || codec === 'dts') {
@@ -445,7 +426,7 @@ export class MpegTsMuxer extends Muxer {
 
 		if (trackData.inputIsAdts === null) {
 			// It's the first packet
-			const description = meta?.decoderConfig?.description;
+			const description = packet.decoderConfig?.description;
 
 			if (description) {
 				const config = parseAacAudioSpecificConfig(toUint8Array(description));

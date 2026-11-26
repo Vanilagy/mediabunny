@@ -713,15 +713,13 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 			sideData.alpha = toUint8Array(matroskaBlockAdditional).subarray(8); // Skip the BlockAddId
 		}
 
-		const packet = new EncodedPacket(
-			packetData,
-			this.packet.isKeyframe ? 'key' : 'delta',
+		const packet = new EncodedPacket({
+			data: packetData,
+			type: this.packet.isKeyframe ? 'key' : 'delta',
 			timestamp,
 			duration,
-			undefined,
-			undefined,
 			sideData,
-		);
+		});
 
 		if (decoderConfigCodecString !== null) {
 			// Create the decoder config

@@ -147,10 +147,10 @@ const parseWebVtt = (text: string) => {
 
 	const parser = new SubtitleParser({
 		codec: 'webvtt',
-		output: (cue, metadata) => {
+		output: (cue) => {
 			cues.push(cue);
-			if (metadata.config) {
-				description = metadata.config.description;
+			if (cue.config) {
+				description = cue.config.description;
 			}
 		},
 	});

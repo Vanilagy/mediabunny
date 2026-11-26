@@ -482,7 +482,12 @@ test('Empty MP3 with priming packet', async () => {
 			sampleRate: 44100,
 			numberOfChannels: 2,
 		},
-		primingPacket: new EncodedPacket(frameHeader, 'key', 0, 0),
+		primingPacket: new EncodedPacket({
+			data: frameHeader,
+			type: 'key',
+			timestamp: 0,
+			duration: 0,
+		}),
 	});
 
 	await output.start();
@@ -747,9 +752,24 @@ test('Packet stats beginning with a zero-duration packet', async () => {
 			codedHeight: 16,
 		},
 	};
-	await videoSource.add(new EncodedPacket(new Uint8Array(8), 'key', 0, 0), meta);
-	await videoSource.add(new EncodedPacket(new Uint8Array(8), 'key', 0, 0.5), meta);
-	await videoSource.add(new EncodedPacket(new Uint8Array(8), 'key', 0.5, 0.5), meta);
+	await videoSource.add(new EncodedPacket({
+		data: new Uint8Array(8),
+		type: 'key',
+		timestamp: 0,
+		duration: 0,
+	}), meta);
+	await videoSource.add(new EncodedPacket({
+		data: new Uint8Array(8),
+		type: 'key',
+		timestamp: 0,
+		duration: 0.5,
+	}), meta);
+	await videoSource.add(new EncodedPacket({
+		data: new Uint8Array(8),
+		type: 'key',
+		timestamp: 0.5,
+		duration: 0.5,
+	}), meta);
 	await output.finalize();
 
 	using input = new Input({
@@ -816,7 +836,12 @@ test('Duration next to an empty track', async () => {
 
 	// The video lies entirely before zero
 	for (const timestamp of [-2, -1.5]) {
-		await videoSource.add(new EncodedPacket(new Uint8Array(8), 'key', timestamp, 0.5), {
+		await videoSource.add(new EncodedPacket({
+			data: new Uint8Array(8),
+			type: 'key',
+			timestamp,
+			duration: 0.5,
+		}), {
 			decoderConfig: {
 				codec: 'vp8',
 				codedWidth: 16,
@@ -847,7 +872,12 @@ test('Missing track index, MP4', async () => {
 	const videoSource = new EncodedVideoPacketSource('vp8');
 	output.addVideoTrack(videoSource);
 	await output.start();
-	await videoSource.add(new EncodedPacket(new Uint8Array(8), 'key', 0, 0.5), {
+	await videoSource.add(new EncodedPacket({
+		data: new Uint8Array(8),
+		type: 'key',
+		timestamp: 0,
+		duration: 0.5,
+	}), {
 		decoderConfig: {
 			codec: 'vp8',
 			codedWidth: 16,
@@ -877,7 +907,12 @@ test('Missing track index, Matroska', async () => {
 	const videoSource = new EncodedVideoPacketSource('vp8');
 	output.addVideoTrack(videoSource);
 	await output.start();
-	await videoSource.add(new EncodedPacket(new Uint8Array(8), 'key', 0, 0.5), {
+	await videoSource.add(new EncodedPacket({
+		data: new Uint8Array(8),
+		type: 'key',
+		timestamp: 0,
+		duration: 0.5,
+	}), {
 		decoderConfig: {
 			codec: 'vp8',
 			codedWidth: 16,
@@ -919,7 +954,12 @@ const testMpegTsWithoutPids = async (droppedPids: number[], expectedError: strin
 	const frame = new Uint8Array(576);
 	frame.set([0xff, 0xfb, 0x98, 0xc0]);
 	for (let i = 0; i < 10; i++) {
-		await audioSource.add(new EncodedPacket(frame, 'key', 0.036 * i, 0.036), {
+		await audioSource.add(new EncodedPacket({
+			data: frame,
+			type: 'key',
+			timestamp: 0.036 * i,
+			duration: 0.036,
+		}), {
 			decoderConfig: {
 				codec: 'mp3',
 				sampleRate: 32000,

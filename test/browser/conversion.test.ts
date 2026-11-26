@@ -246,7 +246,12 @@ const addAacPackets = async (source: EncodedAudioPacketSource, durationSeconds: 
 	const count = Math.ceil(durationSeconds / packetDuration);
 	for (let i = 0; i < count; i++) {
 		await source.add(
-			new EncodedPacket(aacPacketData, 'key', i * packetDuration, packetDuration),
+			new EncodedPacket({
+				data: aacPacketData,
+				type: 'key',
+				timestamp: i * packetDuration,
+				duration: packetDuration,
+			}),
 			i === 0 ? aacMetadata : undefined,
 		);
 	}
@@ -1229,14 +1234,24 @@ test('Packet copy, open GOP leading packets', async () => {
 	for (const timestamp of [0, 0.25, 0.5, 0.75, 1.5, 1, 1.25, 1.75, 2, 2.25]) {
 		const type = keyTimestamps.includes(timestamp) ? 'key' : 'delta';
 
-		await videoSource.add(new EncodedPacket(new Uint8Array(16), type, timestamp, 0.25), {
+		await videoSource.add(new EncodedPacket({
+			data: new Uint8Array(16),
+			type,
+			timestamp,
+			duration: 0.25,
+		}), {
 			decoderConfig: {
 				codec: 'vp8',
 				codedWidth: 320,
 				codedHeight: 240,
 			},
 		});
-		await audioSource.add(new EncodedPacket(new Uint8Array(24000), type, timestamp, 0.25), {
+		await audioSource.add(new EncodedPacket({
+			data: new Uint8Array(24000),
+			type,
+			timestamp,
+			duration: 0.25,
+		}), {
 			decoderConfig: {
 				codec: 'pcm-s16',
 				numberOfChannels: 1,
@@ -1875,7 +1890,12 @@ const createTwoVideoTrackFile = async () => {
 
 	await output.start();
 	for (const source of sources) {
-		await source.add(new EncodedPacket(new Uint8Array(1024), 'key', 0, 1), {
+		await source.add(new EncodedPacket({
+			data: new Uint8Array(1024),
+			type: 'key',
+			timestamp: 0,
+			duration: 1,
+		}), {
 			decoderConfig: {
 				codec: 'avc1.64001f',
 				codedWidth: 1280,

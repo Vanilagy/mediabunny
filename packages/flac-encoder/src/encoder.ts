@@ -182,12 +182,12 @@ class FlacEncoder extends CustomAudioEncoder {
 		for (const p of packets) {
 			const data = new Uint8Array(p.encodedData);
 
-			const packet = new EncodedPacket(
+			const packet = new EncodedPacket({
 				data,
-				'key',
-				this.nextTimestampInSamples / this.config.sampleRate,
-				p.samples / this.config.sampleRate,
-			);
+				type: 'key',
+				timestamp: this.nextTimestampInSamples / this.config.sampleRate,
+				duration: p.samples / this.config.sampleRate,
+			});
 			this.nextTimestampInSamples += p.samples;
 
 			this.onPacket(

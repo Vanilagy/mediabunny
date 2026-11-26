@@ -6,7 +6,6 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { validateAudioChunkMetadata } from '../codec';
 import { createVorbisComments, FlacBlockType } from '../codec-data';
 import {
 	assert,
@@ -14,7 +13,7 @@ import {
 	toDataView,
 	toUint8Array,
 } from '../misc';
-import { Muxer } from '../muxer';
+import { Muxer, validateAudioTrackDecoderConfig } from '../muxer';
 import { Output, OutputAudioTrack } from '../output';
 import { FlacOutputFormat } from '../output-format';
 import { EncodedPacket } from '../packet';
@@ -69,7 +68,6 @@ export class FlacMuxer extends Muxer {
 			assert(track?.isAudioTrack());
 
 			if (track.metadata.decoderConfig) {
-				validateAudioChunkMetadata({ decoderConfig: track.metadata.decoderConfig }, track.source._codec);
 				this.applyDecoderConfig(track.metadata.decoderConfig);
 			}
 		} finally {
@@ -269,11 +267,7 @@ export class FlacMuxer extends Muxer {
 		throw new Error('FLAC does not support video.');
 	}
 
-	async addEncodedAudioPacket(
-		track: OutputAudioTrack,
-		packet: EncodedPacket,
-		meta?: EncodedAudioChunkMetadata,
-	): Promise<void> {
+	async addEncodedAudioPacket(track: OutputAudioTrack, packet: EncodedPacket): Promise<void> {
 		const release = await this.mutex.acquire();
 
 		try {
@@ -285,12 +279,7 @@ export class FlacMuxer extends Muxer {
 
 			if (this.sampleRate === null) {
 				// It's the first packet
-				validateAudioChunkMetadata(meta, track.source._codec);
-
-				assert(meta);
-				assert(meta.decoderConfig);
-
-				this.applyDecoderConfig(meta.decoderConfig);
+				this.applyDecoderConfig(validateAudioTrackDecoderConfig(packet.decoderConfig, track.source._codec));
 			}
 
 			if (!this.metadataWritten) {

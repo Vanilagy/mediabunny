@@ -374,9 +374,24 @@ test('PCM packets smaller than a frame', async () => {
 			sampleRate: 48000,
 		},
 	};
-	await source.add(new EncodedPacket(new Uint8Array(4 * 480), 'key', 0, 0.01), meta);
-	await source.add(new EncodedPacket(new Uint8Array(0), 'key', 0.01, 0));
-	await source.add(new EncodedPacket(new Uint8Array(4 * 480), 'key', 0.01, 0.01));
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(4 * 480),
+		type: 'key',
+		timestamp: 0,
+		duration: 0.01,
+	}), meta);
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(0),
+		type: 'key',
+		timestamp: 0.01,
+		duration: 0,
+	}));
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(4 * 480),
+		type: 'key',
+		timestamp: 0.01,
+		duration: 0.01,
+	}));
 	await output.finalize();
 
 	using input = new Input({

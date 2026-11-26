@@ -267,6 +267,7 @@ export {
 } from './input-track';
 export {
 	EncodedPacket,
+	type EncodedPacketInit,
 	type EncodedPacketSideData,
 	type PacketType,
 } from './packet';

@@ -93,10 +93,108 @@ test('CallSerializer call after a failed call', async () => {
 });
 
 test('Packet clone with different-size data', () => {
-	const packet = new EncodedPacket(new Uint8Array(10), 'key', 0, 1);
+	const packet = new EncodedPacket({
+		data: new Uint8Array(10),
+		type: 'key',
+		timestamp: 0,
+		duration: 1,
+	});
 	const clone = packet.clone({ data: new Uint8Array(5) });
 
 	expect(clone.byteLength).toBe(5);
+});
+
+test('Packet init object', () => {
+	const data = new Uint8Array(10);
+	const sideData = { alpha: new Uint8Array(3) };
+	// eslint-disable-next-line @typescript-eslint/no-deprecated
+	const positional = new EncodedPacket(data, 'delta', 1, 2, 3, 10, sideData);
+	const fromInit = new EncodedPacket({
+		data,
+		type: 'delta',
+		timestamp: 1,
+		duration: 2,
+		sequenceNumber: 3,
+		byteLength: 10,
+		sideData,
+	});
+	expect(fromInit).toEqual(positional);
+
+	// Defaults
+	const minimal = new EncodedPacket({
+		data,
+		type: 'key',
+		timestamp: 0,
+		duration: 0,
+	});
+	expect(minimal.sequenceNumber).toBe(-1);
+	expect(minimal.byteLength).toBe(10);
+	expect(minimal.sideData).toEqual({});
+	expect(minimal.decoderConfig).toBe(null);
+
+	// Invalid input
+	expect(() => new EncodedPacket(null as never)).toThrow('init must be an object.');
+	expect(() => new EncodedPacket({
+		data: [] as never,
+		type: 'key',
+		timestamp: 0,
+		duration: 0,
+	})).toThrow('data must be a Uint8Array.');
+	expect(() => new EncodedPacket({
+		data,
+		type: 'key',
+		timestamp: 0,
+		duration: -1,
+	})).toThrow('duration must be a non-negative number.');
+});
+
+test('Packet decoder config', () => {
+	const videoConfig = {
+		type: 'video' as const,
+		codec: 'vp8',
+	};
+	const audioConfig = {
+		type: 'audio' as const,
+		codec: 'opus',
+		sampleRate: 48000,
+		numberOfChannels: 2,
+	};
+	const createPacket = (decoderConfig: unknown) => new EncodedPacket({
+		data: new Uint8Array(1),
+		type: 'key',
+		timestamp: 0,
+		duration: 0,
+		decoderConfig: decoderConfig as never,
+	});
+
+	const packet = createPacket(videoConfig);
+	expect(packet.decoderConfig).toBe(videoConfig);
+	expect(createPacket(audioConfig).decoderConfig).toBe(audioConfig);
+
+	// Configs are validated
+	expect(() => createPacket(5)).toThrow('decoderConfig, when provided, must be an object.');
+	expect(() => createPacket({ codec: 'vp8' })).toThrow('decoderConfig.type must be \'video\' or \'audio\'.');
+	expect(() => createPacket({
+		type: 'video',
+		codec: 'opus',
+	})).toThrow('decoderConfig codec string must be a valid video codec string');
+	expect(() => createPacket({
+		type: 'audio',
+		codec: 'opus',
+		sampleRate: 48000,
+	})).toThrow('decoderConfig must specify a valid numberOfChannels (positive integer).');
+
+	// But only the first time a config is seen
+	const mutatedConfig = { ...videoConfig };
+	createPacket(mutatedConfig);
+	mutatedConfig.codec = 'opus';
+	expect(() => createPacket(mutatedConfig)).not.toThrow();
+
+	// Clones keep the config unless it's overridden or removed
+	expect(packet.clone().decoderConfig).toBe(videoConfig);
+	expect(packet.clone({ decoderConfig: audioConfig }).decoderConfig).toBe(audioConfig);
+	expect(packet.clone({ decoderConfig: null }).decoderConfig).toBe(null);
+	expect(() => packet.clone({ decoderConfig: { codec: 'vp8' } as never })).toThrow('decoderConfig.type');
 });
 
 test('ISO date parsing', () => {

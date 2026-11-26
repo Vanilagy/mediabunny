@@ -702,6 +702,7 @@ export class MpegTsDemuxer extends Demuxer {
 							}
 
 							elementaryStream.info.decoderConfig = {
+								type: 'video',
 								codec: extractVideoCodecString({
 									width: elementaryStream.info.width,
 									height: elementaryStream.info.height,
@@ -846,6 +847,7 @@ export class MpegTsDemuxer extends Demuxer {
 							}
 
 							elementaryStream.info.decoderConfig = {
+								type: 'audio',
 								codec: extractAudioCodecString({
 									codec: elementaryStream.info.codec,
 									codecDescription: null,
@@ -1281,14 +1283,15 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 				: 'delta';
 		}
 
-		return new EncodedPacket(
-			options.metadataOnly ? PLACEHOLDER_DATA : suppliedPacket.data,
-			packetType,
-			suppliedPacket.pts / MPEG_TS_TIMESCALE,
-			Math.max(duration / MPEG_TS_TIMESCALE, 0),
-			suppliedPacket.sequenceNumber,
-			suppliedPacket.data.byteLength,
-		);
+		return new EncodedPacket({
+			data: options.metadataOnly ? PLACEHOLDER_DATA : suppliedPacket.data,
+			type: packetType,
+			timestamp: suppliedPacket.pts / MPEG_TS_TIMESCALE,
+			duration: Math.max(duration / MPEG_TS_TIMESCALE, 0),
+			sequenceNumber: suppliedPacket.sequenceNumber,
+			byteLength: suppliedPacket.data.byteLength,
+			decoderConfig: this.elementaryStream.info.decoderConfig ?? undefined,
+		});
 	}
 
 	async getFirstPacket(options: PacketRetrievalOptions): Promise<EncodedPacket | null> {

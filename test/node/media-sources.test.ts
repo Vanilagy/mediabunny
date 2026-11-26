@@ -75,7 +75,12 @@ class TestAudioEncoder extends CustomAudioEncoder {
 
 	encode(sample: AudioSample) {
 		this.onPacket(
-			new EncodedPacket(new Uint8Array(16), 'key', sample.timestamp, sample.duration),
+			new EncodedPacket({
+				data: new Uint8Array(16),
+				type: 'key',
+				timestamp: sample.timestamp,
+				duration: sample.duration,
+			}),
 			AAC_META,
 		);
 	}
@@ -100,8 +105,18 @@ test('Muxer error when closing a source', async () => {
 
 	// The audio track isn't known yet, so the muxer holds on to these instead of writing them
 	const videoMeta = { decoderConfig: { codec: 'vp8', codedWidth: 1280, codedHeight: 720 } };
-	await videoSource.add(new EncodedPacket(new Uint8Array(8), 'key', 0, 0.1), videoMeta);
-	await videoSource.add(new EncodedPacket(new Uint8Array(8), 'delta', 0.1, 0.1));
+	await videoSource.add(new EncodedPacket({
+		data: new Uint8Array(8),
+		type: 'key',
+		timestamp: 0,
+		duration: 0.1,
+	}), videoMeta);
+	await videoSource.add(new EncodedPacket({
+		data: new Uint8Array(8),
+		type: 'delta',
+		timestamp: 0.1,
+		duration: 0.1,
+	}));
 
 	const unhandledRejections: unknown[] = [];
 	const onUnhandledRejection = (reason: unknown) => {
@@ -169,12 +184,32 @@ test('Muxer error for a packet emitted during the encoder flush', async () => {
 	useTestEncoder({
 		flush: (encoder) => {
 			const decoderConfig = { codec: 'vp09.00.10.08', codedWidth: 64, codedHeight: 64 };
-			encoder.onPacket(new EncodedPacket(new Uint8Array(8), 'key', 0, 0.3), { decoderConfig });
-			encoder.onPacket(new EncodedPacket(new Uint8Array(8), 'delta', 0.3, 0.3));
+			encoder.onPacket(new EncodedPacket({
+				data: new Uint8Array(8),
+				type: 'key',
+				timestamp: 0,
+				duration: 0.3,
+			}), { decoderConfig });
+			encoder.onPacket(new EncodedPacket({
+				data: new Uint8Array(8),
+				type: 'delta',
+				timestamp: 0.3,
+				duration: 0.3,
+			}));
 			// Completes the first chunk, making the muxer wait for the slow target
-			encoder.onPacket(new EncodedPacket(new Uint8Array(8), 'key', 0.6, 0.3));
+			encoder.onPacket(new EncodedPacket({
+				data: new Uint8Array(8),
+				type: 'key',
+				timestamp: 0.6,
+				duration: 0.3,
+			}));
 			// Invalid since it lies before the end of the previous GOP
-			encoder.onPacket(new EncodedPacket(new Uint8Array(8), 'delta', 0.1, 0.3));
+			encoder.onPacket(new EncodedPacket({
+				data: new Uint8Array(8),
+				type: 'delta',
+				timestamp: 0.1,
+				duration: 0.3,
+			}));
 		},
 	});
 
@@ -411,8 +446,18 @@ test('Muxer error for a packet emitted by the final flush', async () => {
 	useAudioEncoder(class extends TestAudioEncoder {
 		override flush() {
 			// The first packet keeps the muxer busy with the slow target while the second one is still queued up
-			this.onPacket(new EncodedPacket(new Uint8Array(16), 'key', 0.1, 0.1), AAC_META);
-			this.onPacket(new EncodedPacket(new Uint8Array(16), 'key', -1, 0.1), AAC_META);
+			this.onPacket(new EncodedPacket({
+				data: new Uint8Array(16),
+				type: 'key',
+				timestamp: 0.1,
+				duration: 0.1,
+			}), AAC_META);
+			this.onPacket(new EncodedPacket({
+				data: new Uint8Array(16),
+				type: 'key',
+				timestamp: -1,
+				duration: 0.1,
+			}), AAC_META);
 		}
 	});
 
@@ -534,7 +579,12 @@ test('Add while the source is closing', async () => {
 
 	// The source is still flushing, but no more data must come in
 	source.close();
-	expect(() => source.add(new EncodedPacket(new Uint8Array(16), 'key', 0, 0.1), AAC_META))
+	expect(() => source.add(new EncodedPacket({
+		data: new Uint8Array(16),
+		type: 'key',
+		timestamp: 0,
+		duration: 0.1,
+	}), AAC_META))
 		.toThrow('Source is closed.');
 
 	await output.finalize();

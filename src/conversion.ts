@@ -1714,8 +1714,6 @@ export class Conversion {
 
 			this._registerTrackPump(async (pump) => {
 				const sink = new EncodedPacketSink(track);
-				const decoderConfig = await track.getDecoderConfig();
-				const meta: EncodedVideoChunkMetadata = { decoderConfig: decoderConfig ?? undefined };
 				const packetOrderValidator = new PacketOrderValidator();
 				let droppingGop = false;
 				let warnedAboutDroppedPackets = false;
@@ -1818,7 +1816,7 @@ export class Conversion {
 					});
 
 					this._updateProgress(outputTrackId, modifiedPacket.timestamp + modifiedPacket.duration);
-					await source.add(modifiedPacket, meta);
+					await source.add(modifiedPacket);
 
 					if (this._synchronizer.shouldWait(outputTrackId, modifiedPacket.timestamp)) {
 						await this._synchronizer.wait(modifiedPacket.timestamp);
@@ -2221,8 +2219,6 @@ export class Conversion {
 
 			this._registerTrackPump(async (pump) => {
 				const sink = new EncodedPacketSink(track);
-				const decoderConfig = await track.getDecoderConfig();
-				const meta: EncodedAudioChunkMetadata = { decoderConfig: decoderConfig ?? undefined };
 				const packetOrderValidator = new PacketOrderValidator();
 				let droppingGop = false;
 				let warnedAboutDroppedPackets = false;
@@ -2276,7 +2272,7 @@ export class Conversion {
 					});
 
 					this._updateProgress(outputTrackId, modifiedPacket.timestamp + modifiedPacket.duration);
-					await source.add(modifiedPacket, meta);
+					await source.add(modifiedPacket);
 
 					if (this._synchronizer.shouldWait(outputTrackId, modifiedPacket.timestamp)) {
 						await this._synchronizer.wait(modifiedPacket.timestamp);

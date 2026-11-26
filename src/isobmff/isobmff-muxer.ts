@@ -21,13 +21,13 @@ import {
 	vttc,
 	vtte,
 } from './isobmff-boxes';
-import { Muxer } from '../muxer';
+import { Muxer, validateAudioTrackDecoderConfig, validateVideoTrackDecoderConfig } from '../muxer';
 import { Output, OutputAudioTrack, OutputSubtitleTrack, OutputTrack, OutputVideoTrack, TrackType } from '../output';
 import { Writer } from '../writer';
 import { BufferTarget } from '../target';
 import { assert, computeRationalApproximation, last, promiseWithResolvers, Rational, simplifyRational } from '../misc';
 import { IsobmffOutputFormatOptions, IsobmffOutputFormat, MovOutputFormat, CmafOutputFormat } from '../output-format';
-import { inlineTimestampRegex, SubtitleConfig, SubtitleCue, SubtitleMetadata } from '../subtitles';
+import { inlineTimestampRegex, SubtitleConfig, SubtitleCue } from '../subtitles';
 import {
 	aacChannelMap,
 	aacFrequencyTable,
@@ -43,9 +43,6 @@ import {
 	PCM_AUDIO_CODECS,
 	PcmAudioCodec,
 	SubtitleCodec,
-	validateAudioChunkMetadata,
-	validateSubtitleMetadata,
-	validateVideoChunkMetadata,
 } from '../codec';
 import { MAX_ADTS_FRAME_HEADER_SIZE, MIN_ADTS_FRAME_HEADER_SIZE, readAdtsFrameHeader } from '../adts/adts-reader';
 import { FileSlice } from '../reader';
@@ -395,17 +392,9 @@ export class IsobmffMuxer extends Muxer {
 
 			for (const track of this.output.tracks) {
 				if (track.isVideoTrack() && track.metadata.decoderConfig) {
-					this.getVideoTrackData(
-						track,
-						track.metadata.primingPacket ?? null,
-						{ decoderConfig: track.metadata.decoderConfig },
-					);
+					this.getVideoTrackData(track, track.metadata.primingPacket ?? null, track.metadata.decoderConfig);
 				} else if (track.isAudioTrack() && track.metadata.decoderConfig) {
-					this.getAudioTrackData(
-						track,
-						track.metadata.primingPacket ?? null,
-						{ decoderConfig: track.metadata.decoderConfig },
-					);
+					this.getAudioTrackData(track, track.metadata.primingPacket ?? null, track.metadata.decoderConfig);
 				}
 			}
 		} finally {
@@ -447,18 +436,17 @@ export class IsobmffMuxer extends Muxer {
 		});
 	}
 
-	private getVideoTrackData(track: OutputVideoTrack, packet: EncodedPacket | null, meta?: EncodedVideoChunkMetadata) {
+	private getVideoTrackData(
+		track: OutputVideoTrack,
+		packet: EncodedPacket | null,
+		inputDecoderConfig: VideoDecoderConfig | EncodedPacket['decoderConfig'],
+	) {
 		const existingTrackData = this.trackDatas.find(x => x.track === track);
 		if (existingTrackData) {
 			return existingTrackData as IsobmffVideoTrackData;
 		}
 
-		validateVideoChunkMetadata(meta, track.source._codec);
-
-		assert(meta);
-		assert(meta.decoderConfig);
-
-		const decoderConfig = { ...meta.decoderConfig };
+		const decoderConfig = { ...validateVideoTrackDecoderConfig(inputDecoderConfig, track.source._codec) };
 		assert(decoderConfig.codedWidth !== undefined);
 		assert(decoderConfig.codedHeight !== undefined);
 
@@ -565,18 +553,17 @@ export class IsobmffMuxer extends Muxer {
 		return newTrackData;
 	}
 
-	private getAudioTrackData(track: OutputAudioTrack, packet: EncodedPacket | null, meta?: EncodedAudioChunkMetadata) {
+	private getAudioTrackData(
+		track: OutputAudioTrack,
+		packet: EncodedPacket | null,
+		inputDecoderConfig: AudioDecoderConfig | EncodedPacket['decoderConfig'],
+	) {
 		const existingTrackData = this.trackDatas.find(x => x.track === track);
 		if (existingTrackData) {
 			return existingTrackData as IsobmffAudioTrackData;
 		}
 
-		validateAudioChunkMetadata(meta, track.source._codec);
-
-		assert(meta);
-		assert(meta.decoderConfig);
-
-		const decoderConfig = { ...meta.decoderConfig };
+		const decoderConfig = { ...validateAudioTrackDecoderConfig(inputDecoderConfig, track.source._codec) };
 		let requiresAdtsStripping = false;
 
 		if (track.source._codec === 'aac' && !decoderConfig.description) {
@@ -645,8 +632,8 @@ export class IsobmffMuxer extends Muxer {
 			track,
 			type: 'audio',
 			info: {
-				numberOfChannels: meta.decoderConfig.numberOfChannels,
-				sampleRate: meta.decoderConfig.sampleRate,
+				numberOfChannels: decoderConfig.numberOfChannels,
+				sampleRate: decoderConfig.sampleRate,
 				decoderConfig,
 				requiresPcmTransformation:
 					!this.isFragmented
@@ -688,23 +675,21 @@ export class IsobmffMuxer extends Muxer {
 		return newTrackData;
 	}
 
-	private getSubtitleTrackData(track: OutputSubtitleTrack, meta?: SubtitleMetadata) {
+	private getSubtitleTrackData(track: OutputSubtitleTrack, cue: SubtitleCue) {
 		const existingTrackData = this.trackDatas.find(x => x.track === track);
 		if (existingTrackData) {
 			return existingTrackData as IsobmffSubtitleTrackData;
 		}
 
-		validateSubtitleMetadata(meta);
-
-		assert(meta);
-		assert(meta.config);
+		// The first cue always carries the config
+		assert(cue.config);
 
 		const newTrackData: IsobmffSubtitleTrackData = {
 			muxer: this,
 			track,
 			type: 'subtitle',
 			info: {
-				config: meta.config,
+				config: cue.config,
 			},
 			timescale: 1000, // Reasonable
 			samples: [],
@@ -738,11 +723,11 @@ export class IsobmffMuxer extends Muxer {
 		return newTrackData;
 	}
 
-	async addEncodedVideoPacket(track: OutputVideoTrack, packet: EncodedPacket, meta?: EncodedVideoChunkMetadata) {
+	async addEncodedVideoPacket(track: OutputVideoTrack, packet: EncodedPacket) {
 		const release = await this.mutex.acquire();
 
 		try {
-			const trackData = this.getVideoTrackData(track, packet, meta);
+			const trackData = this.getVideoTrackData(track, packet, packet.decoderConfig);
 
 			let packetData = packet.data;
 			if (trackData.info.requiresAnnexBTransformation) {
@@ -781,11 +766,11 @@ export class IsobmffMuxer extends Muxer {
 		}
 	}
 
-	async addEncodedAudioPacket(track: OutputAudioTrack, packet: EncodedPacket, meta?: EncodedAudioChunkMetadata) {
+	async addEncodedAudioPacket(track: OutputAudioTrack, packet: EncodedPacket) {
 		const release = await this.mutex.acquire();
 
 		try {
-			const trackData = this.getAudioTrackData(track, packet, meta);
+			const trackData = this.getAudioTrackData(track, packet, packet.decoderConfig);
 
 			let packetData = packet.data;
 			if (trackData.info.requiresAdtsStripping) {
@@ -944,11 +929,11 @@ export class IsobmffMuxer extends Muxer {
 		return deltaInTimescale / trackData.timescale;
 	}
 
-	async addSubtitleCue(track: OutputSubtitleTrack, cue: SubtitleCue, meta?: SubtitleMetadata) {
+	async addSubtitleCue(track: OutputSubtitleTrack, cue: SubtitleCue) {
 		const release = await this.mutex.acquire();
 
 		try {
-			const trackData = this.getSubtitleTrackData(track, meta);
+			const trackData = this.getSubtitleTrackData(track, cue);
 
 			this.validateTimestamp(trackData.track, cue.timestamp, true);
 

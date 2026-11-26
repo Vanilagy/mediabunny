@@ -18,7 +18,12 @@ test('Default track disposition', async () => {
 	output.addVideoTrack(source);
 
 	await output.start();
-	await source.add(new EncodedPacket(new Uint8Array(1024), 'key', 0, 1), {
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(1024),
+		type: 'key',
+		timestamp: 0,
+		duration: 1,
+	}), {
 		decoderConfig: {
 			codec: 'avc1.123456',
 			codedWidth: 1920,
@@ -65,7 +70,12 @@ test('Customized track disposition', async () => {
 	});
 
 	await output.start();
-	await source.add(new EncodedPacket(new Uint8Array(1024), 'key', 0, 1), {
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(1024),
+		type: 'key',
+		timestamp: 0,
+		duration: 1,
+	}), {
 		decoderConfig: {
 			codec: 'avc1.123456',
 			codedWidth: 1920,

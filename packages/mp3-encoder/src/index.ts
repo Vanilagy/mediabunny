@@ -201,7 +201,12 @@ class Mp3Encoder extends CustomAudioEncoder {
 			const data = this.buffer.slice(pos, pos + header.totalSize);
 			const timestamp = this.nextTimestampInSamples / this.config.sampleRate;
 			const duration = header.audioSamplesInFrame / header.sampleRate;
-			this.onPacket(new EncodedPacket(data, 'key', timestamp, duration), this.chunkMetadata);
+			this.onPacket(new EncodedPacket({
+				data,
+				type: 'key',
+				timestamp,
+				duration,
+			}), this.chunkMetadata);
 
 			this.chunkMetadata = {}; // Mimic WebCodecs-like behavior
 

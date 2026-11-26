@@ -64,6 +64,7 @@ export class Mp3Demuxer extends Demuxer {
 	metadataPromise: Promise<void> | null = null;
 	firstFrameHeader: Mp3FrameHeader | null = null;
 	firstFrameHeaderPos: number | null = null;
+	decoderConfig: ExtendedAudioDecoderConfig | null = null;
 	xingFrameHeader: Mp3FrameHeader | null = null;
 	xingFrameHeaderPos: number | null = null;
 	loadedSamples: Sample[] = []; // All samples from the start of the file to lastLoadedPos
@@ -104,6 +105,13 @@ export class Mp3Demuxer extends Demuxer {
 			if (!this.firstFrameHeader) {
 				throw new Error('No valid MP3 frame found.');
 			}
+
+			this.decoderConfig = {
+				type: 'audio',
+				codec: 'mp3',
+				numberOfChannels: getMp3ChannelCount(this.firstFrameHeader.channel),
+				sampleRate: this.firstFrameHeader.sampleRate,
+			};
 
 			this.trackBackings = [new Mp3AudioTrackBacking(this)];
 		})();
@@ -456,13 +464,13 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 	}
 
 	getNumberOfChannels() {
-		assert(this.demuxer.firstFrameHeader);
-		return getMp3ChannelCount(this.demuxer.firstFrameHeader.channel);
+		assert(this.demuxer.decoderConfig);
+		return this.demuxer.decoderConfig.numberOfChannels;
 	}
 
 	getSampleRate() {
-		assert(this.demuxer.firstFrameHeader);
-		return this.demuxer.firstFrameHeader.sampleRate;
+		assert(this.demuxer.decoderConfig);
+		return this.demuxer.decoderConfig.sampleRate;
 	}
 
 	getDisposition() {
@@ -471,14 +479,9 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 		};
 	}
 
-	async getDecoderConfig(): Promise<ExtendedAudioDecoderConfig> {
-		assert(this.demuxer.firstFrameHeader);
-
-		return {
-			codec: 'mp3',
-			numberOfChannels: getMp3ChannelCount(this.demuxer.firstFrameHeader.channel),
-			sampleRate: this.demuxer.firstFrameHeader.sampleRate,
-		};
+	async getDecoderConfig() {
+		assert(this.demuxer.decoderConfig);
+		return this.demuxer.decoderConfig;
 	}
 
 	async getPacketAtIndex(sampleIndex: number, options: PacketRetrievalOptions) {
@@ -510,14 +513,15 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 			data = readBytes(slice, rawSample.dataSize);
 		}
 
-		return new EncodedPacket(
+		return new EncodedPacket({
 			data,
-			'key',
-			rawSample.timestamp,
-			rawSample.duration,
-			sampleIndex,
-			rawSample.dataSize,
-		);
+			type: 'key',
+			timestamp: rawSample.timestamp,
+			duration: rawSample.duration,
+			sequenceNumber: sampleIndex,
+			byteLength: rawSample.dataSize,
+			decoderConfig: this.demuxer.decoderConfig!,
+		});
 	}
 
 	getFirstPacket(options: PacketRetrievalOptions) {

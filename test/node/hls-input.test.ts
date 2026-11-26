@@ -2122,11 +2122,21 @@ const writeHls = async (
 
 	await addPackets(
 		(timestamp, isKey) => videoSource.add(
-			new EncodedPacket(videoPacket.data, isKey ? 'key' : 'delta', timestamp, 0.5),
+			new EncodedPacket({
+				data: videoPacket.data,
+				type: isKey ? 'key' : 'delta',
+				timestamp,
+				duration: 0.5,
+			}),
 			{ decoderConfig: videoDecoderConfig },
 		),
 		timestamp => audioSource.add(
-			new EncodedPacket(audioPacket.data, 'key', timestamp, 0.5),
+			new EncodedPacket({
+				data: audioPacket.data,
+				type: 'key',
+				timestamp,
+				duration: 0.5,
+			}),
 			{ decoderConfig: { ...audioDecoderConfig, ...audioDecoderConfigOverrides } },
 		),
 	);

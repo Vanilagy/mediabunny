@@ -50,7 +50,6 @@ type FlacAudioInfo = {
 	maximumBlockSize: number;
 	minimumFrameSize: number;
 	maximumFrameSize: number;
-	description: Uint8Array;
 };
 
 type Sample = {
@@ -78,6 +77,7 @@ export class FlacDemuxer extends Demuxer {
 	metadataTags: MetadataTags = {};
 
 	audioInfo: FlacAudioInfo | null = null;
+	decoderConfig: ExtendedAudioDecoderConfig | null = null;
 	lastLoadedPos: number | null = null;
 	blockingBit: number | null = null;
 
@@ -215,6 +215,12 @@ export class FlacDemuxer extends Demuxer {
 							maximumBlockSize,
 							minimumFrameSize,
 							maximumFrameSize,
+						};
+						this.decoderConfig = {
+							type: 'audio',
+							codec: 'flac',
+							numberOfChannels,
+							sampleRate,
 							description,
 						};
 
@@ -597,13 +603,13 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 	}
 
 	getNumberOfChannels() {
-		assert(this.demuxer.audioInfo);
-		return this.demuxer.audioInfo.numberOfChannels;
+		assert(this.demuxer.decoderConfig);
+		return this.demuxer.decoderConfig.numberOfChannels;
 	}
 
 	getSampleRate() {
-		assert(this.demuxer.audioInfo);
-		return this.demuxer.audioInfo.sampleRate;
+		assert(this.demuxer.decoderConfig);
+		return this.demuxer.decoderConfig.sampleRate;
 	}
 
 	getName(): string | null {
@@ -659,15 +665,9 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		};
 	}
 
-	async getDecoderConfig(): Promise<ExtendedAudioDecoderConfig | null> {
-		assert(this.demuxer.audioInfo);
-
-		return {
-			codec: 'flac' as const,
-			numberOfChannels: this.demuxer.audioInfo.numberOfChannels,
-			sampleRate: this.demuxer.audioInfo.sampleRate,
-			description: this.demuxer.audioInfo.description,
-		};
+	async getDecoderConfig() {
+		assert(this.demuxer.decoderConfig);
+		return this.demuxer.decoderConfig;
 	}
 
 	async getPacket(
@@ -790,14 +790,15 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		assert(this.demuxer.audioInfo);
 		const timestamp = rawSample.blockOffset / this.demuxer.audioInfo.sampleRate;
 		const duration = rawSample.blockSize / this.demuxer.audioInfo.sampleRate;
-		return new EncodedPacket(
+		return new EncodedPacket({
 			data,
-			'key',
+			type: 'key',
 			timestamp,
 			duration,
-			sampleIndex,
-			rawSample.byteSize,
-		);
+			sequenceNumber: sampleIndex,
+			byteLength: rawSample.byteSize,
+			decoderConfig: this.demuxer.decoderConfig!,
+		});
 	}
 
 	async getFirstPacket(

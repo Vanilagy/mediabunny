@@ -253,12 +253,12 @@ class AacEncoder extends CustomAudioEncoder {
 				data = adtsFrame;
 			}
 
-			const packet = new EncodedPacket(
+			const packet = new EncodedPacket({
 				data,
-				'key',
-				p.pts / this.sampleRate,
-				p.duration / this.sampleRate,
-			);
+				type: 'key',
+				timestamp: p.pts / this.sampleRate,
+				duration: p.duration / this.sampleRate,
+			});
 
 			this.onPacket(
 				packet,

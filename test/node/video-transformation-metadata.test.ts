@@ -123,7 +123,12 @@ const roundTrip = async (format: OutputFormat, metadata: VideoTrackMetadata) => 
 	await output.start();
 	for (let i = 0; i < 3; i++) {
 		await source.add(
-			new EncodedPacket(new Uint8Array(1024), i === 0 ? 'key' : 'delta', i * 0.1, 0.1),
+			new EncodedPacket({
+				data: new Uint8Array(1024),
+				type: i === 0 ? 'key' : 'delta',
+				timestamp: i * 0.1,
+				duration: 0.1,
+			}),
 			{
 				decoderConfig: {
 					codec: 'vp8',

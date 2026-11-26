@@ -23,7 +23,12 @@ test('Output, onFinalize', async () => {
 
 	await output.start();
 
-	await source.add(new EncodedPacket(new Uint8Array(1024), 'key', 0, 0.5), {
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(1024),
+		type: 'key',
+		timestamp: 0,
+		duration: 0.5,
+	}), {
 		decoderConfig: {
 			codec: 'avc1.640028',
 			codedWidth: 1920,
@@ -248,7 +253,12 @@ test('HLS segment target obtained after cancellation', async () => {
 
 	const addPromise = (async () => {
 		for (let i = 0; i < 4; i++) {
-			await videoSource.add(new EncodedPacket(new Uint8Array(100), 'key', i, 1), {
+			await videoSource.add(new EncodedPacket({
+				data: new Uint8Array(100),
+				type: 'key',
+				timestamp: i,
+				duration: 1,
+			}), {
 				decoderConfig: {
 					codec: 'vp09.00.10.08',
 					codedWidth: 64,

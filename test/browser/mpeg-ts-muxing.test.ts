@@ -825,12 +825,12 @@ test('DTS with B-frames', async () => {
 	const frames = [0, 3, 1, 2, 6, 4, 5, 7, 10, 8, 9];
 	for (let i = 0; i < frames.length; i++) {
 		const isKey = i === 0 || i === 7;
-		const packet = new EncodedPacket(
-			new Uint8Array([0, 0, 0, 1, isKey ? 0x65 : 0x41, 0x88]),
-			isKey ? 'key' : 'delta',
-			frames[i]! / 30,
-			1 / 30,
-		);
+		const packet = new EncodedPacket({
+			data: new Uint8Array([0, 0, 0, 1, isKey ? 0x65 : 0x41, 0x88]),
+			type: isKey ? 'key' : 'delta',
+			timestamp: frames[i]! / 30,
+			duration: 1 / 30,
+		});
 
 		await source.add(packet, { decoderConfig: AVC_DECODER_CONFIG });
 	}
@@ -853,7 +853,12 @@ test('HEVC access unit delimiter', async () => {
 	await output.start();
 
 	// A lone IDR_W_RADL slice
-	const packet = new EncodedPacket(new Uint8Array([0, 0, 0, 1, 0x26, 0x01, 0xaf]), 'key', 0, 1 / 30);
+	const packet = new EncodedPacket({
+		data: new Uint8Array([0, 0, 0, 1, 0x26, 0x01, 0xaf]),
+		type: 'key',
+		timestamp: 0,
+		duration: 1 / 30,
+	});
 	await source.add(packet, {
 		decoderConfig: {
 			codec: 'hev1.1.6.L93.B0',
@@ -955,12 +960,12 @@ test('Write error while closing a track', async () => {
 	// The second key packet flushes out the first GOP, which errors the stream
 	for (let i = 0; i < 3; i++) {
 		const isKey = i !== 1;
-		const packet = new EncodedPacket(
-			new Uint8Array([0, 0, 0, 1, isKey ? 0x65 : 0x41, 0x88]),
-			isKey ? 'key' : 'delta',
-			i / 30,
-			1 / 30,
-		);
+		const packet = new EncodedPacket({
+			data: new Uint8Array([0, 0, 0, 1, isKey ? 0x65 : 0x41, 0x88]),
+			type: isKey ? 'key' : 'delta',
+			timestamp: i / 30,
+			duration: 1 / 30,
+		});
 
 		await source.add(packet, { decoderConfig: AVC_DECODER_CONFIG });
 	}
@@ -986,7 +991,12 @@ test('Unrepresentable AAC channel configuration', async () => {
 
 	// Channel configuration 13 (22.2), too large for the 3-bit ADTS field
 	const addPacket = () => source.add(
-		new EncodedPacket(new Uint8Array(16), 'key', 0, 1024 / 48000),
+		new EncodedPacket({
+			data: new Uint8Array(16),
+			type: 'key',
+			timestamp: 0,
+			duration: 1024 / 48000,
+		}),
 		{
 			decoderConfig: {
 				codec: 'mp4a.40.2',

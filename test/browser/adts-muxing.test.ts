@@ -289,7 +289,12 @@ const startAdtsOutput = async () => {
 	await output.start();
 
 	const addPacket = (description: Uint8Array) => source.add(
-		new EncodedPacket(new Uint8Array(16), 'key', 0, 1024 / 48000),
+		new EncodedPacket({
+			data: new Uint8Array(16),
+			type: 'key',
+			timestamp: 0,
+			duration: 1024 / 48000,
+		}),
 		{
 			decoderConfig: {
 				codec: 'mp4a.40.2',

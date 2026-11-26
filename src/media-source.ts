@@ -58,6 +58,7 @@ import {
 	customAudioEncoders,
 } from './custom-coder';
 import { EncodedPacket, EncodedPacketSideData, PacketType } from './packet';
+import { ExtendedAudioDecoderConfig } from './decode';
 import {
 	AudioSample,
 	audioSampleToInterleavedFormat,
@@ -222,8 +223,10 @@ export class EncodedVideoPacketSource extends VideoSource {
 	 * Adds an encoded packet to the output video track. Packets must be added in *decode order*, while a packet's
 	 * timestamp must be its *presentation timestamp*. B-frames are handled automatically.
 	 *
-	 * @param meta - Additional metadata from the encoder. You should pass this for the first call, including a valid
-	 * decoder config.
+	 * The first packet must have a decoder config, either its own or one passed in `meta`.
+	 *
+	 * @param meta - Additional metadata from the encoder. Its decoder config, if any, takes precedence over the
+	 * packet's decoder config.
 	 *
 	 * @returns A Promise that resolves once the output is ready to receive more samples. You should await this Promise
 	 * to respect writer and encoder backpressure.
@@ -238,11 +241,23 @@ export class EncodedVideoPacketSource extends VideoSource {
 		if (meta !== undefined && (!meta || typeof meta !== 'object')) {
 			throw new TypeError('meta, when provided, must be an object.');
 		}
+		if (meta?.decoderConfig !== undefined && (!meta.decoderConfig || typeof meta.decoderConfig !== 'object')) {
+			throw new TypeError('meta.decoderConfig, when provided, must be an object.');
+		}
 
 		this._ensureValidAdd();
 
+		if (meta?.decoderConfig) {
+			packet = packet.clone({
+				decoderConfig: {
+					...meta.decoderConfig,
+					type: 'video',
+				},
+			});
+		}
+
 		maybeEnsureIsKeyPacket(this._connectedTrack!, packet);
-		return this._connectedTrack!.output._muxer.addEncodedVideoPacket(this._connectedTrack!, packet, meta);
+		return this._connectedTrack!.output._muxer.addEncodedVideoPacket(this._connectedTrack!, packet);
 	}
 }
 
@@ -812,11 +827,20 @@ class VideoEncoderWrapper {
 						throw new TypeError('The second argument passed to onPacket must be an object or undefined.');
 					}
 
+					if (meta?.decoderConfig) {
+						packet = packet.clone({
+							decoderConfig: {
+								...meta.decoderConfig,
+								type: 'video',
+							},
+						});
+					}
+
 					maybeEnsureIsKeyPacket(this.source._connectedTrack!, packet);
 
 					this.encodingConfig.onEncodedPacket?.(packet, meta);
 					this.lastMuxerPromise
-						= this.muxer!.addEncodedVideoPacket(this.source._connectedTrack!, packet, meta)
+						= this.muxer!.addEncodedVideoPacket(this.source._connectedTrack!, packet)
 							.catch((error) => {
 								this.setError(error);
 							});
@@ -1072,11 +1096,20 @@ class VideoEncoderWrapper {
 			});
 		}
 
+		if (meta?.decoderConfig) {
+			packet = packet.clone({
+				decoderConfig: {
+					...meta.decoderConfig,
+					type: 'video',
+				},
+			});
+		}
+
 		maybeEnsureIsKeyPacket(this.source._connectedTrack!, packet);
 
 		this.encodingConfig.onEncodedPacket?.(packet, meta);
 		this.lastMuxerPromise
-			= this.muxer!.addEncodedVideoPacket(this.source._connectedTrack!, packet, meta)
+			= this.muxer!.addEncodedVideoPacket(this.source._connectedTrack!, packet)
 				.catch((error) => {
 					this.setError(error);
 				});
@@ -2044,10 +2077,11 @@ export class EncodedAudioPacketSource extends AudioSource {
 	}
 
 	/**
-	 * Adds an encoded packet to the output audio track. Packets must be added in *decode order*.
+	 * Adds an encoded packet to the output audio track. Packets must be added in *decode order*. The first packet must
+	 * have a decoder config, either its own or one passed in `meta`.
 	 *
-	 * @param meta - Additional metadata from the encoder. You should pass this for the first call, including a valid
-	 * decoder config.
+	 * @param meta - Additional metadata from the encoder. Its decoder config, if any, takes precedence over the
+	 * packet's decoder config.
 	 *
 	 * @returns A Promise that resolves once the output is ready to receive more samples. You should await this Promise
 	 * to respect writer and encoder backpressure.
@@ -2062,9 +2096,22 @@ export class EncodedAudioPacketSource extends AudioSource {
 		if (meta !== undefined && (!meta || typeof meta !== 'object')) {
 			throw new TypeError('meta, when provided, must be an object.');
 		}
+		if (meta?.decoderConfig !== undefined && (!meta.decoderConfig || typeof meta.decoderConfig !== 'object')) {
+			throw new TypeError('meta.decoderConfig, when provided, must be an object.');
+		}
 
 		this._ensureValidAdd();
-		return this._connectedTrack!.output._muxer.addEncodedAudioPacket(this._connectedTrack!, packet, meta);
+
+		if (meta?.decoderConfig) {
+			packet = packet.clone({
+				decoderConfig: {
+					...meta.decoderConfig,
+					type: 'audio',
+				},
+			});
+		}
+
+		return this._connectedTrack!.output._muxer.addEncodedAudioPacket(this._connectedTrack!, packet);
 	}
 }
 
@@ -2082,7 +2129,7 @@ class AudioEncoderWrapper {
 	private isPcmEncoder = false;
 	private outputSampleSize: number | null = null;
 	private writeOutputValue: ((view: DataView, byteOffset: number, value: number) => void) | null = null;
-	private pcmMeta: EncodedAudioChunkMetadata | null = null;
+	private pcmDecoderConfig: ExtendedAudioDecoderConfig | null = null;
 	private pcmStartTimestamp = 0;
 	private pcmEmittedFrames = 0;
 	private pcmReadBuffer = new ArrayBuffer(0);
@@ -2382,13 +2429,12 @@ class AudioEncoderWrapper {
 		// Need to extract data from the audio data before we close it
 		const { numberOfChannels, numberOfFrames, sampleRate, timestamp } = audioSample;
 
-		if (!this.pcmMeta) {
-			this.pcmMeta = {
-				decoderConfig: {
-					codec: this.encodingConfig.codec,
-					numberOfChannels,
-					sampleRate,
-				},
+		if (!this.pcmDecoderConfig) {
+			this.pcmDecoderConfig = {
+				type: 'audio',
+				codec: this.encodingConfig.codec,
+				numberOfChannels,
+				sampleRate,
 			};
 			// Gaps get padded with silence before reaching us, so it's one contiguous run from here on
 			this.pcmStartTimestamp = timestamp;
@@ -2443,26 +2489,27 @@ class AudioEncoderWrapper {
 	private async emitPcmScratchPacket() {
 		assert(this.outputSampleSize);
 		assert(this.pcmScratchView);
-		assert(this.pcmMeta?.decoderConfig);
+		assert(this.pcmDecoderConfig);
 
-		const { numberOfChannels, sampleRate } = this.pcmMeta.decoderConfig;
+		const { numberOfChannels, sampleRate } = this.pcmDecoderConfig;
 		const byteLength = this.pcmScratchFrames * numberOfChannels * this.outputSampleSize;
 
-		const packet = new EncodedPacket(
-			new Uint8Array(this.pcmScratchView.buffer, 0, byteLength),
-			'key',
-			this.pcmStartTimestamp + this.pcmEmittedFrames / sampleRate,
-			this.pcmScratchFrames / sampleRate,
-		);
+		const packet = new EncodedPacket({
+			data: new Uint8Array(this.pcmScratchView.buffer, 0, byteLength),
+			type: 'key',
+			timestamp: this.pcmStartTimestamp + this.pcmEmittedFrames / sampleRate,
+			duration: this.pcmScratchFrames / sampleRate,
+			decoderConfig: this.pcmDecoderConfig,
+		});
 		this.pcmEmittedFrames += this.pcmScratchFrames;
 
 		// The packet now owns the buffer
 		this.pcmScratchView = null;
 		this.pcmScratchFrames = 0;
 
-		this.encodingConfig.onEncodedPacket?.(packet, this.pcmMeta);
+		this.encodingConfig.onEncodedPacket?.(packet, { decoderConfig: this.pcmDecoderConfig });
 		// With backpressure:
-		await this.muxer!.addEncodedAudioPacket(this.source._connectedTrack!, packet, this.pcmMeta);
+		await this.muxer!.addEncodedAudioPacket(this.source._connectedTrack!, packet);
 	}
 
 	private ensureEncoder(audioSample: AudioSample) {
@@ -2502,9 +2549,18 @@ class AudioEncoderWrapper {
 						throw new TypeError('The second argument passed to onPacket must be an object or undefined.');
 					}
 
+					if (meta?.decoderConfig) {
+						packet = packet.clone({
+							decoderConfig: {
+								...meta.decoderConfig,
+								type: 'audio',
+							},
+						});
+					}
+
 					this.encodingConfig.onEncodedPacket?.(packet, meta);
 					this.lastMuxerPromise
-						= this.muxer!.addEncodedAudioPacket(this.source._connectedTrack!, packet, meta)
+						= this.muxer!.addEncodedAudioPacket(this.source._connectedTrack!, packet)
 							.catch((error) => {
 								this.setError(error);
 							});
@@ -2561,7 +2617,7 @@ class AudioEncoderWrapper {
 								}
 							}
 
-							let packet = EncodedPacket.fromEncodedChunk(chunk);
+							let packet = EncodedPacket.fromEncodedChunk(chunk, undefined, meta);
 
 							// Snap the timing information to the sample rate to recover information lost in
 							// microsecond conversion
@@ -2582,7 +2638,7 @@ class AudioEncoderWrapper {
 
 							this.encodingConfig.onEncodedPacket?.(packet, meta);
 							this.lastMuxerPromise
-								= this.muxer!.addEncodedAudioPacket(this.source._connectedTrack!, packet, meta)
+								= this.muxer!.addEncodedAudioPacket(this.source._connectedTrack!, packet)
 									.catch((error) => {
 										this.setError(error);
 									});
@@ -3570,9 +3626,9 @@ export class TextSubtitleSource extends SubtitleSource {
 
 		this._parser = new SubtitleParser({
 			codec,
-			output: (cue, metadata) => {
+			output: (cue) => {
 				this._lastMuxerPromise
-					= this._connectedTrack!.output._muxer.addSubtitleCue(this._connectedTrack!, cue, metadata)
+					= this._connectedTrack!.output._muxer.addSubtitleCue(this._connectedTrack!, cue)
 						.catch((error) => {
 							this._setError(error);
 						});

@@ -385,12 +385,12 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 			data = final;
 		}
 
-		const packet = new EncodedPacket(
+		const packet = new EncodedPacket({
 			data,
-			determineAudioPacketType(this.codec, data),
+			type: determineAudioPacketType(this.codec, data),
 			timestamp,
 			duration,
-		);
+		});
 
 		this.packetEmitted = true;
 		this.onPacket(packet, metadata);

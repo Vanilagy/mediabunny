@@ -1211,8 +1211,9 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 							});
 						}
 
-						// Build individual constructor blocks with their own descriptions
+						// Build individual constructor blocks with their own descriptions. Deprecated overloads go last.
 						const constructorBlocks: string[] = [];
+						const deprecatedConstructorBlocks: string[] = [];
 						const allReferencedTypes: string[] = [];
 
 						// First, process constructor parameters with visibility modifiers as properties from any constructor
@@ -1326,7 +1327,8 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 							}
 
 							// Build this constructor block
-							let constructorBlock = `\`\`\`ts\n${constructorSig}\n\`\`\``;
+							const deprecationNotice = getDeprecationNotice(ctor, className);
+							let constructorBlock = `${deprecationNotice}\`\`\`ts\n${constructorSig}\n\`\`\``;
 							if (constructorDesc) {
 								constructorBlock += `\n\n${constructorDesc}`;
 							}
@@ -1341,8 +1343,13 @@ const generateDocs = (entryFiles: string[], apiConfigFile: string, dry = false) 
 							// In tandem: update usage map
 							overloadReferences.forEach(ref => addUsage(ref, className, className, 'constructor'));
 
-							constructorBlocks.push(constructorBlock);
+							if (deprecationNotice) {
+								deprecatedConstructorBlocks.push(constructorBlock);
+							} else {
+								constructorBlocks.push(constructorBlock);
+							}
 						});
+						constructorBlocks.push(...deprecatedConstructorBlocks);
 
 						// Build the constructor section
 						const headingText = constructorBlocks.length > 1 ? 'Constructors' : 'Constructor';

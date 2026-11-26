@@ -302,10 +302,15 @@ await packetSource.add(packet2);
 > [!IMPORTANT]
 > You must add the packets in decode order.
 
-You will need to provide additional metadata alongside your first call to `add` to give the `Output` more information about the shape and form of the video data. This metadata must be in the form of the WebCodecs API's `EncodedVideoChunkMetadata`. It might look like this:
+The first packet you add must carry a [decoder config](./packets-and-samples#creating-packets), which gives the `Output` more information about the shape and form of the video data. It might look like this:
 ```ts
-await packetSource.add(firstPacket, {
+const firstPacket = new EncodedPacket({
+	data,
+	type: 'key',
+	timestamp: 0,
+	duration: 1/30,
 	decoderConfig: {
+		type: 'video',
 		codec: 'vp09.00.31.08',
 		codedWidth: 1280,
 		codedHeight: 720,
@@ -315,12 +320,15 @@ await packetSource.add(firstPacket, {
 			matrix: 'smpte170m',
 			fullRange: false,
 		},
-		description: undefined,
 	},
 });
+
+await packetSource.add(firstPacket);
 ```
 
 `codec`, `codedWidth`, and `codedHeight` are required for all codecs, whereas `description` is required for some codecs. Additional fields, such as `colorSpace`, are optional. The [Mediabunny Codec Registry](/codec-registry/overview) specifies the formats of `codec` and `description` for each video codec, which you **must** adhere to.
+
+Packets read from another media file already carry their decoder config, so you can add them as they are.
 
 #### B-frames
 
@@ -465,19 +473,28 @@ const packetSource = new EncodedAudioPacketSource('aac');
 await packetSource.add(packet);
 ```
 
-You will need to provide additional metadata alongside your first call to `add` to give the `Output` more information about the shape and form of the audio data. This metadata must be in the form of the WebCodecs API's `EncodedAudioChunkMetadata`. It might look like this:
+The first packet you add must carry a [decoder config](./packets-and-samples#creating-packets), which gives the `Output` more information about the shape and form of the audio data. It might look like this:
 ```ts
-await packetSource.add(firstPacket, {
+const firstPacket = new EncodedPacket({
+	data,
+	type: 'key',
+	timestamp: 0,
+	duration: 1024 / 48000,
 	decoderConfig: {
+		type: 'audio',
 		codec: 'mp4a.40.2',
 		numberOfChannels: 2,
 		sampleRate: 48000,
 		description: new Uint8Array([17, 144]),
 	},
 });
+
+await packetSource.add(firstPacket);
 ```
 
 `codec`, `numberOfChannels`, and `sampleRate` are required for all codecs, whereas `description` is required for some codecs. The [Mediabunny Codec Registry](/codec-registry/overview) specifies the formats of `codec` and `description` for each audio codec, which you must adhere to.
+
+Packets read from another media file already carry their decoder config, so you can add them as they are.
 
 ## Subtitle sources
 

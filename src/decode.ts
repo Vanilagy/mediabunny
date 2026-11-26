@@ -89,6 +89,8 @@ import { AudioSample, VideoSample, VideoSamplePixelFormat } from './sample';
 polyfillSymbolDispose();
 
 export type ExtendedVideoDecoderConfig = {
+	/** The type of this decoder configuration. */
+	type: 'video';
 	/**
 	 * The codec string describing the codec, which must adhere to the
 	 * [Mediabunny Codec Registry](https://mediabunny.dev/codec-registry/overview).
@@ -132,6 +134,8 @@ export type ExtendedVideoDecoderConfig = {
 };
 
 export type ExtendedAudioDecoderConfig = {
+	/** The type of this decoder configuration. */
+	type: 'audio';
 	/**
 	 * The codec string describing the codec, which must adhere to the
 	 * [Mediabunny Codec Registry](https://mediabunny.dev/codec-registry/overview).
@@ -151,12 +155,15 @@ export type ExtendedAudioDecoderConfig = {
 export const validateExtendedVideoDecoderConfig = (
 	config: Partial<ExtendedVideoDecoderConfig>,
 	subject: string,
-	optionalFields: { codec?: boolean } = {},
+	optionalFields: { type?: boolean; codec?: boolean } = {},
 ) => {
 	if (!config || typeof config !== 'object') {
 		throw new TypeError(`${subject} must be an object.`);
 	}
 
+	if ((config.type !== undefined || !optionalFields.type) && config.type !== 'video') {
+		throw new TypeError(`${subject} type must be 'video'.`);
+	}
 	const codec = config.codec;
 	if (codec !== undefined || !optionalFields.codec) {
 		if (typeof codec !== 'string') {
@@ -319,12 +326,15 @@ export const validateExtendedVideoDecoderConfig = (
 export const validateExtendedAudioDecoderConfig = (
 	config: Partial<ExtendedAudioDecoderConfig>,
 	subject: string,
-	optionalFields: { codec?: boolean; numberOfChannels?: boolean; sampleRate?: boolean } = {},
+	optionalFields: { type?: boolean; codec?: boolean; numberOfChannels?: boolean; sampleRate?: boolean } = {},
 ) => {
 	if (!config || typeof config !== 'object') {
 		throw new TypeError(`${subject} must be an object.`);
 	}
 
+	if ((config.type !== undefined || !optionalFields.type) && config.type !== 'audio') {
+		throw new TypeError(`${subject} type must be 'audio'.`);
+	}
 	const codec = config.codec;
 	if (codec !== undefined || !optionalFields.codec) {
 		if (typeof codec !== 'string') {
@@ -2346,13 +2356,13 @@ export const canDecodeVideoMemo = new Map<string, Promise<boolean>>();
  */
 export const canDecodeVideo = async (
 	codec: VideoCodec,
-	options: SetOptional<ExtendedVideoDecoderConfig, 'codec'> = {},
+	options: SetOptional<ExtendedVideoDecoderConfig, 'type' | 'codec'> = {},
 ) => {
 	if (!VIDEO_CODECS.includes(codec)) {
 		return false;
 	}
 
-	validateExtendedVideoDecoderConfig(options, 'options', { codec: true });
+	validateExtendedVideoDecoderConfig(options, 'options', { type: true, codec: true });
 	if (options.codec !== undefined && inferCodecFromCodecString(options.codec) !== codec) {
 		throw new TypeError(`options.codec, when provided, must match the specified codec (${codec}).`);
 	}
@@ -2361,6 +2371,7 @@ export const canDecodeVideo = async (
 	const codedHeight = options.codedHeight ?? 720;
 	const resolvedOptions: ExtendedVideoDecoderConfig = {
 		...options,
+		type: 'video',
 		codedWidth,
 		codedHeight,
 		codec: options.codec ?? buildVideoCodecString(codec, codedWidth, codedHeight, 1e6, false),
@@ -2398,13 +2409,14 @@ export const canDecodeAudioMemo = new Map<string, Promise<boolean>>();
  */
 export const canDecodeAudio = async (
 	codec: AudioCodec,
-	options: SetOptional<ExtendedAudioDecoderConfig, 'codec' | 'numberOfChannels' | 'sampleRate'> = {},
+	options: SetOptional<ExtendedAudioDecoderConfig, 'type' | 'codec' | 'numberOfChannels' | 'sampleRate'> = {},
 ) => {
 	if (!AUDIO_CODECS.includes(codec)) {
 		return false;
 	}
 
 	validateExtendedAudioDecoderConfig(options, 'options', {
+		type: true,
 		codec: true,
 		numberOfChannels: true,
 		sampleRate: true,
@@ -2415,6 +2427,7 @@ export const canDecodeAudio = async (
 
 	const resolvedOptions: ExtendedAudioDecoderConfig = {
 		...options,
+		type: 'audio',
 		numberOfChannels: options.numberOfChannels ?? 2,
 		sampleRate: options.sampleRate ?? 48000,
 		codec: options.codec ?? buildAudioCodecString(codec),
@@ -2480,7 +2493,7 @@ export const getDecodableCodecs = async (): Promise<MediaCodec[]> => {
  */
 export const getDecodableVideoCodecs = async (
 	checkedCodecs: VideoCodec[] = VIDEO_CODECS as unknown as VideoCodec[],
-	options?: SetOptional<ExtendedVideoDecoderConfig, 'codec'>,
+	options?: SetOptional<ExtendedVideoDecoderConfig, 'type' | 'codec'>,
 ): Promise<VideoCodec[]> => {
 	const bools = await Promise.all(checkedCodecs.map(codec => canDecodeVideo(codec, options)));
 	return checkedCodecs.filter((_, i) => bools[i]);
@@ -2493,7 +2506,7 @@ export const getDecodableVideoCodecs = async (
  */
 export const getDecodableAudioCodecs = async (
 	checkedCodecs: AudioCodec[] = AUDIO_CODECS as unknown as AudioCodec[],
-	options?: SetOptional<ExtendedAudioDecoderConfig, 'codec' | 'numberOfChannels' | 'sampleRate'>,
+	options?: SetOptional<ExtendedAudioDecoderConfig, 'type' | 'codec' | 'numberOfChannels' | 'sampleRate'>,
 ): Promise<AudioCodec[]> => {
 	const bools = await Promise.all(checkedCodecs.map(codec => canDecodeAudio(codec, options)));
 	return checkedCodecs.filter((_, i) => bools[i]);
