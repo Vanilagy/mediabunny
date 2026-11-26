@@ -61,6 +61,7 @@ import {
 	InputVideoTrackBacking,
 } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
+import { ExtendedAudioDecoderConfig, ExtendedVideoDecoderConfig } from '../decode';
 import {
 	assert,
 	binarySearchExact,
@@ -86,6 +87,8 @@ import {
 	EMPTY_COLOR_SPACE,
 	colorSpaceIsComplete,
 	parseIsoSuffix,
+	extractRotationFromMatrix,
+	matrixIsFlipped,
 } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import {
@@ -3246,7 +3249,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 	constructor(public internalTrack: InternalTrack) {}
 
 	abstract getType(): TrackType;
-	abstract getDecoderConfig(): Promise<VideoDecoderConfig | AudioDecoderConfig | null>;
+	abstract getDecoderConfig(): Promise<ExtendedVideoDecoderConfig | ExtendedAudioDecoderConfig | null>;
 
 	getNumber() {
 		const demuxer = this.internalTrack.demuxer;
@@ -3923,7 +3926,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 
 class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideoTrackBacking {
 	declare internalTrack: InternalVideoTrack;
-	decoderConfigPromise: Promise<VideoDecoderConfig> | null = null;
+	decoderConfigPromise: Promise<ExtendedVideoDecoderConfig> | null = null;
 
 	constructor(internalTrack: InternalVideoTrack) {
 		super(internalTrack);
@@ -3978,12 +3981,12 @@ class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideo
 		);
 	}
 
-	async getDecoderConfig(): Promise<VideoDecoderConfig | null> {
+	async getDecoderConfig(): Promise<ExtendedVideoDecoderConfig | null> {
 		if (!this.internalTrack.info.codec) {
 			return null;
 		}
 
-		return this.decoderConfigPromise ??= (async (): Promise<VideoDecoderConfig> => {
+		return this.decoderConfigPromise ??= (async (): Promise<ExtendedVideoDecoderConfig> => {
 			if (this.internalTrack.info.codec === 'avc' && !this.internalTrack.info.codecDescription) {
 				const firstPacket = await this.getFirstPacket({});
 				this.internalTrack.info.avcCodecInfo
@@ -4044,12 +4047,14 @@ class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideo
 				this.internalTrack.info.colorSpace.fullRange ??= colorSpace.fullRange;
 			}
 
-			const config: VideoDecoderConfig = {
+			const config: ExtendedVideoDecoderConfig = {
 				codec: extractVideoCodecString(this.internalTrack.info),
 				codedWidth: this.internalTrack.info.width,
 				codedHeight: this.internalTrack.info.height,
 				description: this.internalTrack.info.codecDescription ?? undefined,
 				colorSpace: this.internalTrack.info.colorSpace,
+				rotation: extractRotationFromMatrix(this.internalTrack.matrix),
+				flip: matrixIsFlipped(this.internalTrack.matrix),
 			};
 
 			if (
@@ -4067,7 +4072,7 @@ class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideo
 
 class IsobmffAudioTrackBacking extends IsobmffTrackBacking implements InputAudioTrackBacking {
 	declare internalTrack: InternalAudioTrack;
-	decoderConfigPromise: Promise<AudioDecoderConfig> | null = null;
+	decoderConfigPromise: Promise<ExtendedAudioDecoderConfig> | null = null;
 
 	constructor(internalTrack: InternalAudioTrack) {
 		super(internalTrack);
@@ -4089,12 +4094,12 @@ class IsobmffAudioTrackBacking extends IsobmffTrackBacking implements InputAudio
 		return this.internalTrack.info.sampleRate;
 	}
 
-	async getDecoderConfig(): Promise<AudioDecoderConfig | null> {
+	async getDecoderConfig(): Promise<ExtendedAudioDecoderConfig | null> {
 		if (!this.internalTrack.info.codec) {
 			return null;
 		}
 
-		return this.decoderConfigPromise ??= (async (): Promise<AudioDecoderConfig> => {
+		return this.decoderConfigPromise ??= (async (): Promise<ExtendedAudioDecoderConfig> => {
 			if (this.internalTrack.info.codec === 'dts' && !this.internalTrack.info.dtsFormat) {
 				// Gotta check the packet to determine the DTS variant
 				const firstPacket = await this.getFirstPacket({});

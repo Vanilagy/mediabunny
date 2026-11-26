@@ -97,6 +97,11 @@ export {
 	SUBTITLE_CODECS,
 } from './codec';
 export {
+	PacketDecoder,
+	VideoPacketDecoder,
+	AudioPacketDecoder,
+	type ExtendedVideoDecoderConfig,
+	type ExtendedAudioDecoderConfig,
 	canDecode,
 	canDecodeVideo,
 	canDecodeAudio,

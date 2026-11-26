@@ -40,17 +40,20 @@ import {
 } from '../input-track';
 import { AttachedFile, DEFAULT_TRACK_DISPOSITION, MetadataTags, TrackDisposition } from '../metadata';
 import { PacketRetrievalOptions } from '../media-sink';
+import { ExtendedAudioDecoderConfig, ExtendedVideoDecoderConfig } from '../decode';
 import {
 	assert,
 	binarySearchLessOrEqual,
 	COLOR_PRIMARIES_MAP_INVERSE,
 	colorSpaceIsComplete,
 	EMPTY_COLOR_SPACE,
+	extractRotationFromMatrix,
 	findLastIndex,
 	isIso639Dash2LanguageCode,
 	isThenable,
 	last,
 	MATRIX_COEFFICIENTS_MAP_INVERSE,
+	matrixIsFlipped,
 	centeredTransformationMatrix,
 	DEG_TO_RAD,
 	multiplyMatrices,
@@ -2281,7 +2284,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 	constructor(public internalTrack: InternalTrack) {}
 
 	abstract getType(): TrackType;
-	abstract getDecoderConfig(): Promise<VideoDecoderConfig | AudioDecoderConfig | null>;
+	abstract getDecoderConfig(): Promise<ExtendedVideoDecoderConfig | ExtendedAudioDecoderConfig | null>;
 
 	getNumber() {
 		const demuxer = this.internalTrack.demuxer;
@@ -2799,7 +2802,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 
 class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVideoTrackBacking {
 	declare internalTrack: InternalVideoTrack;
-	decoderConfigPromise: Promise<VideoDecoderConfig> | null = null;
+	decoderConfigPromise: Promise<ExtendedVideoDecoderConfig> | null = null;
 
 	constructor(internalTrack: InternalVideoTrack) {
 		super(internalTrack);
@@ -2864,12 +2867,12 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 		);
 	}
 
-	async getDecoderConfig(): Promise<VideoDecoderConfig | null> {
+	async getDecoderConfig(): Promise<ExtendedVideoDecoderConfig | null> {
 		if (!this.internalTrack.info.codec) {
 			return null;
 		}
 
-		return this.decoderConfigPromise ??= (async (): Promise<VideoDecoderConfig> => {
+		return this.decoderConfigPromise ??= (async (): Promise<ExtendedVideoDecoderConfig> => {
 			const codecPrivate = this.internalTrack.codecPrivate;
 
 			// CodecPrivate holds 4 bytes like those of the AV1CodecConfigurationRecord, optionally followed by OBUs
@@ -2930,12 +2933,15 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 				this.internalTrack.info.colorSpace.fullRange ??= colorSpace.fullRange;
 			}
 
-			const config: VideoDecoderConfig = {
+			const matrix = this.getTransformationMatrix();
+			const config: ExtendedVideoDecoderConfig = {
 				codec: extractVideoCodecString(codecInfo),
 				codedWidth: this.internalTrack.info.width,
 				codedHeight: this.internalTrack.info.height,
 				description: this.internalTrack.info.codecDescription ?? undefined,
 				colorSpace: this.internalTrack.info.colorSpace,
+				rotation: extractRotationFromMatrix(matrix),
+				flip: matrixIsFlipped(matrix),
 			};
 
 			if (
@@ -2953,7 +2959,7 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 
 class MatroskaAudioTrackBacking extends MatroskaTrackBacking implements InputAudioTrackBacking {
 	declare internalTrack: InternalAudioTrack;
-	decoderConfigPromise: Promise<AudioDecoderConfig> | null = null;
+	decoderConfigPromise: Promise<ExtendedAudioDecoderConfig> | null = null;
 
 	constructor(internalTrack: InternalAudioTrack) {
 		super(internalTrack);
@@ -2975,12 +2981,12 @@ class MatroskaAudioTrackBacking extends MatroskaTrackBacking implements InputAud
 		return this.internalTrack.info.sampleRate;
 	}
 
-	async getDecoderConfig(): Promise<AudioDecoderConfig | null> {
+	async getDecoderConfig(): Promise<ExtendedAudioDecoderConfig | null> {
 		if (!this.internalTrack.info.codec) {
 			return null;
 		}
 
-		return this.decoderConfigPromise ??= (async (): Promise<AudioDecoderConfig> => {
+		return this.decoderConfigPromise ??= (async (): Promise<ExtendedAudioDecoderConfig> => {
 			if (this.internalTrack.info.codec === 'dts' && !this.internalTrack.info.dtsFormat) {
 				// Gotta check the packet to determine the DTS variant
 				const firstPacket = await this.getFirstPacket({});

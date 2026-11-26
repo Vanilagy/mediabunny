@@ -8,6 +8,7 @@
 
 import { OPUS_SAMPLE_RATE } from '../codec';
 import { parseModesFromVorbisSetupPacket, parseOpusIdentificationHeader, readVorbisComments } from '../codec-data';
+import { ExtendedAudioDecoderConfig } from '../decode';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrackBacking } from '../input-track';
@@ -525,7 +526,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		return null;
 	}
 
-	async getDecoderConfig(): Promise<AudioDecoderConfig | null> {
+	async getDecoderConfig(): Promise<ExtendedAudioDecoderConfig | null> {
 		assert(this.bitstream.codecInfo.codec);
 
 		return {

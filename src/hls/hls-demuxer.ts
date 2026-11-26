@@ -17,6 +17,7 @@ import {
 import { PacketRetrievalOptions } from '../media-sink';
 import { DEFAULT_TRACK_DISPOSITION, MetadataTags, TrackDisposition } from '../metadata';
 import { TrackType } from '../output';
+import { ExtendedAudioDecoderConfig, ExtendedVideoDecoderConfig } from '../decode';
 import { arrayArgmin, assert, joinPaths, MaybePromise, TransformationMatrix, UNDETERMINED_LANGUAGE } from '../misc';
 import { EncodedPacket } from '../packet';
 import { readAllLines } from '../reader';
@@ -709,7 +710,7 @@ abstract class HlsInputTrackBacking implements InputTrackBacking {
 	constructor(public internalTrack: InternalTrack) {}
 
 	abstract getType(): TrackType;
-	abstract getDecoderConfig(): Promise<VideoDecoderConfig | AudioDecoderConfig | null>;
+	abstract getDecoderConfig(): Promise<ExtendedVideoDecoderConfig | ExtendedAudioDecoderConfig | null>;
 
 	hydrate() {
 		return this.hydrationPromise ??= (async () => {
@@ -948,7 +949,7 @@ class HlsInputVideoTrackBacking
 		return this.internalTrack.fullCodecString;
 	}
 
-	async getDecoderConfig(): Promise<VideoDecoderConfig | null> {
+	async getDecoderConfig(): Promise<ExtendedVideoDecoderConfig | null> {
 		await this.hydrate();
 
 		if ((await this.backingVideoTrack!.getCodec()) !== this.getCodec()) {
@@ -1000,7 +1001,7 @@ class HlsInputAudioTrackBacking
 		return this.internalTrack.fullCodecString;
 	}
 
-	async getDecoderConfig(): Promise<AudioDecoderConfig | null> {
+	async getDecoderConfig(): Promise<ExtendedAudioDecoderConfig | null> {
 		await this.hydrate();
 
 		if ((await this.backingAudioTrack!.getCodec()) !== this.getCodec()) {

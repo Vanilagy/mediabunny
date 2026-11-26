@@ -58,6 +58,8 @@ test('MPEG-TS metadata reading', async () => {
 			matrix: 'bt2020-ncl',
 			fullRange: false,
 		},
+		rotation: 0,
+		flip: false,
 		// No description, it's Annex B
 	});
 
@@ -571,6 +573,8 @@ test('MPEG-TS with HEVC video', async () => {
 			matrix: 'bt709',
 			fullRange: false,
 		},
+		rotation: 0,
+		flip: false,
 		// No description, it's Annex B
 	});
 

@@ -16,6 +16,7 @@ import {
 } from './codec';
 import { determineAudioPacketType, determineVideoPacketType } from './codec-data';
 import { customAudioDecoders, customVideoDecoders } from './custom-coder';
+import { ExtendedAudioDecoderConfig, ExtendedVideoDecoderConfig } from './decode';
 import { Input } from './input';
 import { Logging } from './logging';
 import { EncodedPacketSink, PacketRetrievalOptions } from './media-sink';
@@ -140,7 +141,7 @@ export interface InputTrackBacking {
 	getDurationFromMetadata(options: DurationMetadataRequestOptions): Promise<number | null>;
 	getLiveRefreshInterval(): Promise<number | null>;
 	getHasOnlyKeyPackets?(): MaybePromise<boolean | null>;
-	getDecoderConfig(): Promise<VideoDecoderConfig | AudioDecoderConfig | null>;
+	getDecoderConfig(): Promise<ExtendedVideoDecoderConfig | ExtendedAudioDecoderConfig | null>;
 	getMetadataCodecParameterString?(): MaybePromise<string | null>;
 
 	getFirstPacket(options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
@@ -629,7 +630,7 @@ export interface InputVideoTrackBacking extends InputTrackBacking {
 	getTransformationMatrix(): MaybePromise<TransformationMatrix>;
 	getColorSpace(): Promise<VideoColorSpaceInit>;
 	canBeTransparent(): Promise<boolean>;
-	getDecoderConfig(): Promise<VideoDecoderConfig | null>;
+	getDecoderConfig(): Promise<ExtendedVideoDecoderConfig | null>;
 }
 
 /**
@@ -1099,7 +1100,7 @@ export interface InputAudioTrackBacking extends InputTrackBacking {
 	getCodec(): MaybePromise<AudioCodec | null>;
 	getNumberOfChannels(): MaybePromise<number>;
 	getSampleRate(): MaybePromise<number>;
-	getDecoderConfig(): Promise<AudioDecoderConfig | null>;
+	getDecoderConfig(): Promise<ExtendedAudioDecoderConfig | null>;
 }
 
 /**

@@ -7,6 +7,7 @@
  */
 
 import { FlacBlockType, readVorbisComments } from '../codec-data';
+import { ExtendedAudioDecoderConfig } from '../decode';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrackBacking } from '../input-track';
@@ -658,7 +659,7 @@ class FlacAudioTrackBacking implements InputAudioTrackBacking {
 		};
 	}
 
-	async getDecoderConfig(): Promise<AudioDecoderConfig | null> {
+	async getDecoderConfig(): Promise<ExtendedAudioDecoderConfig | null> {
 		assert(this.demuxer.audioInfo);
 
 		return {

@@ -13,6 +13,7 @@ import {
 	readAdtsProgramConfigElement,
 } from '../../shared/aac-misc';
 import { AudioCodec } from '../codec';
+import { ExtendedAudioDecoderConfig } from '../decode';
 import { Demuxer } from '../demuxer';
 import {
 	ID3_V2_HEADER_SIZE,
@@ -307,7 +308,7 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 		};
 	}
 
-	async getDecoderConfig(): Promise<AudioDecoderConfig> {
+	async getDecoderConfig(): Promise<ExtendedAudioDecoderConfig> {
 		assert(this.demuxer.firstFrameHeader);
 
 		return {

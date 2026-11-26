@@ -6,64 +6,31 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { parsePcmCodec, PCM_AUDIO_CODECS, PcmAudioCodec, VideoCodec, AudioCodec, OPUS_SAMPLE_RATE } from './codec';
-import {
-	addAvcBitstreamRestriction,
-	AvcNalUnitType,
-	concatAvcNalUnits,
-	countShownVideoFrames,
-	deserializeAvcDecoderConfigurationRecord,
-	determineVideoPacketType,
-	extractNalUnitTypeForAvc,
-	extractNalUnitTypeForHevc,
-	HevcNalUnitType,
-	iterateAvcNalUnits,
-	iterateHevcNalUnits,
-	parseAvcSps,
-	parseOpusIdentificationHeader,
-	sanitizeHevcPacketForChromium,
-	serializeAvcDecoderConfigurationRecord,
-} from './codec-data';
-import { CustomVideoDecoder, customVideoDecoders, CustomAudioDecoder, customAudioDecoders } from './custom-coder';
+import { AudioPacketDecoder, PacketDecoder, VideoPacketDecoder } from './decode';
 import { InputDisposedError } from './input';
 import { InputAudioTrack, InputTrack, InputVideoTrack } from './input-track';
 import {
 	AnyIterable,
 	assert,
-	assertNever,
-	CallSerializer,
-	clamp,
-	colorSpaceIsComplete,
-	createWorker,
-	getInt24,
-	getUint24,
-	insertSorted,
-	isAndroid,
-	isChromium,
 	isFirefox,
 	isNumber,
-	isWebKit,
+	isThenable,
 	last,
 	mapAsyncGenerator,
+	MaybePromise,
 	missingWebCodecsClassMessage,
 	promiseWithResolvers,
-	removeItem,
 	Rotation,
-	roundToDivisor,
 	toAsyncIterator,
-	toDataView,
-	toUint8Array,
 	validateAnyIterable,
 } from './misc';
 import { EncodedPacket } from './packet';
-import { fromAlaw, fromUlaw } from './pcm';
 import {
 	AudioSample,
 	clampCropRectangle,
 	CropRectangle,
 	validateCropRectangle,
 	VideoSample,
-	VideoSamplePixelFormat,
 } from './sample';
 
 /**
@@ -451,24 +418,6 @@ export class EncodedPacketSink {
 	}
 }
 
-const MAX_QUEUE_SIZE = 4;
-
-abstract class DecoderWrapper<
-	MediaSample extends VideoSample | AudioSample,
-> {
-	onDequeue: (() => unknown) | null = null;
-
-	constructor(
-		public onSample: (sample: MediaSample) => unknown,
-		public onError: (error: unknown) => unknown,
-	) {}
-
-	abstract getDecodeQueueSize(): number;
-	abstract decode(packet: EncodedPacket): void;
-	abstract flush(): Promise<void>;
-	abstract close(): void;
-}
-
 /**
  * Base class for decoded media sample sinks.
  * @group Media sinks
@@ -481,10 +430,7 @@ export abstract class BaseMediaSampleSink<
 	abstract _track: InputTrack;
 
 	/** @internal */
-	abstract _createDecoder(
-		onSample: (sample: MediaSample) => unknown,
-		onError: (error: unknown) => unknown
-	): Promise<DecoderWrapper<MediaSample>>;
+	abstract _createDecoder(): Promise<PacketDecoder<MediaSample>>;
 	/** @internal */
 	abstract _createPacketSink(): EncodedPacketSink;
 	/** @internal */
@@ -499,15 +445,14 @@ export abstract class BaseMediaSampleSink<
 		validateTimestamp(startTimestamp);
 		validateTimestamp(endTimestamp);
 
-		const sampleQueue: MediaSample[] = [];
+		const outputQueue: MediaSample[] = [];
 		let firstSampleQueued = false;
 		let lastSample: MediaSample | null = null;
-		let { promise: queueNotEmpty, resolve: onQueueNotEmpty } = promiseWithResolvers();
-		let { promise: queueDequeue, resolve: onQueueDequeue } = promiseWithResolvers();
-		let decoderIsFlushed = false;
+		let decoder: PacketDecoder<MediaSample> | null = null;
+		const { promise: decoderCreated, resolve: onDecoderCreated } = promiseWithResolvers();
+		let stopped = false;
 		let ended = false;
 		let terminated = false;
-		let decoder: DecoderWrapper<MediaSample> | null = null;
 
 		// This stores errors that are "out of band" in the sense that they didn't occur in the normal flow of this
 		// method but instead in a different context. This error should not go unnoticed and must be bubbled up to
@@ -525,16 +470,26 @@ export abstract class BaseMediaSampleSink<
 		const closeSamples = () => {
 			lastSample?.close();
 			lastSample = null;
-			for (const sample of sampleQueue) {
+			for (const sample of outputQueue) {
 				sample.close();
 			}
-			sampleQueue.length = 0;
+			outputQueue.length = 0;
+		};
+		const stop = () => {
+			stopped = true;
+			decoder?.close();
 		};
 		const terminate = () => {
 			terminated = true;
+			stop();
+		};
+		const end = () => {
+			if (!firstSampleQueued && lastSample) {
+				outputQueue.push(lastSample);
+				lastSample = null;
+			}
+
 			ended = true;
-			onQueueDequeue();
-			onQueueNotEmpty();
 		};
 
 		// Disposal must wake an idle pump even if the consumer never advances the iterator again.
@@ -544,49 +499,8 @@ export abstract class BaseMediaSampleSink<
 
 		// The following is the "pump" process that keeps pumping packets into the decoder
 		(async () => {
-			decoder = await this._createDecoder((sample) => {
-				onQueueDequeue();
-				if (sample.timestamp >= endTimestamp) {
-					ended = true;
-				}
-
-				if (ended) {
-					sample.close();
-					return;
-				}
-
-				if (lastSample) {
-					if (sample.timestamp > startTimestamp) {
-						// We don't know ahead of time what the first first is. This is because the first first is the
-						// last first whose timestamp is less than or equal to the start timestamp. Therefore we need to
-						// wait for the first first after the start timestamp, and then we'll know that the previous
-						// first was the first first.
-						sampleQueue.push(lastSample);
-						firstSampleQueued = true;
-					} else {
-						lastSample.close();
-					}
-				}
-
-				if (sample.timestamp >= startTimestamp) {
-					sampleQueue.push(sample);
-					firstSampleQueued = true;
-				}
-
-				lastSample = firstSampleQueued ? null : sample;
-
-				if (sampleQueue.length > 0) {
-					onQueueNotEmpty();
-					({ promise: queueNotEmpty, resolve: onQueueNotEmpty } = promiseWithResolvers());
-				}
-			}, (error) => {
-				if (!hasOutOfBandError) {
-					outOfBandError = error;
-					hasOutOfBandError = true;
-					onQueueNotEmpty();
-				}
-			});
-			decoder.onDequeue = () => onQueueDequeue();
+			decoder = await this._createDecoder();
+			onDecoderCreated();
 
 			const packetSink = this._createPacketSink();
 			const preRollDuration = await this._getPreRollDuration();
@@ -610,14 +524,9 @@ export abstract class BaseMediaSampleSink<
 			const packets = packetSink.packets(keyPacket ?? undefined, endPacket, packetRetrievalOptions);
 			await packets.next(); // Skip the start packet as we already have it
 
-			while (currentPacket && !ended && !this._track.input._disposed) {
-				if (sampleQueue.length + decoder.getDecodeQueueSize() >= MAX_QUEUE_SIZE) {
-					({ promise: queueDequeue, resolve: onQueueDequeue } = promiseWithResolvers());
-					await queueDequeue;
-					continue;
-				}
-
-				decoder.decode(currentPacket);
+			while (currentPacket && !stopped && !this._track.input._disposed) {
+				const backpressure = decoder.push(currentPacket);
+				if (backpressure) await backpressure;
 
 				const packetResult = await packets.next();
 				if (packetResult.done) {
@@ -629,26 +538,21 @@ export abstract class BaseMediaSampleSink<
 
 			await packets.return();
 
-			if (!terminated && !this._track.input._disposed) {
-				await decoder.flush();
+			if (stopped) {
+				decoder.close();
+			} else {
+				void decoder.end();
 			}
-
-			if (!firstSampleQueued && lastSample) {
-				sampleQueue.push(lastSample);
-				lastSample = null;
-			}
-
-			decoderIsFlushed = true;
-			onQueueNotEmpty(); // To unstuck (unstick?) the generator
 		})().catch((error) => {
-			if (!hasOutOfBandError) {
+			if (!stopped && !hasOutOfBandError) {
 				outOfBandError = error;
 				hasOutOfBandError = true;
-				onQueueNotEmpty();
 			}
+
+			stop();
+			onDecoderCreated();
 		}).finally(() => {
 			track.input._disposeCallbacks.delete(terminate);
-			decoder?.close();
 			if (track.input._disposed) {
 				closeSamples();
 			}
@@ -670,15 +574,59 @@ export abstract class BaseMediaSampleSink<
 						terminate();
 						closeSamples();
 						throw outOfBandError;
-					} else if (sampleQueue.length > 0) {
-						const value = sampleQueue.shift()!;
-						onQueueDequeue();
-						return { value, done: false };
-					} else if (!decoderIsFlushed) {
-						await queueNotEmpty;
-					} else {
+					} else if (outputQueue.length > 0) {
+						return { value: outputQueue.shift()!, done: false };
+					} else if (ended) {
 						return { value: undefined, done: true };
+					} else if (!decoder) {
+						await decoderCreated;
+						continue;
 					}
+
+					let sample: MaybePromise<MediaSample | null>;
+					try {
+						sample = decoder.pull();
+						if (isThenable(sample)) sample = await sample;
+					} catch (error) {
+						if (!stopped && !hasOutOfBandError) {
+							outOfBandError = error;
+							hasOutOfBandError = true;
+						}
+
+						continue;
+					}
+
+					if (!sample) {
+						end();
+						continue;
+					}
+
+					if (sample.timestamp >= endTimestamp) {
+						sample.close();
+						stop();
+						end();
+						continue;
+					}
+
+					if (lastSample) {
+						if (sample.timestamp > startTimestamp) {
+							// We don't know ahead of time what the first sample is. This is because the first sample
+							// is the last sample whose timestamp is less than or equal to the start timestamp.
+							// Therefore we need to wait for the first sample after the start timestamp, and then we'll
+							// know that the previous sample was the first sample.
+							outputQueue.push(lastSample);
+							firstSampleQueued = true;
+						} else {
+							lastSample.close();
+						}
+					}
+
+					if (sample.timestamp >= startTimestamp) {
+						outputQueue.push(sample);
+						firstSampleQueued = true;
+					}
+
+					lastSample = firstSampleQueued ? null : sample;
 				}
 			},
 			async return() {
@@ -704,15 +652,18 @@ export abstract class BaseMediaSampleSink<
 	): AsyncGenerator<MediaSample | null, void, unknown> {
 		validateAnyIterable(timestamps);
 		const timestampIterator = toAsyncIterator(timestamps);
-		const timestampsOfInterest: number[] = [];
 
-		const sampleQueue: (MediaSample | null)[] = [];
-		let { promise: queueNotEmpty, resolve: onQueueNotEmpty } = promiseWithResolvers();
-		let { promise: queueDequeue, resolve: onQueueDequeue } = promiseWithResolvers();
-		let decoderIsFlushed = false;
+		// The query timestamps, grouped by the batch of packets that answers them. The decoder marks the end of each
+		// batch with a null.
+		const batches: number[][] = [];
+
+		const outputQueue: (MediaSample | null)[] = [];
+		let decoder: PacketDecoder<MediaSample> | null = null;
+		const { promise: decoderCreated, resolve: onDecoderCreated } = promiseWithResolvers();
+		let stopped = false;
+		const { promise: stoppedPromise, resolve: onStopped } = promiseWithResolvers();
+		let ended = false;
 		let terminated = false;
-		const { promise: terminatedPromise, resolve: onTerminated } = promiseWithResolvers();
-		let decoder: DecoderWrapper<MediaSample> | null = null;
 
 		// This stores errors that are "out of band" in the sense that they didn't occur in the normal flow of this
 		// method but instead in a different context. This error should not go unnoticed and must be bubbled up to
@@ -720,21 +671,14 @@ export abstract class BaseMediaSampleSink<
 		let outOfBandError = null as unknown;
 		let hasOutOfBandError = false;
 
-		const pushToQueue = (sample: MediaSample | null) => {
-			sampleQueue.push(sample);
-			onQueueNotEmpty();
-			({ promise: queueNotEmpty, resolve: onQueueNotEmpty } = promiseWithResolvers());
-		};
-
 		// The answer to a query timestamp is the last sample starting at or before it, but we only know a sample is the
-		// last one once the next one comes in (or the decoder is flushed). So, we hold on to the most recent one until
-		// then.
+		// last one once the next one comes in (or the batch ends). So, we hold on to the most recent one until then.
 		let heldSample: MediaSample | null = null;
 
 		const emitHeldSample = (count: number) => {
 			for (let i = 0; i < count; i++) {
 				// Clone the sample if we need to emit it multiple times
-				pushToQueue(heldSample && (i < count - 1 ? heldSample.clone() : heldSample) as MediaSample);
+				outputQueue.push(heldSample && (i < count - 1 ? heldSample.clone() : heldSample) as MediaSample);
 			}
 
 			if (count === 0) {
@@ -753,16 +697,19 @@ export abstract class BaseMediaSampleSink<
 		const closeSamples = () => {
 			heldSample?.close();
 			heldSample = null;
-			for (const sample of sampleQueue) {
+			for (const sample of outputQueue) {
 				sample?.close();
 			}
-			sampleQueue.length = 0;
+			outputQueue.length = 0;
+		};
+		const stop = () => {
+			stopped = true;
+			onStopped();
+			decoder?.close();
 		};
 		const terminate = () => {
 			terminated = true;
-			onTerminated();
-			onQueueDequeue();
-			onQueueNotEmpty();
+			stop();
 		};
 
 		// Disposal must wake an idle pump even if the consumer never advances the iterator again.
@@ -772,34 +719,8 @@ export abstract class BaseMediaSampleSink<
 
 		// The following is the "pump" process that keeps pumping packets into the decoder
 		(async () => {
-			decoder = await this._createDecoder((sample) => {
-				onQueueDequeue();
-
-				if (terminated) {
-					sample.close();
-					return;
-				}
-
-				// Every query timestamp this sample starts after is answered by the sample before it
-				let heldSampleUses = 0;
-				while (
-					timestampsOfInterest.length > 0
-					&& sample.timestamp - timestampsOfInterest[0]! > 1e-10 // Give it a little epsilon
-				) {
-					heldSampleUses++;
-					timestampsOfInterest.shift();
-				}
-
-				emitHeldSample(heldSampleUses);
-				heldSample = sample;
-			}, (error) => {
-				if (!hasOutOfBandError) {
-					outOfBandError = error;
-					hasOutOfBandError = true;
-					onQueueNotEmpty();
-				}
-			});
-			decoder.onDequeue = () => onQueueDequeue();
+			decoder = await this._createDecoder();
+			onDecoderCreated();
 
 			const packetSink = this._createPacketSink();
 			const preRollDuration = await this._getPreRollDuration();
@@ -820,56 +741,40 @@ export abstract class BaseMediaSampleSink<
 				let currentPacket = lastDecodedPacket;
 				if (!currentPacket) {
 					currentPacket = lastKeyPacket;
-					decoder.decode(currentPacket);
+					const backpressure = decoder.push(currentPacket);
+					if (backpressure) await backpressure;
 				}
 
 				while (currentPacket.sequenceNumber < maxSequenceNumber) {
-					while (sampleQueue.length + decoder.getDecodeQueueSize() >= MAX_QUEUE_SIZE && !terminated) {
-						({ promise: queueDequeue, resolve: onQueueDequeue } = promiseWithResolvers());
-						await queueDequeue;
-					}
-
-					if (terminated) {
-						break;
-					}
-
 					const nextPacket = await packetSink.getNextPacket(currentPacket, retrievalOptions);
 					if (!nextPacket) {
 						throw new Error('Internal error: couldn\'t get next packet when one was expected.');
 					}
 
-					decoder.decode(nextPacket);
+					if (stopped) {
+						break;
+					}
+
+					const backpressure = decoder.push(nextPacket);
+					if (backpressure) await backpressure;
 					currentPacket = nextPacket;
 				}
 
 				lastDecodedPacket = currentPacket;
 			};
 
-			const flushDecoder = async () => {
-				assert(decoder);
-				await decoder.flush();
-
-				// No sample starts after the remaining query timestamps, so the last one answers all of them
-				emitHeldSample(timestampsOfInterest.length);
-				timestampsOfInterest.length = 0;
-			};
-
 			try {
 				while (true) {
-					// The timestamps may take arbitrarily long to come in, so stop waiting on them once terminated
+					// The timestamps may take arbitrarily long to come in, so stop waiting on them once stopped
 					const nextTimestamp = timestampIterator.next();
 					nextTimestamp.catch(() => {}); // It may lose the race and reject later on
-					const result = await Promise.race([nextTimestamp, terminatedPromise]);
+					const result = await Promise.race([nextTimestamp, stoppedPromise]);
 					if (!result || result.done) {
 						break;
 					}
 
 					const timestamp = result.value;
 					validateTimestamp(timestamp);
-
-					if (terminated || this._track.input._disposed) {
-						break;
-					}
 
 					const targetPacket = await packetSink.getPacket(timestamp, retrievalOptions);
 					let keyPacket = targetPacket && await packetSink.getKeyPacket(
@@ -884,12 +789,19 @@ export abstract class BaseMediaSampleSink<
 						}
 					}
 
+					if (stopped || this._track.input._disposed) {
+						break;
+					}
+
 					if (!targetPacket || !keyPacket) {
 						if (lastPacket) {
-							await flushDecoder();
+							void decoder.push(null);
 						}
 
-						pushToQueue(null);
+						// Nothing to decode, so this timestamp gets a batch of its own that ends right away and is thus
+						// answered with null
+						batches.push([timestamp]);
+						void decoder.push(null);
 						lastPacket = null;
 						continue;
 					}
@@ -904,15 +816,18 @@ export abstract class BaseMediaSampleSink<
 						|| timestamp < lastTimestamp
 					) {
 						if (lastPacket) {
-							await flushDecoder(); // Always flush here, improves decoder compatibility
+							void decoder.push(null); // Always flush here, improves decoder compatibility
 						}
 
+						batches.push([]);
 						lastKeyPacket = keyPacket;
 						lastDecodedPacket = null;
 						maxSequenceNumber = -1;
 					}
 
-					timestampsOfInterest.push(timestamp);
+					const batch = last(batches);
+					assert(batch);
+					batch.push(timestamp);
 					maxSequenceNumber = Math.max(targetPacket.sequenceNumber, maxSequenceNumber);
 
 					lastPacket = targetPacket;
@@ -925,21 +840,21 @@ export abstract class BaseMediaSampleSink<
 				timestampIterator.return().catch(() => {});
 			}
 
-			if (!terminated && !this._track.input._disposed) {
-				await flushDecoder();
+			if (stopped) {
+				decoder.close();
+			} else {
+				void decoder.end();
 			}
-
-			decoderIsFlushed = true;
-			onQueueNotEmpty(); // To unstuck the generator
 		})().catch((error) => {
-			if (!hasOutOfBandError) {
+			if (!stopped && !hasOutOfBandError) {
 				outOfBandError = error;
 				hasOutOfBandError = true;
-				onQueueNotEmpty();
 			}
+
+			stop();
+			onDecoderCreated();
 		}).finally(() => {
 			track.input._disposeCallbacks.delete(terminate);
-			decoder?.close();
 			if (track.input._disposed) {
 				closeSamples();
 			}
@@ -961,16 +876,60 @@ export abstract class BaseMediaSampleSink<
 						terminate();
 						closeSamples();
 						throw outOfBandError;
-					} else if (sampleQueue.length > 0) {
-						const value = sampleQueue.shift();
+					} else if (outputQueue.length > 0) {
+						const value = outputQueue.shift();
 						assert(value !== undefined);
-						onQueueDequeue();
 						return { value, done: false };
-					} else if (!decoderIsFlushed) {
-						await queueNotEmpty;
-					} else {
+					} else if (ended) {
 						return { value: undefined, done: true };
+					} else if (!decoder) {
+						await decoderCreated;
+						continue;
 					}
+
+					let sample: MaybePromise<MediaSample | null>;
+					try {
+						sample = decoder.pull();
+						if (isThenable(sample)) sample = await sample;
+					} catch (error) {
+						if (!stopped && !hasOutOfBandError) {
+							outOfBandError = error;
+							hasOutOfBandError = true;
+						}
+
+						continue;
+					}
+
+					if (!sample) {
+						const batch = batches.shift();
+						if (batch) {
+							// No sample starts after the batch's remaining query timestamps, so the last one answers
+							// all of them
+							emitHeldSample(batch.length);
+						}
+
+						if (decoder.done) {
+							ended = true;
+						}
+
+						continue;
+					}
+
+					const batch = batches[0];
+					assert(batch);
+
+					// Every query timestamp this sample starts after is answered by the sample before it
+					let heldSampleUses = 0;
+					while (
+						batch.length > 0
+						&& sample.timestamp - batch[0]! > 1e-10 // Give it a little epsilon
+					) {
+						heldSampleUses++;
+						batch.shift();
+					}
+
+					emitHeldSample(heldSampleUses);
+					heldSample = sample;
 				}
 			},
 			async return() {
@@ -989,953 +948,6 @@ export abstract class BaseMediaSampleSink<
 		};
 	}
 }
-
-class VideoDecoderWrapper extends DecoderWrapper<VideoSample> {
-	decoder: VideoDecoder | null = null;
-
-	customDecoder: CustomVideoDecoder | null = null;
-	customDecoderCallSerializer = new CallSerializer();
-	customDecoderQueueSize = 0;
-
-	inputTimestamps: number[] = []; // Timestamps input into the decoder, sorted.
-	sampleQueue: VideoSample[] = []; // Safari-specific thing, check usage.
-	currentPacketIndex = 0;
-	raslSkipped = false; // For HEVC stuff
-
-	// Alpha stuff
-	alphaDecoder: VideoDecoder | null = null;
-	alphaHadKeyframe = false;
-	colorQueue: VideoFrame[] = [];
-	alphaQueue: (VideoFrame | null)[] = [];
-	merger: ColorAlphaMerger | null = null;
-	decodedAlphaChunkCount = 0;
-	alphaDecoderQueueSize = 0;
-	/** Each value is the number of decoded alpha chunks at which a null alpha frame should be added. */
-	nullAlphaFrameQueue: number[] = [];
-	currentAlphaPacketIndex = 0;
-	alphaRaslSkipped = false; // For HEVC stuff
-	finalSamples: { sample: VideoSample | null }[] = [];
-	mergeAlphaPromises: Promise<void>[] = [];
-	flushing = false;
-
-	// Needed for a Chromium for Android workaround
-	frameCopyContext: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null;
-
-	constructor(
-		onSample: (sample: VideoSample) => unknown,
-		onError: (error: unknown) => unknown,
-		public codec: VideoCodec,
-		public decoderConfig: VideoDecoderConfig,
-		public rotation: Rotation,
-		public flip: boolean,
-		public timeResolution: number,
-	) {
-		super(onSample, onError);
-
-		const MatchingCustomDecoder = customVideoDecoders.find(x => x.supports(codec, decoderConfig));
-		if (MatchingCustomDecoder) {
-			// @ts-expect-error "Can't create instance of abstract class 🤓"
-			this.customDecoder = new MatchingCustomDecoder() as CustomVideoDecoder;
-			// @ts-expect-error It's technically readonly
-			this.customDecoder.codec = codec;
-			// @ts-expect-error It's technically readonly
-			this.customDecoder.config = decoderConfig;
-			// @ts-expect-error It's technically readonly
-			this.customDecoder.onSample = (sample) => {
-				if (!(sample instanceof VideoSample)) {
-					throw new TypeError('The argument passed to onSample must be a VideoSample.');
-				}
-
-				this.finalizeAndEmitSample(sample);
-			};
-			// @ts-expect-error It's technically readonly
-			this.customDecoder.onError = (error) => {
-				onError(error);
-			};
-
-			void this.customDecoderCallSerializer
-				.call(() => this.customDecoder!.init())
-				.catch(error => onError(error));
-		} else {
-			const colorHandler = (frame: VideoFrame) => {
-				if (this.alphaQueue.length > 0) {
-					// Even when no alpha data is present (most of the time), there will be nulls in this queue
-					const alphaFrame = this.alphaQueue.shift();
-					assert(alphaFrame !== undefined);
-
-					void this.mergeAlpha(frame, alphaFrame);
-				} else {
-					this.colorQueue.push(frame);
-				}
-			};
-
-			if (isChromium()) {
-				if (codec === 'avc' && this.decoderConfig.description) {
-					const record = deserializeAvcDecoderConfigurationRecord(
-						toUint8Array(this.decoderConfig.description),
-					);
-					if (record && record.sequenceParameterSets.length > 0) {
-						const firstSps = parseAvcSps(record.sequenceParameterSets[0]!);
-						if (firstSps && firstSps.frameMbsOnlyFlag === 0) {
-							// Chromium has/had a bug with playing interlaced AVC
-							// (https://issues.chromium.org/issues/456919096) which can be worked around by
-							// requesting that software decoding be used. So, here we peek into the AVC description,
-							// if present, and switch to software decoding if we find interlaced content.
-							this.decoderConfig = {
-								...this.decoderConfig,
-								hardwareAcceleration: 'prefer-software',
-							};
-						}
-
-						// Modify the SPSs to fix potential loss of B frames
-						let recordModified = false;
-						for (let i = 0; i < record.sequenceParameterSets.length; i++) {
-							const sps = parseAvcSps(record.sequenceParameterSets[i]!);
-							if (sps && sps.maxDecFrameBuffering !== 0 && sps.bitstreamRestrictionFlag !== 1) {
-								record.sequenceParameterSets[i] = addAvcBitstreamRestriction(sps);
-								recordModified = true;
-							}
-						}
-
-						if (recordModified) {
-							this.decoderConfig = {
-								...this.decoderConfig,
-								description: serializeAvcDecoderConfigurationRecord(record),
-							};
-						}
-					}
-				}
-
-				if (!colorSpaceIsComplete(this.decoderConfig.colorSpace)) {
-					// Found via https://github.com/remotion-dev/remotion/issues/10841.
-					// If the color space is incomplete (which is often that it's just partially filled), Chromium has
-					// some nasty logic where it doesn't pass that information along to the GPU at all. The result is
-					// that information is genuinely lost, like the color matrix for example. Chromium has other code
-					// paths where it just fills the missing values with a hardcoded default, so we do the exact same
-					// thing here, with the same hardcoded defaults:
-					this.decoderConfig = {
-						...this.decoderConfig,
-						colorSpace: {
-							primaries: this.decoderConfig.colorSpace?.primaries ?? 'bt709',
-							matrix: this.decoderConfig.colorSpace?.matrix ?? 'bt709',
-							transfer: this.decoderConfig.colorSpace?.transfer ?? 'bt709',
-							fullRange: this.decoderConfig.colorSpace?.fullRange ?? false,
-						},
-					};
-				}
-			}
-
-			const stack = new Error('Decoding error').stack;
-
-			this.decoder = new VideoDecoder({
-				output: (frame) => {
-					try {
-						colorHandler(this.copyFrameIfNeeded(frame));
-					} catch (error) {
-						this.onError(error);
-					}
-				},
-				error: (error) => {
-					error.stack = stack; // Provide a more useful stack trace, the default one sucks
-					this.onError(error);
-				},
-			});
-			this.decoder.addEventListener('dequeue', () => {
-				this.onDequeue?.();
-			});
-			this.decoder.configure(this.decoderConfig);
-		}
-	}
-
-	getDecodeQueueSize() {
-		if (this.customDecoder) {
-			return this.customDecoderQueueSize;
-		} else {
-			assert(this.decoder);
-
-			return Math.max(
-				this.decoder.decodeQueueSize,
-				this.alphaDecoder?.decodeQueueSize ?? 0,
-			) + this.finalSamples.length;
-		}
-	}
-
-	decode(packet: EncodedPacket) {
-		if (this.codec === 'hevc' && this.currentPacketIndex > 0 && !this.raslSkipped) {
-			if (this.hasHevcRaslPicture(packet.data)) {
-				return; // Drop
-			}
-
-			this.raslSkipped = true;
-		}
-
-		if (this.customDecoder) {
-			this.customDecoderQueueSize++;
-			void this.customDecoderCallSerializer
-				.call(() => this.customDecoder!.decode(packet))
-				.catch(error => this.onError(error))
-				.finally(() => {
-					this.customDecoderQueueSize--;
-					this.onDequeue?.();
-				});
-		} else {
-			assert(this.decoder);
-
-			if (!isWebKit()) {
-				// It is important that we don't add timestamps for packets that won't produce a frame. If we did, it
-				// would offset everything. See https://github.com/Vanilagy/mediabunny/issues/642.
-				const shownFrameCount = countShownVideoFrames(this.codec, packet.data);
-				for (let i = 0; i < shownFrameCount; i++) {
-					insertSorted(this.inputTimestamps, packet.timestamp, x => x);
-				}
-			}
-
-			if (isChromium() && this.currentPacketIndex === 0) {
-				const fixedData = this.fixFirstPacketDataForChromium(packet.data);
-				if (fixedData) {
-					packet = packet.clone({ data: fixedData });
-				}
-			}
-
-			this.decoder.decode(packet.toEncodedVideoChunk());
-			this.decodeAlphaData(packet);
-		}
-
-		this.currentPacketIndex++;
-	}
-
-	decodeAlphaData(packet: EncodedPacket) {
-		if (!packet.sideData.alpha) {
-			// No alpha side data in the packet, most common case
-			this.pushNullAlphaFrame();
-			return;
-		}
-
-		if (!this.merger) {
-			this.merger = new ColorAlphaMerger();
-		}
-
-		// Check if we need to set up the alpha decoder
-		if (!this.alphaDecoder) {
-			const alphaHandler = (frame: VideoFrame) => {
-				if (this.colorQueue.length > 0) {
-					const colorFrame = this.colorQueue.shift();
-					assert(colorFrame !== undefined);
-
-					void this.mergeAlpha(colorFrame, frame);
-				} else {
-					this.alphaQueue.push(frame);
-				}
-
-				// Check if any null frames have been queued for this point
-				this.decodedAlphaChunkCount++;
-				while (
-					this.nullAlphaFrameQueue.length > 0
-					&& this.nullAlphaFrameQueue[0] === this.decodedAlphaChunkCount
-				) {
-					this.nullAlphaFrameQueue.shift();
-
-					if (this.colorQueue.length > 0) {
-						const colorFrame = this.colorQueue.shift();
-						assert(colorFrame !== undefined);
-
-						void this.mergeAlpha(colorFrame, null);
-					} else {
-						this.alphaQueue.push(null);
-					}
-				}
-
-				this.alphaDecoderQueueSize--;
-			};
-
-			const stack = new Error('Decoding error').stack;
-
-			this.alphaDecoder = new VideoDecoder({
-				output: (frame) => {
-					try {
-						alphaHandler(this.copyFrameIfNeeded(frame));
-					} catch (error) {
-						this.onError(error);
-					}
-				},
-				error: (error) => {
-					error.stack = stack; // Provide a more useful stack trace, the default one sucks
-					this.onError(error);
-				},
-			});
-			this.alphaDecoder.addEventListener('dequeue', () => {
-				this.onDequeue?.();
-			});
-			this.alphaDecoder.configure({
-				...this.decoderConfig,
-				// Alpha is always full range, regardless of what the color track says. The decoder only honors the
-				// override if all fields are set tho.
-				colorSpace: {
-					fullRange: true,
-					// These fields are irrelevant:
-					matrix: 'bt709',
-					primaries: 'bt709',
-					transfer: 'bt709',
-				},
-			});
-		}
-
-		const type = determineVideoPacketType(this.codec, this.decoderConfig, packet.sideData.alpha);
-
-		// Alpha packets might follow a different key frame rhythm than the main packets. Therefore, before we start
-		// decoding, we must first find a packet that's actually a key frame. Until then, we treat the image as opaque.
-		if (!this.alphaHadKeyframe) {
-			this.alphaHadKeyframe = type === 'key';
-		}
-
-		if (this.alphaHadKeyframe) {
-			// Same RASL skipping logic as for color, unlikely to be hit (since who uses HEVC with separate alpha??) but
-			// here for symmetry.
-			if (this.codec === 'hevc' && this.currentAlphaPacketIndex > 0 && !this.alphaRaslSkipped) {
-				if (this.hasHevcRaslPicture(packet.sideData.alpha)) {
-					this.pushNullAlphaFrame();
-					return;
-				}
-
-				this.alphaRaslSkipped = true;
-			}
-
-			// The alpha decoder is a decoder of its own, so its first packet needs the same treatment
-			if (isChromium() && this.currentAlphaPacketIndex === 0) {
-				const fixedData = this.fixFirstPacketDataForChromium(packet.sideData.alpha);
-				if (fixedData) {
-					packet = packet.clone({
-						sideData: {
-							...packet.sideData,
-							alpha: fixedData,
-						},
-					});
-				}
-			}
-
-			this.currentAlphaPacketIndex++;
-			this.alphaDecoder.decode(packet.alphaToEncodedVideoChunk(type ?? packet.type));
-			this.alphaDecoderQueueSize++;
-		} else {
-			this.pushNullAlphaFrame();
-		}
-	}
-
-	fixFirstPacketDataForChromium(data: Uint8Array) {
-		if (this.codec === 'avc') {
-			// Workaround for https://issues.chromium.org/issues/470109459
-			const filteredNalUnits: Uint8Array[] = [];
-			let hasFrameData = false;
-
-			for (const loc of iterateAvcNalUnits(data, this.decoderConfig)) {
-				const type = extractNalUnitTypeForAvc(data[loc.offset]!);
-				hasFrameData ||= type >= 1 && type <= 5;
-
-				if (type === AvcNalUnitType.AUD) {
-					if (hasFrameData) {
-						// Already has actual frame data, so treat an AUD as simply the end of the packet
-						break;
-					} else {
-						// If packets contain an AUD and have NALUs before it, this trips up Chromium's key frame
-						// detector. Clear the NALUs if an AUD is encountered.
-						// https://github.com/Vanilagy/mediabunny/issues/396
-						filteredNalUnits.length = 0;
-					}
-				}
-
-				// These trip up Chromium's key frame detection, so let's strip them
-				if (!(type >= 20 && type <= 31)) {
-					filteredNalUnits.push(data.subarray(loc.offset, loc.offset + loc.length));
-				}
-			}
-
-			if (!this.decoderConfig.description) {
-				// Do SPS fixups if necessary
-				for (let i = 0; i < filteredNalUnits.length; i++) {
-					const nalUnit = filteredNalUnits[i]!;
-					if (extractNalUnitTypeForAvc(nalUnit[0]!) !== AvcNalUnitType.SPS) {
-						continue;
-					}
-
-					const sps = parseAvcSps(nalUnit);
-					if (sps && sps.maxDecFrameBuffering !== 0 && sps.bitstreamRestrictionFlag !== 1) {
-						filteredNalUnits[i] = addAvcBitstreamRestriction(sps);
-					}
-				}
-			}
-
-			return concatAvcNalUnits(filteredNalUnits, this.decoderConfig);
-		} else if (this.codec === 'hevc') {
-			// Workaround for https://issues.chromium.org/issues/507611247
-			return sanitizeHevcPacketForChromium(data, this.decoderConfig);
-		} else {
-			return null;
-		}
-	}
-
-	pushNullAlphaFrame() {
-		if (this.alphaDecoderQueueSize === 0) {
-			// Easy
-			this.alphaQueue.push(null);
-		} else {
-			// There are still alpha chunks being decoded, so pushing `null` immediately would result in out-of-order
-			// data and be incorrect. Instead, we need to enqueue a "null frame" for when the current decoder workload
-			// has finished.
-			this.nullAlphaFrameQueue.push(this.decodedAlphaChunkCount + this.alphaDecoderQueueSize);
-		}
-	}
-
-	/**
-	 * If we're using HEVC, we need to make sure to skip any RASL slices that follow a non-IDR key frame such as
-	 * CRA_NUT. This is because RASL slices cannot be decoded without data before the CRA_NUT. Browsers behave
-	 * differently here: Chromium drops the packets, Safari throws a decoder error. Either way, it's not good
-	 * and causes bugs upstream. So, let's take the dropping into our own hands.
-	 */
-	hasHevcRaslPicture(packetData: Uint8Array) {
-		for (const loc of iterateHevcNalUnits(packetData, this.decoderConfig)) {
-			const type = extractNalUnitTypeForHevc(packetData[loc.offset]!);
-			if (type === HevcNalUnitType.RASL_N || type === HevcNalUnitType.RASL_R) {
-				return true;
-			}
-		}
-
-		return false;
-	}
-
-	/** Handler for the WebCodecs VideoDecoder for ironing out browser differences. */
-	sampleHandler(sample: VideoSample) {
-		if (isWebKit()) {
-			// For correct B-frame handling, we don't just hand over the frames directly but instead add them to
-			// a queue, because we want to ensure frames are emitted in presentation order. We flush the queue
-			// each time we receive a frame with a timestamp larger than the highest we've seen so far, as we
-			// can sure that is not a B-frame. Typically, WebCodecs automatically guarantees that frames are
-			// emitted in presentation order, but Safari doesn't always follow this rule.
-			if (this.sampleQueue.length > 0 && (sample.timestamp >= last(this.sampleQueue)!.timestamp)) {
-				for (const sample of this.sampleQueue) {
-					this.finalizeAndEmitSample(sample);
-				}
-
-				this.sampleQueue.length = 0;
-			}
-
-			insertSorted(this.sampleQueue, sample, x => x.timestamp);
-		} else {
-			// Assign it the next earliest timestamp from the input. We do this because browsers, by spec, are
-			// required to emit decoded frames in presentation order *while* retaining the timestamp of their
-			// originating EncodedVideoChunk. For files with B-frames but no out-of-order timestamps (like a
-			// missing ctts box, for example), this causes a mismatch. We therefore fix the timestamps and
-			// ensure they are sorted by doing this.
-			const timestamp = this.inputTimestamps.shift();
-
-			// There's no way we'd have more decoded frames than encoded packets we passed in. Actually, the
-			// correspondence should be 1:1.
-			assert(timestamp !== undefined);
-
-			sample.setTimestamp(timestamp);
-			this.finalizeAndEmitSample(sample);
-		}
-	}
-
-	finalizeAndEmitSample(sample: VideoSample) {
-		// Round the timestamps to the time resolution
-		sample.setTimestamp(Math.round(sample.timestamp * this.timeResolution) / this.timeResolution);
-		sample.setDuration(Math.round(sample.duration * this.timeResolution) / this.timeResolution);
-		sample.setRotation(this.rotation);
-		sample.setFlip(this.flip);
-
-		this.onSample(sample);
-	}
-
-	async mergeAlpha(color: VideoFrame, alpha: VideoFrame | null) {
-		const resolver = promiseWithResolvers();
-		this.mergeAlphaPromises.push(resolver.promise);
-
-		// Alpha merging is concurrent but the samples must still be emitted in the same order in which the merging
-		// began. Therefore, serialize the results in an array.
-		const result: { sample: VideoSample | null } = { sample: null };
-		this.finalSamples.push(result);
-
-		try {
-			if (!alpha) {
-				// Nothing needs to be merged
-				result.sample = new VideoSample(color);
-			} else {
-				assert(this.merger);
-
-				// The merger takes ownership of the frames, so no need to close them ourselves
-				const finalFrame = await this.merger.merge(color, alpha);
-				result.sample = new VideoSample(finalFrame);
-			}
-
-			// Emit any leading samples that are ready, preserving input order
-			while (this.finalSamples.length > 0 && this.finalSamples[0]!.sample !== null) {
-				const next = this.finalSamples.shift()!;
-				this.sampleHandler(next.sample!);
-			}
-		} catch (error) {
-			removeItem(this.finalSamples, result);
-
-			// Samples that finished merging after this one were waiting on it and would be stuck forever otherwise
-			while (this.finalSamples.length > 0 && this.finalSamples[0]!.sample !== null) {
-				this.finalSamples.shift()!.sample!.close();
-			}
-
-			this.onError(error);
-		} finally {
-			removeItem(this.mergeAlphaPromises, resolver.promise);
-			resolver.resolve();
-		}
-	}
-
-	/**
-	 * This is a workaround for https://issues.chromium.org/issues/579043455. It circumvents the problem by instantly
-	 * drawing a frame to a new region of GPU memory (a canvas), which we know for certain won't get fucked up by
-	 * other draws.
-	 * Also see: https://github.com/Vanilagy/mediabunny/issues/573
-	 */
-	copyFrameIfNeeded(frame: VideoFrame) {
-		if (!isChromium() || !isAndroid()) {
-			return frame;
-		}
-
-		const visibleRect = frame.visibleRect!;
-		const width = visibleRect.width;
-		const height = visibleRect.height;
-
-		if (!this.frameCopyContext) {
-			let context: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
-			if (typeof OffscreenCanvas !== 'undefined') {
-				context = new OffscreenCanvas(width, height).getContext('2d', { alpha: false });
-			} else {
-				context = document.createElement('canvas').getContext('2d', { alpha: false });
-			}
-
-			if (!context) {
-				throw new Error('The \'2d\' canvas context is required to decode video on Chromium for Android.');
-			}
-
-			this.frameCopyContext = context;
-		}
-
-		const canvas = this.frameCopyContext.canvas;
-		if (canvas.width !== width || canvas.height !== height) {
-			canvas.width = width;
-			canvas.height = height;
-		}
-
-		// TODO: might need to make this more sophisticated once `rotation` and `flip` on VideoFrame are handled
-		this.frameCopyContext.drawImage(frame, 0, 0, width, height);
-		if (this.flushing) {
-			// The draw only runs on the GPU later, so a codec reset could beat it and leave us copying a stale picture.
-			// Reading back a pixel forces the draw to complete right now.
-			this.frameCopyContext.getImageData(0, 0, 1, 1);
-		}
-
-		const copy = new VideoFrame(canvas, {
-			timestamp: frame.timestamp,
-			duration: frame.duration ?? undefined,
-			displayWidth: frame.displayWidth,
-			displayHeight: frame.displayHeight,
-		});
-		frame.close();
-
-		return copy;
-	}
-
-	async flush() {
-		if (this.customDecoder) {
-			await this.customDecoderCallSerializer.call(() => this.customDecoder!.flush());
-		} else {
-			assert(this.decoder);
-			this.flushing = true;
-			await Promise.all([
-				this.decoder.flush(),
-				this.alphaDecoder?.flush(),
-			]);
-			this.flushing = false;
-			await Promise.all(this.mergeAlphaPromises);
-
-			this.inputTimestamps.length = 0;
-
-			this.colorQueue.forEach(x => x.close());
-			this.colorQueue.length = 0;
-			this.alphaQueue.forEach(x => x?.close());
-			this.alphaQueue.length = 0;
-
-			this.alphaHadKeyframe = false;
-			this.decodedAlphaChunkCount = 0;
-			this.alphaDecoderQueueSize = 0;
-			this.nullAlphaFrameQueue.length = 0;
-			this.currentAlphaPacketIndex = 0;
-			this.alphaRaslSkipped = false;
-		}
-
-		if (isWebKit()) {
-			for (const sample of this.sampleQueue) {
-				this.finalizeAndEmitSample(sample);
-			}
-
-			this.sampleQueue.length = 0;
-		}
-
-		this.currentPacketIndex = 0;
-		this.raslSkipped = false;
-	}
-
-	close() {
-		if (this.customDecoder) {
-			void this.customDecoderCallSerializer.call(() => this.customDecoder!.close())
-				.catch(error => this.onError(error));
-		} else {
-			assert(this.decoder);
-
-			if (this.decoder.state !== 'closed') {
-				this.decoder.close();
-			}
-			if (this.alphaDecoder && this.alphaDecoder.state !== 'closed') {
-				this.alphaDecoder.close();
-			}
-
-			this.colorQueue.forEach(x => x.close());
-			this.colorQueue.length = 0;
-			this.alphaQueue.forEach(x => x?.close());
-			this.alphaQueue.length = 0;
-
-			this.merger?.close();
-		}
-
-		for (const sample of this.sampleQueue) {
-			sample.close();
-		}
-		this.sampleQueue.length = 0;
-	}
-}
-
-/** Utility class that merges together color and alpha information on the CPU in a pool of workers. */
-export class ColorAlphaMerger {
-	private workers: Worker[] = [];
-	private nextWorkerIndex = 0;
-	private pendingRequests = new Map<number, ReturnType<typeof promiseWithResolvers<VideoFrame>>>();
-	private nextRequestId = 0;
-
-	merge(color: VideoFrame, alpha: VideoFrame): Promise<VideoFrame> {
-		if (this.workers.length === 0) {
-			const poolSize = clamp(navigator.hardwareConcurrency, 1, 4);
-			for (let i = 0; i < poolSize; i++) {
-				const worker = createWorker('color-alpha-merger', colorAlphaMergerWorkerCode);
-
-				worker.addEventListener('message', (event: MessageEvent<ColorAlphaMergerWorkerResponse>) => {
-					const data = event.data;
-					const pending = this.pendingRequests.get(data.id);
-					if (!pending) {
-						if ('frame' in data) {
-							data.frame.close(); // So it's still closed
-						}
-
-						return;
-					}
-					this.pendingRequests.delete(data.id);
-
-					if ('error' in data) {
-						pending.reject(new Error(data.error));
-					} else {
-						pending.resolve(data.frame);
-					}
-				});
-
-				worker.addEventListener('error', (event) => {
-					const error = new Error(event.message || 'Color/alpha merge worker error.');
-					for (const pending of this.pendingRequests.values()) {
-						pending.reject(error);
-					}
-					this.pendingRequests.clear();
-				});
-
-				this.workers.push(worker);
-			}
-		}
-
-		const id = this.nextRequestId++;
-		const pending = promiseWithResolvers<VideoFrame>();
-		this.pendingRequests.set(id, pending);
-
-		// Hand the job to the next worker in round-robin fashion
-		const worker = this.workers[this.nextWorkerIndex]!;
-		this.nextWorkerIndex = (this.nextWorkerIndex + 1) % this.workers.length;
-		worker.postMessage({ id, color, alpha }, { transfer: [color, alpha] });
-
-		return pending.promise;
-	}
-
-	close() {
-		for (const worker of this.workers) {
-			worker.terminate();
-		}
-		this.workers.length = 0;
-
-		const error = new Error('Color/alpha merger closed.');
-		for (const pending of this.pendingRequests.values()) {
-			pending.reject(error);
-		}
-		this.pendingRequests.clear();
-	}
-}
-
-type ColorAlphaMergerWorkerRequest = {
-	id: number;
-	color: VideoFrame;
-	alpha: VideoFrame;
-};
-
-type ColorAlphaMergerWorkerResponse =
-	| { id: number; frame: VideoFrame }
-	| { id: number; error: string };
-
-export const colorAlphaMergerWorkerCode = () => {
-	// These buffers are reused across frames as long as the size matches, since consecutive frames usually share
-	// dimensions
-	let cpuAlphaBuffer: Uint8Array | null = null;
-	let cpuColorBuffer: Uint8Array | null = null;
-
-	// Serialize execution internally so concurrent requests don't race on the shared cpu*Buffer state.
-	let chain: Promise<void> = Promise.resolve();
-	self.addEventListener('message', (event: MessageEvent<ColorAlphaMergerWorkerRequest>) => {
-		const { id, color, alpha } = event.data;
-		chain = chain.then(async () => {
-			try {
-				const frame = await merge(color, alpha);
-				self.postMessage({ id, frame }, { transfer: [frame] });
-			} catch (error) {
-				self.postMessage({ id, error: (error as Error).message });
-			} finally {
-				// We took ownership of the inputs via transfer; close them now that the merge (or its error) is done.
-				color.close();
-				alpha.close();
-			}
-		});
-	});
-
-	const merge = async (color: VideoFrame, alpha: VideoFrame): Promise<VideoFrame> => {
-		const format = color.format as VideoSamplePixelFormat | null;
-		const alphaFormat = alpha.format as VideoSamplePixelFormat | null;
-		if (!format || !alphaFormat) {
-			throw new Error('CPU color/alpha merging requires a known VideoFrame format.');
-		}
-
-		// The alpha frame must have the same bit depth as the color frame
-		const colorIs10 = format.includes('P10');
-		const colorIs12 = format.includes('P12');
-		const alphaIs10 = alphaFormat.includes('P10');
-		const alphaIs12 = alphaFormat.includes('P12');
-		if (alphaIs10 !== colorIs10 || alphaIs12 !== colorIs12) {
-			throw new Error(
-				`CPU color/alpha merging requires the alpha frame to have the same bit depth as the color frame`
-				+ ` (color: '${format}', alpha: '${alphaFormat}').`,
-			);
-		}
-
-		if (format === 'RGBX' || format === 'RGBA' || format === 'BGRX' || format === 'BGRA') {
-			return await mergeInterleavedRgba(color, alpha, format);
-		} else if (
-			format === 'I420' || format === 'I420P10' || format === 'I420P12'
-			|| format === 'I422' || format === 'I422P10' || format === 'I422P12'
-			|| format === 'I444' || format === 'I444P10' || format === 'I444P12'
-		) {
-			return await mergePlanarYuv(color, alpha, format);
-		} else if (format === 'NV12') {
-			return await mergeNv12(color, alpha);
-		}
-
-		throw new Error(`CPU color/alpha merging does not support format '${format}'.`);
-	};
-
-	const mergeInterleavedRgba = async (
-		color: VideoFrame,
-		alpha: VideoFrame,
-		format: 'RGBX' | 'RGBA' | 'BGRX' | 'BGRA',
-	): Promise<VideoFrame> => {
-		const width = color.visibleRect?.width ?? color.codedWidth;
-		const height = color.visibleRect?.height ?? color.codedHeight;
-
-		const pixelCount = width * height;
-		const output = new Uint8Array(pixelCount * 4);
-
-		// Color goes straight into the output buffer via copyTo, no intermediate copy needed
-		await color.copyTo(output);
-
-		// And now add the alpha data
-		const alphaY = await readAlpha(alpha, width, height, 1);
-		for (let i = 0, j = 3; i < pixelCount; i++, j += 4) {
-			output[j] = alphaY[i]!;
-		}
-
-		const outputFormat = (format === 'RGBX' || format === 'RGBA') ? 'RGBA' : 'BGRA';
-		const init = {
-			format: outputFormat,
-			codedWidth: width,
-			codedHeight: height,
-			displayWidth: color.displayWidth,
-			displayHeight: color.displayHeight,
-			colorSpace: color.colorSpace.toJSON(),
-			timestamp: color.timestamp,
-			duration: color.duration ?? undefined,
-			transfer: [output.buffer],
-		} as const;
-
-		return new VideoFrame(output, init);
-	};
-
-	const mergePlanarYuv = async (
-		color: VideoFrame,
-		alpha: VideoFrame,
-		format:
-			| 'I420' | 'I420P10' | 'I420P12'
-			| 'I422' | 'I422P10' | 'I422P12'
-			| 'I444' | 'I444P10' | 'I444P12',
-	): Promise<VideoFrame> => {
-		const width = color.visibleRect?.width ?? color.codedWidth;
-		const height = color.visibleRect?.height ?? color.codedHeight;
-
-		const is10 = format.includes('P10');
-		const is12 = format.includes('P12');
-		const bytesPerSample = (is10 || is12) ? 2 : 1;
-
-		let chromaW: number;
-		let chromaH: number;
-		if (format.startsWith('I420')) {
-			chromaW = Math.ceil(width / 2);
-			chromaH = Math.ceil(height / 2);
-		} else if (format.startsWith('I422')) {
-			chromaW = Math.ceil(width / 2);
-			chromaH = height;
-		} else {
-			chromaW = width;
-			chromaH = height;
-		}
-
-		const ySamples = width * height;
-		const uvSamples = chromaW * chromaH;
-		const yBytes = ySamples * bytesPerSample;
-		const uvBytes = uvSamples * bytesPerSample;
-		const aBytes = ySamples * bytesPerSample;
-
-		const outputBytes = yBytes + 2 * uvBytes + aBytes;
-		const output = new Uint8Array(outputBytes);
-
-		// Write color planes directly into the output buffer via copyTo, no intermediate copy
-		await color.copyTo(output);
-
-		const alphaY = await readAlpha(alpha, width, height, bytesPerSample);
-		const aOffset = yBytes + 2 * uvBytes;
-		output.set(alphaY, aOffset);
-
-		const outputFormat = (format.slice(0, 4) + 'A' + format.slice(4)) as VideoPixelFormat;
-
-		const init = {
-			format: outputFormat,
-			codedWidth: width,
-			codedHeight: height,
-			displayWidth: color.displayWidth,
-			displayHeight: color.displayHeight,
-			colorSpace: color.colorSpace.toJSON(),
-			timestamp: color.timestamp,
-			duration: color.duration ?? undefined,
-			transfer: [output.buffer],
-		};
-
-		return new VideoFrame(output, init);
-	};
-
-	const mergeNv12 = async (
-		color: VideoFrame,
-		alpha: VideoFrame,
-	): Promise<VideoFrame> => {
-		const width = color.visibleRect?.width ?? color.codedWidth;
-		const height = color.visibleRect?.height ?? color.codedHeight;
-
-		const ySize = width * height;
-		const chromaW = Math.ceil(width / 2);
-		const chromaH = Math.ceil(height / 2);
-		const uvSize = chromaW * chromaH;
-
-		const sourceSize = color.allocationSize();
-		if (!cpuColorBuffer || cpuColorBuffer.byteLength !== sourceSize) {
-			cpuColorBuffer = new Uint8Array(sourceSize);
-		}
-		await color.copyTo(cpuColorBuffer);
-
-		const output = new Uint8Array(ySize + 2 * uvSize + ySize);
-
-		// Y plane copies straight over
-		output.set(cpuColorBuffer.subarray(0, ySize), 0);
-
-		// Deinterleave the UV plane into separate U and V planes
-		const uOffset = ySize;
-		const vOffset = ySize + uvSize;
-		const uvStart = ySize;
-		for (let i = 0; i < uvSize; i++) {
-			output[uOffset + i] = cpuColorBuffer[uvStart + i * 2]!;
-			output[vOffset + i] = cpuColorBuffer[uvStart + i * 2 + 1]!;
-		}
-
-		const alphaY = await readAlpha(alpha, width, height, 1);
-		output.set(alphaY, ySize + 2 * uvSize);
-
-		const init = {
-			format: 'I420A',
-			codedWidth: width,
-			codedHeight: height,
-			displayWidth: color.displayWidth,
-			displayHeight: color.displayHeight,
-			colorSpace: color.colorSpace.toJSON(),
-			timestamp: color.timestamp,
-			duration: color.duration ?? undefined,
-			transfer: [output.buffer],
-		} as const;
-
-		return new VideoFrame(output, init);
-	};
-
-	const readAlpha = async (alpha: VideoFrame, width: number, height: number, bytesPerSample: number) => {
-		const size = alpha.allocationSize();
-		if (!cpuAlphaBuffer || cpuAlphaBuffer.byteLength !== size) {
-			cpuAlphaBuffer = new Uint8Array(size);
-		}
-		await alpha.copyTo(cpuAlphaBuffer);
-
-		const format = alpha.format;
-		if (format === 'RGBA' || format === 'BGRA' || format === 'RGBX' || format === 'BGRX') {
-			// Pack alpha data tightly. Assume alpha is stored in RGB, so sample just from R for simplicity.
-			const rOffset = (format === 'RGBA' || format === 'RGBX') ? 0 : 2;
-			const pixelCount = width * height;
-			for (let i = 0; i < pixelCount; i++) {
-				cpuAlphaBuffer[i] = cpuAlphaBuffer[i * 4 + rOffset]!;
-			}
-			return cpuAlphaBuffer.subarray(0, pixelCount);
-		} else {
-			// For Y-plane-first formats (I*** and NV12), the leading width*height samples are the Y plane
-			const yPlane = cpuAlphaBuffer.subarray(0, width * height * bytesPerSample);
-
-			if (alpha.colorSpace.fullRange === false) {
-				// Some decoders hand us limited-range alpha, so stretch it back out to full range
-				const bitDepth = format!.includes('P12') ? 12 : format!.includes('P10') ? 10 : 8;
-				const low = 16 << (bitDepth - 8);
-				const high = 235 << (bitDepth - 8);
-				const max = (1 << bitDepth) - 1;
-				const samples = bytesPerSample === 2
-					? new Uint16Array(yPlane.buffer, 0, width * height)
-					: yPlane;
-
-				for (let i = 0; i < samples.length; i++) {
-					const value = Math.round((samples[i]! - low) * max / (high - low));
-					samples[i] = Math.min(Math.max(value, 0), max);
-				}
-			}
-
-			return yPlane;
-		}
-	};
-};
 
 /**
  * Describes additional decoder preferences for video sinks.
@@ -1998,10 +1010,7 @@ export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 	}
 
 	/** @internal */
-	async _createDecoder(
-		onSample: (sample: VideoSample) => unknown,
-		onError: (error: unknown) => unknown,
-	) {
+	async _createDecoder() {
 		if (!(await this._track.canDecode())) {
 			if (typeof VideoDecoder === 'undefined') {
 				throw new Error(missingWebCodecsClassMessage('VideoDecoder'));
@@ -2013,20 +1022,14 @@ export class VideoSampleSink extends BaseMediaSampleSink<VideoSample> {
 			);
 		}
 
-		const codec = await this._track.getCodec();
-		const rotation = await this._track.getRotation();
-		const flip = await this._track.getFlip();
-		let decoderConfig = await this._track.getDecoderConfig();
-		const timeResolution = await this._track.getTimeResolution();
-		assert(codec && decoderConfig);
+		const decoderConfig = await this._track.getDecoderConfig();
+		assert(decoderConfig);
 
-		decoderConfig = {
+		return new VideoPacketDecoder({
 			...decoderConfig,
 			hardwareAcceleration: this._decoderOptions.hardwareAcceleration,
 			optimizeForLatency: this._decoderOptions.optimizeForLatency,
-		};
-
-		return new VideoDecoderWrapper(onSample, onError, codec, decoderConfig, rotation, flip, timeResolution);
+		});
 	}
 
 	/** @internal */
@@ -2401,382 +1404,6 @@ export class CanvasSink {
 	}
 }
 
-class AudioDecoderWrapper extends DecoderWrapper<AudioSample> {
-	decoder: AudioDecoder | null = null;
-
-	customDecoder: CustomAudioDecoder | null = null;
-	customDecoderCallSerializer = new CallSerializer();
-	customDecoderQueueSize = 0;
-
-	// Internal state to accumulate a precise current timestamp based on audio durations, not the (potentially
-	// inaccurate) packet timestamps.
-	currentTimestamp: number | null = null;
-	// Chromium does not respect negative packet timestamps, so we must do the fixin' ourselves
-	expectedFirstTimestamp: number | null = null;
-	timestampOffset = 0;
-	// Index of the packet, since the last flush, whose timestamp the first decoded audio sample has
-	referencePacketIndex: number;
-	packetsSinceFlush = 0;
-	inputTimestampShift = 0;
-
-	constructor(
-		onSample: (sample: AudioSample) => unknown,
-		onError: (error: unknown) => unknown,
-		codec: AudioCodec,
-		decoderConfig: AudioDecoderConfig,
-	) {
-		super(onSample, onError);
-
-		// A Vorbis decoder outputs nada for the first packet it receives
-		this.referencePacketIndex = codec === 'vorbis' ? 1 : 0;
-
-		// WebCodecs impls discards the preskip (correct) but doesn't advance the timestamp (incorrect)
-		const opusPreSkip = codec === 'opus' && decoderConfig.description
-			? parseOpusIdentificationHeader(toUint8Array(decoderConfig.description)).preSkip / OPUS_SAMPLE_RATE
-			: 0;
-
-		const sampleHandler = (sample: AudioSample) => {
-			if (sample.numberOfFrames === 0) {
-				// We skip zero-data (empty) AudioSamples. These are sometimes emitted, for example, by Firefox when it
-				// decodes Vorbis (at the start). Skip them before they can anchor the timestamp offset.
-				sample.close();
-				return;
-			}
-
-			let sampleTimestamp = sample.timestamp;
-
-			if (this.expectedFirstTimestamp !== null && this.currentTimestamp === null) {
-				this.timestampOffset = this.expectedFirstTimestamp + opusPreSkip - sampleTimestamp;
-			}
-
-			sampleTimestamp += this.timestampOffset;
-
-			if (
-				this.currentTimestamp === null
-				|| Math.abs(sampleTimestamp - this.currentTimestamp) >= sample.duration
-			) {
-				// We need to sync with the sample timestamp again
-				this.currentTimestamp = sampleTimestamp;
-			}
-
-			const preciseTimestamp = this.currentTimestamp;
-			this.currentTimestamp += sample.duration;
-
-			// Round the timestamp to the sample rate
-			const sampleRate = decoderConfig.sampleRate;
-			sample.setTimestamp(Math.round(preciseTimestamp * sampleRate) / sampleRate);
-
-			onSample(sample);
-		};
-
-		const MatchingCustomDecoder = customAudioDecoders.find(x => x.supports(codec, decoderConfig));
-		if (MatchingCustomDecoder) {
-			// @ts-expect-error "Can't create instance of abstract class 🤓"
-			this.customDecoder = new MatchingCustomDecoder() as CustomAudioDecoder;
-			// @ts-expect-error It's technically readonly
-			this.customDecoder.codec = codec;
-			// @ts-expect-error It's technically readonly
-			this.customDecoder.config = decoderConfig;
-			// @ts-expect-error It's technically readonly
-			this.customDecoder.onSample = (sample) => {
-				if (!(sample instanceof AudioSample)) {
-					throw new TypeError('The argument passed to onSample must be an AudioSample.');
-				}
-
-				sampleHandler(sample);
-			};
-			// @ts-expect-error It's technically readonly
-			this.customDecoder.onError = (error) => {
-				onError(error);
-			};
-
-			void this.customDecoderCallSerializer
-				.call(() => this.customDecoder!.init())
-				.catch(error => onError(error));
-		} else {
-			const stack = new Error('Decoding error').stack;
-
-			this.decoder = new AudioDecoder({
-				output: (data) => {
-					try {
-						sampleHandler(new AudioSample(data));
-					} catch (error) {
-						this.onError(error);
-					}
-				},
-				error: (error) => {
-					error.stack = stack; // Provide a more useful stack trace, the default one sucks
-					this.onError(error);
-				},
-			});
-			this.decoder.addEventListener('dequeue', () => {
-				this.onDequeue?.();
-			});
-			this.decoder.configure(decoderConfig);
-		}
-	}
-
-	getDecodeQueueSize() {
-		if (this.customDecoder) {
-			return this.customDecoderQueueSize;
-		} else {
-			assert(this.decoder);
-			return this.decoder.decodeQueueSize;
-		}
-	}
-
-	decode(packet: EncodedPacket) {
-		if (this.customDecoder) {
-			this.customDecoderQueueSize++;
-			void this.customDecoderCallSerializer
-				.call(() => this.customDecoder!.decode(packet))
-				.catch(error => this.onError(error))
-				.finally(() => {
-					this.customDecoderQueueSize--;
-					this.onDequeue?.();
-				});
-		} else {
-			assert(this.decoder);
-
-			if (this.packetsSinceFlush === 0) {
-				this.inputTimestampShift = -packet.timestamp;
-			}
-			if (this.packetsSinceFlush === this.referencePacketIndex) {
-				this.expectedFirstTimestamp = packet.timestamp;
-			}
-			this.packetsSinceFlush++;
-
-			// Some decoders mishandle negative or otherwise unusual timestamps, so we always feed them a stream that
-			// starts at zero. Their output gets rebased onto expectedFirstTimestamp anyway.
-			// See https://github.com/Vanilagy/mediabunny/issues/653
-			const shiftedPacket = packet.clone({ timestamp: packet.timestamp + this.inputTimestampShift });
-			this.decoder.decode(shiftedPacket.toEncodedAudioChunk());
-		}
-	}
-
-	async flush() {
-		if (this.customDecoder) {
-			await this.customDecoderCallSerializer.call(() => this.customDecoder!.flush());
-		} else {
-			assert(this.decoder);
-			await this.decoder.flush();
-		}
-
-		this.currentTimestamp = null;
-		this.expectedFirstTimestamp = null;
-		this.packetsSinceFlush = 0;
-		this.inputTimestampShift = 0;
-		this.timestampOffset = 0;
-	}
-
-	close() {
-		if (this.customDecoder) {
-			void this.customDecoderCallSerializer.call(() => this.customDecoder!.close())
-				.catch(error => this.onError(error));
-		} else {
-			assert(this.decoder);
-
-			if (this.decoder.state !== 'closed') {
-				this.decoder.close();
-			}
-		}
-	}
-}
-
-// There are a lot of PCM variants not natively supported by the browser and by AudioData. Therefore we need a simple
-// decoder that maps any input PCM format into a PCM format supported by the browser.
-class PcmAudioDecoderWrapper extends DecoderWrapper<AudioSample> {
-	codec: PcmAudioCodec;
-
-	inputSampleSize: 1 | 2 | 3 | 4 | 8;
-	readInputValue: (view: DataView, byteOffset: number) => number;
-
-	outputSampleSize: 1 | 2 | 4;
-	outputFormat: 'u8' | 's16' | 's32' | 'f32';
-	writeOutputValue: (view: DataView, byteOffset: number, value: number) => void;
-
-	// Internal state to accumulate a precise current timestamp based on audio durations, not the (potentially
-	// inaccurate) packet timestamps.
-	currentTimestamp: number | null = null;
-
-	constructor(
-		onSample: (sample: AudioSample) => unknown,
-		onError: (error: unknown) => unknown,
-		public decoderConfig: AudioDecoderConfig,
-	) {
-		super(onSample, onError);
-
-		assert((PCM_AUDIO_CODECS as readonly string[]).includes(decoderConfig.codec));
-		this.codec = decoderConfig.codec as PcmAudioCodec;
-
-		const { dataType, sampleSize, littleEndian } = parsePcmCodec(this.codec);
-		this.inputSampleSize = sampleSize;
-
-		switch (sampleSize) {
-			case 1: {
-				if (dataType === 'unsigned') {
-					this.readInputValue = (view, byteOffset) => view.getUint8(byteOffset) - 2 ** 7;
-				} else if (dataType === 'signed') {
-					this.readInputValue = (view, byteOffset) => view.getInt8(byteOffset);
-				} else if (dataType === 'ulaw') {
-					this.readInputValue = (view, byteOffset) => fromUlaw(view.getUint8(byteOffset));
-				} else if (dataType === 'alaw') {
-					this.readInputValue = (view, byteOffset) => fromAlaw(view.getUint8(byteOffset));
-				} else {
-					assert(false);
-				}
-			}; break;
-			case 2: {
-				if (dataType === 'unsigned') {
-					this.readInputValue = (view, byteOffset) => view.getUint16(byteOffset, littleEndian) - 2 ** 15;
-				} else if (dataType === 'signed') {
-					this.readInputValue = (view, byteOffset) => view.getInt16(byteOffset, littleEndian);
-				} else {
-					assert(false);
-				}
-			}; break;
-			case 3: {
-				if (dataType === 'unsigned') {
-					this.readInputValue = (view, byteOffset) => getUint24(view, byteOffset, littleEndian) - 2 ** 23;
-				} else if (dataType === 'signed') {
-					this.readInputValue = (view, byteOffset) => getInt24(view, byteOffset, littleEndian);
-				} else {
-					assert(false);
-				}
-			}; break;
-			case 4: {
-				if (dataType === 'unsigned') {
-					this.readInputValue = (view, byteOffset) => view.getUint32(byteOffset, littleEndian) - 2 ** 31;
-				} else if (dataType === 'signed') {
-					this.readInputValue = (view, byteOffset) => view.getInt32(byteOffset, littleEndian);
-				} else if (dataType === 'float') {
-					this.readInputValue = (view, byteOffset) => view.getFloat32(byteOffset, littleEndian);
-				} else {
-					assert(false);
-				}
-			}; break;
-			case 8: {
-				if (dataType === 'float') {
-					this.readInputValue = (view, byteOffset) => view.getFloat64(byteOffset, littleEndian);
-				} else {
-					assert(false);
-				}
-			}; break;
-			default: {
-				assertNever(sampleSize);
-				assert(false);
-			};
-		}
-
-		switch (sampleSize) {
-			case 1: {
-				if (dataType === 'ulaw' || dataType === 'alaw') {
-					this.outputSampleSize = 2;
-					this.outputFormat = 's16';
-					this.writeOutputValue = (view, byteOffset, value) => view.setInt16(byteOffset, value, true);
-				} else {
-					this.outputSampleSize = 1;
-					this.outputFormat = 'u8';
-					this.writeOutputValue = (view, byteOffset, value) => view.setUint8(byteOffset, value + 2 ** 7);
-				}
-			}; break;
-			case 2: {
-				this.outputSampleSize = 2;
-				this.outputFormat = 's16';
-				this.writeOutputValue = (view, byteOffset, value) => view.setInt16(byteOffset, value, true);
-			}; break;
-			case 3: {
-				this.outputSampleSize = 4;
-				this.outputFormat = 's32';
-				// From https://www.w3.org/TR/webcodecs:
-				// AudioData containing 24-bit samples SHOULD store those samples in s32 or f32. When samples are
-				// stored in s32, each sample MUST be left-shifted by 8 bits.
-				this.writeOutputValue = (view, byteOffset, value) => view.setInt32(byteOffset, value << 8, true);
-			}; break;
-			case 4: {
-				this.outputSampleSize = 4;
-
-				if (dataType === 'float') {
-					this.outputFormat = 'f32';
-					this.writeOutputValue = (view, byteOffset, value) => view.setFloat32(byteOffset, value, true);
-				} else {
-					this.outputFormat = 's32';
-					this.writeOutputValue = (view, byteOffset, value) => view.setInt32(byteOffset, value, true);
-				}
-			}; break;
-			case 8: {
-				this.outputSampleSize = 4;
-
-				this.outputFormat = 'f32';
-				this.writeOutputValue = (view, byteOffset, value) => view.setFloat32(byteOffset, value, true);
-			}; break;
-			default: {
-				assertNever(sampleSize);
-				assert(false);
-			};
-		};
-	}
-
-	getDecodeQueueSize() {
-		return 0;
-	}
-
-	decode(packet: EncodedPacket) {
-		const inputView = toDataView(packet.data);
-
-		// A trailing partial frame (only in malformed files) gets dropped
-		const numberOfFrames = Math.floor(
-			packet.byteLength / this.decoderConfig.numberOfChannels / this.inputSampleSize,
-		);
-		if (numberOfFrames === 0) {
-			// Skip empty samples, just like the regular decoder does
-			return;
-		}
-
-		const outputBufferSize = numberOfFrames * this.decoderConfig.numberOfChannels * this.outputSampleSize;
-		const outputBuffer = new ArrayBuffer(outputBufferSize);
-		const outputView = new DataView(outputBuffer);
-
-		for (let i = 0; i < numberOfFrames * this.decoderConfig.numberOfChannels; i++) {
-			const inputIndex = i * this.inputSampleSize;
-			const outputIndex = i * this.outputSampleSize;
-
-			const value = this.readInputValue(inputView, inputIndex);
-			this.writeOutputValue(outputView, outputIndex, value);
-		}
-
-		const preciseDuration = numberOfFrames / this.decoderConfig.sampleRate;
-		if (this.currentTimestamp === null || Math.abs(packet.timestamp - this.currentTimestamp) >= preciseDuration) {
-			// We need to sync with the packet timestamp again
-			this.currentTimestamp = packet.timestamp;
-		}
-
-		const preciseTimestamp = this.currentTimestamp;
-		this.currentTimestamp += preciseDuration;
-
-		const sampleRate = this.decoderConfig.sampleRate;
-		const audioSample = new AudioSample({
-			format: this.outputFormat,
-			data: outputBuffer,
-			numberOfChannels: this.decoderConfig.numberOfChannels,
-			sampleRate,
-			numberOfFrames,
-			timestamp: roundToDivisor(preciseTimestamp, sampleRate),
-			_doNotCopy: true,
-		});
-
-		this.onSample(audioSample);
-	}
-
-	async flush() {
-		this.currentTimestamp = null;
-	}
-
-	close() {
-		// Do nothing
-	}
-}
-
 /**
  * Sink for retrieving decoded audio samples from an audio track.
  * @group Media sinks
@@ -2798,10 +1425,7 @@ export class AudioSampleSink extends BaseMediaSampleSink<AudioSample> {
 	}
 
 	/** @internal */
-	async _createDecoder(
-		onSample: (sample: AudioSample) => unknown,
-		onError: (error: unknown) => unknown,
-	) {
+	async _createDecoder() {
 		if (!(await this._track.canDecode())) {
 			if (typeof AudioDecoder === 'undefined') {
 				throw new Error(missingWebCodecsClassMessage('AudioDecoder'));
@@ -2813,15 +1437,10 @@ export class AudioSampleSink extends BaseMediaSampleSink<AudioSample> {
 			);
 		}
 
-		const codec = await this._track.getCodec();
 		const decoderConfig = await this._track.getDecoderConfig();
-		assert(codec && decoderConfig);
+		assert(decoderConfig);
 
-		if ((PCM_AUDIO_CODECS as readonly string[]).includes(decoderConfig.codec)) {
-			return new PcmAudioDecoderWrapper(onSample, onError, decoderConfig);
-		} else {
-			return new AudioDecoderWrapper(onSample, onError, codec, decoderConfig);
-		}
+		return new AudioPacketDecoder(decoderConfig);
 	}
 
 	/** @internal */

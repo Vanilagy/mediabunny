@@ -7,6 +7,7 @@
  */
 
 import { AudioCodec } from '../codec';
+import { ExtendedAudioDecoderConfig } from '../decode';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrackBacking } from '../input-track';
@@ -470,7 +471,7 @@ class Mp3AudioTrackBacking implements InputAudioTrackBacking {
 		};
 	}
 
-	async getDecoderConfig(): Promise<AudioDecoderConfig> {
+	async getDecoderConfig(): Promise<ExtendedAudioDecoderConfig> {
 		assert(this.demuxer.firstFrameHeader);
 
 		return {
