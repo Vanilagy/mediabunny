@@ -6,8 +6,8 @@ import { CanvasSink, EncodedPacketSink, VideoSampleSink } from '../../src/media-
 import { Output } from '../../src/output.js';
 import { WebMOutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
-import { CanvasSource, ColorAlphaSplitter, VideoSampleSource } from '../../src/media-source.js';
-import { canEncodeVideo, Quality } from '../../src/encode.js';
+import { CanvasSource, VideoSampleSource } from '../../src/media-source.js';
+import { canEncodeVideo, ColorAlphaSplitter, Quality } from '../../src/encode.js';
 import { VideoSample } from '../../src/sample.js';
 import { Conversion } from '../../src/conversion.js';
 

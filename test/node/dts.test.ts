@@ -254,10 +254,13 @@ test('Encode with huge timestamps', async () => {
 	expect(firstPacket.timestamp).toBe(timestamp - codecDelay);
 
 	const sampleSink = new AudioSampleSink(track);
-	const firstSample = (await sampleSink.samples(timestamp).next()).value;
+	const iterator = sampleSink.samples(timestamp);
+	const firstSample = (await iterator.next()).value;
 	assert(firstSample);
+	await iterator.return();
 
 	expect(firstSample.timestamp).toBe(timestamp);
+	firstSample.close();
 });
 
 const expectStreamShape = async (input: Input) => {

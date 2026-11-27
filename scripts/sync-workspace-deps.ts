@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-// After `npm version --workspaces` bumps each package's version, this rewrites dependency ranges that point at sibling
-// workspaces so they follow along.
+// After `npm version --workspaces` bumps each package's version, this rewrites dependency and peer dependency ranges
+// that point at sibling workspaces so they follow along.
 
 const root = path.join(import.meta.dirname, '..');
 
@@ -13,6 +13,7 @@ type Manifest = {
 	name: string;
 	version: string;
 	dependencies?: Record<string, string>;
+	peerDependencies?: Record<string, string>;
 };
 
 const manifests = workspaceDirs.map((dir) => {
@@ -25,11 +26,17 @@ const versions = new Map(manifests.map(({ json }) => [json.name, json.version]))
 for (const { filePath, json } of manifests) {
 	let changed = false;
 
-	for (const name of Object.keys(json.dependencies ?? {})) {
-		const version = versions.get(name);
-		if (version && json.dependencies![name] !== `^${version}`) {
-			json.dependencies![name] = `^${version}`;
-			changed = true;
+	for (const ranges of [json.dependencies, json.peerDependencies]) {
+		if (!ranges) {
+			continue;
+		}
+
+		for (const name of Object.keys(ranges)) {
+			const version = versions.get(name);
+			if (version && ranges[name] !== `^${version}`) {
+				ranges[name] = `^${version}`;
+				changed = true;
+			}
 		}
 	}
 

@@ -50,36 +50,43 @@ type FinalizationRegistryValue = {
 let lastVideoGcErrorLog = -Infinity;
 let lastAudioGcErrorLog = -Infinity;
 let finalizationRegistry: FinalizationRegistry<FinalizationRegistryValue> | null = null;
+const THROW_ON_SAMPLE_LEAK = Symbol.for('mediabunny:throwOnSampleLeak'); // Defined in the tests for extra strictness
+
 if (typeof FinalizationRegistry !== 'undefined') {
 	finalizationRegistry = new FinalizationRegistry<FinalizationRegistryValue>((value) => {
 		const now = performance.now();
+		const throwOnLeak = (globalThis as Record<symbol, unknown>)[THROW_ON_SAMPLE_LEAK] === true;
 
 		if (value.type === 'video') {
-			if (now - lastVideoGcErrorLog >= 1000) {
-				// This error is annoying but oh so important
-				Logging._error(
-					`A VideoSample was garbage collected without first being closed. For proper resource management,`
-					+ ` make sure to call close() on all your VideoSamples as soon as you're done using them.`,
-				);
-
-				lastVideoGcErrorLog = now;
-			}
-
 			if (typeof VideoFrame !== 'undefined' && value.data instanceof VideoFrame) {
 				value.data.close(); // Prevent the browser error since we're logging our own
 			}
-		} else {
-			if (now - lastAudioGcErrorLog >= 1000) {
-				Logging._error(
-					`An AudioSample was garbage collected without first being closed. For proper resource management,`
-					+ ` make sure to call close() on all your AudioSamples as soon as you're done using them.`,
-				);
 
-				lastAudioGcErrorLog = now;
+			const message = `A VideoSample was garbage collected without first being closed. For proper resource`
+				+ ` management, make sure to call close() on all your VideoSamples as soon as you're done using them.`;
+			if (throwOnLeak) {
+				throw new Error(message);
 			}
 
+			if (now - lastVideoGcErrorLog >= 1000) {
+				// This error is annoying but oh so important
+				Logging._error(message);
+				lastVideoGcErrorLog = now;
+			}
+		} else {
 			if (typeof AudioData !== 'undefined' && value.data instanceof AudioData) {
 				value.data.close();
+			}
+
+			const message = `An AudioSample was garbage collected without first being closed. For proper resource`
+				+ ` management, make sure to call close() on all your AudioSamples as soon as you're done using them.`;
+			if (throwOnLeak) {
+				throw new Error(message);
+			}
+
+			if (now - lastAudioGcErrorLog >= 1000) {
+				Logging._error(message);
+				lastAudioGcErrorLog = now;
 			}
 		}
 	});

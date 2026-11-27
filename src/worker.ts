@@ -7,7 +7,8 @@
  */
 
 import { colorAlphaMergerWorkerCode } from './decode';
-import { colorAlphaSplitterWorkerCode, mediaStreamTrackProcessorWorkerCode } from './media-source';
+import { colorAlphaSplitterWorkerCode } from './encode';
+import { mediaStreamTrackProcessorWorkerCode } from './media-source';
 import { unthrottledTimerWorkerCode } from './misc';
 
 switch (self.name) {

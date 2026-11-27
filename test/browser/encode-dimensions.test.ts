@@ -23,9 +23,10 @@ test('Odd video dimensions fail for AVC', async () => {
 	const canvas = document.createElement('canvas');
 	canvas.width = 1281;
 	canvas.height = 720;
-	const sample = new VideoSample(canvas, { timestamp: 0 });
+	using sample = new VideoSample(canvas, { timestamp: 0 });
 
-	await expect(source.add(sample)).rejects.toThrow('even number'); // The error message is explicit
+	await source.add(sample);
+	await expect(output.finalize()).rejects.toThrow('even number'); // The error message is explicit
 });
 
 test('Odd video dimensions fail for HEVC', async () => {
@@ -45,9 +46,10 @@ test('Odd video dimensions fail for HEVC', async () => {
 	const canvas = document.createElement('canvas');
 	canvas.width = 1281;
 	canvas.height = 720;
-	const sample = new VideoSample(canvas, { timestamp: 0 });
+	using sample = new VideoSample(canvas, { timestamp: 0 });
 
-	await expect(source.add(sample)).rejects.toThrow('even number');
+	await source.add(sample);
+	await expect(output.finalize()).rejects.toThrow('even number');
 });
 
 test('Odd video dimensions pass for VP9', async () => {
@@ -67,7 +69,7 @@ test('Odd video dimensions pass for VP9', async () => {
 	const canvas = document.createElement('canvas');
 	canvas.width = 1281;
 	canvas.height = 720;
-	const sample = new VideoSample(canvas, { timestamp: 0 });
+	using sample = new VideoSample(canvas, { timestamp: 0 });
 
 	await source.add(sample);
 });

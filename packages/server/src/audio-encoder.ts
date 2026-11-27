@@ -13,6 +13,7 @@ import {
 	type MaybePromise,
 	Quality,
 	EncodedPacket,
+	type ExtendedAudioDecoderConfig,
 } from 'mediabunny';
 import * as NodeAv from 'node-av';
 import { CODEC_TO_CODEC_ID, getChannelLayout, getDtsChannelLayout, getTrueHdChannelLayout } from './misc';
@@ -57,7 +58,7 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 	inputParametersKey: string | null = null;
 	resamplerInputSampleRate: number | null = null;
 	nextResamplerPts: bigint | null = null;
-	packetEmitted = false;
+	decoderConfig: ExtendedAudioDecoderConfig | null = null;
 	adtsHeaderTemplate: AdtsHeaderTemplate | null = null;
 
 	static override supports(codec: AudioCodec, config: AudioEncoderConfig): boolean {
@@ -315,10 +316,7 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 
 		let data: Uint8Array = this.packet.data;
 
-		let metadata: EncodedAudioChunkMetadata | undefined;
-		if (this.packetEmitted) {
-			metadata = {};
-		} else {
+		if (!this.decoderConfig) {
 			const codecString = this.config.codec;
 			let description = this.codecContext.extraData
 				? toUint8Array(this.codecContext.extraData)
@@ -363,13 +361,12 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 				]);
 			}
 
-			metadata = {
-				decoderConfig: {
-					codec: codecString,
-					sampleRate: this.codecContext.sampleRate,
-					numberOfChannels: this.codecContext.channels,
-					description,
-				},
+			this.decoderConfig = {
+				type: 'audio',
+				codec: codecString,
+				sampleRate: this.codecContext.sampleRate,
+				numberOfChannels: this.codecContext.channels,
+				description,
 			};
 		}
 
@@ -385,15 +382,13 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 			data = final;
 		}
 
-		const packet = new EncodedPacket({
+		this.onPacket(new EncodedPacket({
 			data,
 			type: determineAudioPacketType(this.codec, data),
 			timestamp,
 			duration,
-		});
-
-		this.packetEmitted = true;
-		this.onPacket(packet, metadata);
+			decoderConfig: this.decoderConfig,
+		}));
 	}
 
 	async flush(): Promise<void> {
@@ -448,7 +443,7 @@ export class NodeAvAudioEncoder extends CustomAudioEncoder {
 
 		this.codecContext.freeContext();
 		this.codecContext = null;
-		this.packetEmitted = false;
+		this.decoderConfig = null;
 		this.adtsHeaderTemplate = null;
 
 		this.resampler?.free();

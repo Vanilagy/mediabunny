@@ -396,8 +396,10 @@ test('AC-3 with huge timestamps', async () => {
 	const iterator = sampleSink.samples(timestamp);
 	const firstSample = (await iterator.next()).value;
 	assert(firstSample);
+	await iterator.return();
 
 	expect(firstSample.timestamp).toBe(timestamp - primingDelay);
+	firstSample.close();
 });
 
 test('E-AC-3 with huge timestamps', async () => {
@@ -448,8 +450,10 @@ test('E-AC-3 with huge timestamps', async () => {
 	const iterator = sampleSink.samples(timestamp);
 	const firstSample = (await iterator.next()).value;
 	assert(firstSample);
+	await iterator.return();
 
 	expect(firstSample.timestamp).toBe(timestamp - primingDelay);
+	firstSample.close();
 });
 
 test('Encode AC-3 input that fills its last frame', async () => {

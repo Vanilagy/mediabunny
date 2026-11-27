@@ -198,7 +198,17 @@ const testDecoderClosed = async (
 		await expect(iterator.next()).rejects.toThrow(InputDisposedError);
 	} else if (cause === 'decoderError') {
 		decoder.onError(new Error('Decoding failed'));
-		await expect(iterator.next()).rejects.toThrow('Decoding failed');
+
+		await expect((async () => {
+			while (true) {
+				const result = await iterator.next();
+				if (result.done) {
+					break;
+				}
+
+				result.value?.close();
+			}
+		})()).rejects.toThrow('Decoding failed');
 	} else {
 		await expect(iterator.throw(new Error('Stopped'))).rejects.toThrow('Stopped');
 		expect(await iterator.next()).toEqual({ value: undefined, done: true });

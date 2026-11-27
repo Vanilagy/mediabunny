@@ -550,6 +550,11 @@ export abstract class BaseMediaSampleSink<
 				void decoder.end();
 			}
 		})().catch((error) => {
+			// An errored decoder's own error comes out of pull()
+			if (decoder && !decoder.pushable) {
+				return;
+			}
+
 			if (!stopped && !hasOutOfBandError) {
 				outOfBandError = error;
 				hasOutOfBandError = true;
@@ -852,6 +857,11 @@ export abstract class BaseMediaSampleSink<
 				void decoder.end();
 			}
 		})().catch((error) => {
+			// An errored decoder's own error comes out of pull()
+			if (decoder && !decoder.pushable) {
+				return;
+			}
+
 			if (!stopped && !hasOutOfBandError) {
 				outOfBandError = error;
 				hasOutOfBandError = true;
@@ -914,7 +924,7 @@ export abstract class BaseMediaSampleSink<
 							emitHeldSample(batch.length);
 						}
 
-						if (decoder.done) {
+						if (!decoder.pullable) {
 							ended = true;
 						}
 
@@ -960,7 +970,7 @@ export abstract class BaseMediaSampleSink<
  * @group Media sinks
  * @public
  */
-export type VideoSinkDecoderOptions = VideoPacketDecoderOptions;
+export type VideoSinkDecoderOptions = Omit<VideoPacketDecoderOptions, 'highWaterMark'>;
 
 /**
  * A sink that retrieves decoded video samples (video frames) from a video track.

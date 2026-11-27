@@ -86,7 +86,31 @@ import {
 	uint8ArraysAreEqual,
 } from './misc';
 import { EncodedPacket } from './packet';
-import { fromAlaw, fromUlaw } from './pcm';
+import {
+	fromAlaw,
+	fromUlaw,
+	getPcmFormat,
+	PCM_FORMAT_ALAW,
+	PCM_FORMAT_F32_BE,
+	PCM_FORMAT_F32_LE,
+	PCM_FORMAT_F64_BE,
+	PCM_FORMAT_F64_LE,
+	PCM_FORMAT_S16_BE,
+	PCM_FORMAT_S16_LE,
+	PCM_FORMAT_S24_BE,
+	PCM_FORMAT_S24_LE,
+	PCM_FORMAT_S32_BE,
+	PCM_FORMAT_S32_LE,
+	PCM_FORMAT_S8,
+	PCM_FORMAT_U16_BE,
+	PCM_FORMAT_U16_LE,
+	PCM_FORMAT_U24_BE,
+	PCM_FORMAT_U24_LE,
+	PCM_FORMAT_U32_BE,
+	PCM_FORMAT_U32_LE,
+	PCM_FORMAT_U8,
+	PCM_FORMAT_ULAW,
+} from './pcm';
 import { AudioSample, VideoSample, VideoSamplePixelFormat } from './sample';
 
 polyfillSymbolDispose();
@@ -155,7 +179,15 @@ export type ExtendedAudioDecoderConfig = {
 	numberOfChannels: number;
 };
 
-export type VideoPacketDecoderOptions = {
+export type PacketDecoderOptions = {
+	/**
+	 * The queue size at which `push()` starts applying backpressure. The queue holds both the packets waiting to be
+	 * decoded and the decoded samples waiting to be pulled. Must be a positive integer; defaults to 4.
+	 */
+	highWaterMark?: number;
+};
+
+export type VideoPacketDecoderOptions = PacketDecoderOptions & {
 	/**
 	 * A hint that configures the hardware acceleration method of the decoder. This is best left on `'no-preference'`,
 	 * the default.
@@ -167,6 +199,8 @@ export type VideoPacketDecoderOptions = {
 	 */
 	optimizeForLatency?: boolean;
 };
+
+export type AudioPacketDecoderOptions = PacketDecoderOptions;
 
 export const validateExtendedVideoDecoderConfig = (
 	config: Partial<ExtendedVideoDecoderConfig>,
@@ -339,6 +373,26 @@ export const validateExtendedVideoDecoderConfig = (
 	}
 };
 
+export const videoDecoderConfigsAreEqual = (
+	a: DeepReadonly<ExtendedVideoDecoderConfig>,
+	b: DeepReadonly<ExtendedVideoDecoderConfig>,
+) => {
+	return a.codec === b.codec
+		&& descriptionsAreEqual(a.description, b.description)
+		&& a.codedWidth === b.codedWidth
+		&& a.codedHeight === b.codedHeight
+		&& a.displayAspectWidth === b.displayAspectWidth
+		&& a.displayAspectHeight === b.displayAspectHeight
+		&& (a.colorSpace?.primaries ?? null) === (b.colorSpace?.primaries ?? null)
+		&& (a.colorSpace?.transfer ?? null) === (b.colorSpace?.transfer ?? null)
+		&& (a.colorSpace?.matrix ?? null) === (b.colorSpace?.matrix ?? null)
+		&& (a.colorSpace?.fullRange ?? null) === (b.colorSpace?.fullRange ?? null)
+		&& (a.hardwareAcceleration ?? 'no-preference') === (b.hardwareAcceleration ?? 'no-preference')
+		&& (a.optimizeForLatency ?? false) === (b.optimizeForLatency ?? false)
+		&& (a.rotation ?? 0) === (b.rotation ?? 0)
+		&& (a.flip ?? false) === (b.flip ?? false);
+};
+
 export const validateExtendedAudioDecoderConfig = (
 	config: Partial<ExtendedAudioDecoderConfig>,
 	subject: string,
@@ -500,6 +554,20 @@ export const validateExtendedAudioDecoderConfig = (
 	}
 };
 
+export const audioDecoderConfigsAreEqual = (
+	a: DeepReadonly<ExtendedAudioDecoderConfig>,
+	b: DeepReadonly<ExtendedAudioDecoderConfig>,
+) => {
+	return a.codec === b.codec
+		&& descriptionsAreEqual(a.description, b.description)
+		&& a.sampleRate === b.sampleRate
+		&& a.numberOfChannels === b.numberOfChannels;
+};
+
+const descriptionsAreEqual = (a: AllowSharedBufferSource | undefined, b: AllowSharedBufferSource | undefined) => {
+	return a === b || (!!a && !!b && uint8ArraysAreEqual(toUint8Array(a), toUint8Array(b)));
+};
+
 export const validateVideoPacketDecoderOptions = (options: VideoPacketDecoderOptions, subject: string) => {
 	if (!options || typeof options !== 'object') {
 		throw new TypeError(`${subject} must be an object.`);
@@ -518,9 +586,22 @@ export const validateVideoPacketDecoderOptions = (options: VideoPacketDecoderOpt
 	}
 };
 
-const MAX_QUEUE_SIZE = 4;
+export const validateHighWaterMark = (highWaterMark: number | undefined, subject: string) => {
+	if (highWaterMark !== undefined && (!Number.isInteger(highWaterMark) || highWaterMark <= 0)) {
+		throw new TypeError(`${subject}.highWaterMark, when provided, must be a positive integer.`);
+	}
+};
+
+export const DEFAULT_HIGH_WATER_MARK = 4;
 
 type AnyDecoderConfig = DeepReadonly<ExtendedVideoDecoderConfig | ExtendedAudioDecoderConfig>;
+
+export class CoderClosedError extends Error {
+	constructor(message = 'The coder was closed during a pending pull.') {
+		super(message);
+		this.name = 'CoderClosedError';
+	}
+}
 
 export abstract class PacketDecoder<
 	MediaSample extends VideoSample | AudioSample,
@@ -548,50 +629,35 @@ export abstract class PacketDecoder<
 	/** @internal */
 	_hasError = false;
 	/** @internal */
-	_ended = false;
+	_pushable = true;
 	/** @internal */
 	_endEmitted = false;
 	/** @internal */
-	_done = false;
+	_pullable = true;
 	/** @internal */
 	_released = false;
 	/** @internal */
 	_finishedResolver = promiseWithResolvers();
 
-	get ended() {
-		return this._ended;
+	get pushable() {
+		return this._pushable;
 	}
 
-	get done() {
-		return this._done;
+	get pullable() {
+		return this._pullable;
 	}
 
 	/** @internal */
 	abstract _type: 'video' | 'audio';
-
 	/** @internal */
-	abstract _decoderConfigsAreEqual(a: AnyDecoderConfig, b: AnyDecoderConfig): boolean;
-	/** @internal */
-	abstract _configure(decoderConfig: AnyDecoderConfig): void;
-	/** @internal */
-	abstract _decodePacket(packet: EncodedPacket): void;
-	/** @internal */
-	abstract _flush(): Promise<void>;
-	/** @internal */
-	abstract _getDecoderQueueSize(): number;
-	/** @internal */
-	abstract _releaseDecoder(): void;
+	abstract _highWaterMark: number;
 
 	push(packet: EncodedPacket | null) {
 		if (packet !== null && !(packet instanceof EncodedPacket)) {
 			throw new TypeError('packet must be an EncodedPacket or null.');
 		}
 
-		if (this._ended) {
-			if (this._hasError) {
-				throw this._error;
-			}
-
+		if (!this._pushable) {
 			throw new Error('Cannot push after the decoder has been ended or closed.');
 		}
 
@@ -640,41 +706,42 @@ export abstract class PacketDecoder<
 		} else if (
 			this._pendingInputs.length === 0
 			&& !this._flushInProgress
-			&& (!packet || this._getAdmittedQueueSize() < MAX_QUEUE_SIZE)
+			&& (!packet || this._getAdmittedQueueSize() < this._highWaterMark)
 		) {
 			this._processInput(packet);
 		} else {
 			this._pendingInputs.push(packet);
 		}
 
-		if (this._hasError) {
-			throw this._error;
+		if (this._released || this._getQueueSize() < this._highWaterMark) {
+			return null;
 		}
 
-		return this._getBackpressurePromise();
+		this._backpressure ??= promiseWithResolvers();
+		return this._backpressure.promise;
 	}
 
 	pull(): MaybePromise<MediaSample | null> {
-		if (this._hasError) {
-			this._done = true;
-			throw this._error;
-		}
-		if (this._done) {
+		if (!this._pullable) {
 			throw new Error('Cannot pull past the end of the decoder.');
 		}
 
 		if (this._results.length > 0) {
-			const result = this._results.shift();
-			assert(result !== undefined);
+			const result = this._results.shift() as MediaSample | null;
 
 			if (result) {
 				this._handleDequeue();
 			} else if (this._endEmitted && this._results.length === 0) {
-				this._done = true;
+				this._pullable = false;
 				this._finishedResolver.resolve();
 			}
 
 			return result;
+		}
+
+		if (this._hasError) {
+			this._pullable = false;
+			throw this._error;
 		}
 
 		const resolver = promiseWithResolvers<MediaSample | null>();
@@ -684,8 +751,8 @@ export abstract class PacketDecoder<
 	}
 
 	end() {
-		if (!this._ended) {
-			this._ended = true;
+		if (this._pushable) {
+			this._pushable = false;
 			this._pendingInputs.push(null);
 			this._processInputs();
 		}
@@ -694,12 +761,22 @@ export abstract class PacketDecoder<
 	}
 
 	close() {
-		if (this._hasError || this._done) {
+		if (!this._pullable) {
 			return;
 		}
 
+		for (const result of this._results) {
+			result?.close();
+		}
+		this._results.length = 0;
+		this._pullable = false;
+
+		for (const pendingPull of this._pendingPulls) {
+			pendingPull.reject(new CoderClosedError('The decoder was closed during a pending pull.'));
+		}
+		this._pendingPulls.length = 0;
+
 		this._abort();
-		this._emitEnd();
 	}
 
 	[Symbol.dispose]() {
@@ -707,12 +784,25 @@ export abstract class PacketDecoder<
 	}
 
 	/** @internal */
+	abstract _decoderConfigsAreEqual(a: AnyDecoderConfig, b: AnyDecoderConfig): boolean;
+	/** @internal */
+	abstract _configure(decoderConfig: AnyDecoderConfig): void;
+	/** @internal */
+	abstract _decodePacket(packet: EncodedPacket): void;
+	/** @internal */
+	abstract _flush(): Promise<void>;
+	/** @internal */
+	abstract _getDecoderQueueSize(): number;
+	/** @internal */
+	abstract _releaseDecoder(): void;
+
+	/** @internal */
 	_processInputs() {
 		while (this._pendingInputs.length > 0 && !this._flushInProgress && !this._released) {
 			const input = this._pendingInputs[0]!;
 
 			// Packets wait here until the decoder has room, since handing them over copies their data
-			if (input instanceof EncodedPacket && this._getAdmittedQueueSize() >= MAX_QUEUE_SIZE) {
+			if (input instanceof EncodedPacket && this._getAdmittedQueueSize() >= this._highWaterMark) {
 				break;
 			}
 
@@ -753,7 +843,7 @@ export abstract class PacketDecoder<
 			}
 		} else {
 			// The flush queued by end() is always the last input
-			const isEnd = this._ended && this._pendingInputs.length === 0;
+			const isEnd = !this._pushable && this._pendingInputs.length === 0;
 
 			if (!this._dirty) {
 				this._finishFlush(isEnd);
@@ -787,18 +877,37 @@ export abstract class PacketDecoder<
 
 	/** @internal */
 	_finishFlush(isEnd: boolean) {
-		if (isEnd) {
-			this._release();
-			this._emitEnd();
-		} else {
+		if (!isEnd) {
 			this._emit(null);
+			return;
+		}
+
+		this._release();
+		this._endEmitted = true;
+
+		const pendingPull = this._pendingPulls.shift();
+		if (pendingPull) {
+			this._pullable = false;
+			this._finishedResolver.resolve();
+			pendingPull.resolve(null);
+
+			for (const pendingPull of this._pendingPulls) {
+				pendingPull.reject(new Error('Cannot pull past the end of the decoder.'));
+			}
+			this._pendingPulls.length = 0;
+		} else {
+			this._results.push(null);
 		}
 	}
 
 	/** @internal */
 	_handleDequeue() {
 		this._processInputs();
-		this._releaseBackpressureIfPossible();
+
+		if (this._backpressure && this._getQueueSize() < this._highWaterMark) {
+			this._backpressure.resolve();
+			this._backpressure = null;
+		}
 	}
 
 	/** @internal */
@@ -822,43 +931,6 @@ export abstract class PacketDecoder<
 	}
 
 	/** @internal */
-	_emitEnd() {
-		this._endEmitted = true;
-
-		const pendingPull = this._pendingPulls.shift();
-		if (pendingPull) {
-			this._done = true;
-			this._finishedResolver.resolve();
-			pendingPull.resolve(null);
-
-			for (const pendingPull of this._pendingPulls) {
-				pendingPull.reject(new Error('Cannot pull past the end of the decoder.'));
-			}
-			this._pendingPulls.length = 0;
-		} else {
-			this._results.push(null);
-		}
-	}
-
-	/** @internal */
-	_getBackpressurePromise() {
-		if (this._getQueueSize() < MAX_QUEUE_SIZE) {
-			return null;
-		}
-
-		this._backpressure ??= promiseWithResolvers();
-		return this._backpressure.promise;
-	}
-
-	/** @internal */
-	_releaseBackpressureIfPossible() {
-		if (this._backpressure && this._getQueueSize() < MAX_QUEUE_SIZE) {
-			this._backpressure.resolve();
-			this._backpressure = null;
-		}
-	}
-
-	/** @internal */
 	_getQueueSize() {
 		return this._getAdmittedQueueSize() + arrayCount(this._pendingInputs, x => x instanceof EncodedPacket);
 	}
@@ -878,7 +950,7 @@ export abstract class PacketDecoder<
 		this._hasError = true;
 
 		if (this._pendingPulls.length > 0) {
-			this._done = true;
+			this._pullable = false;
 		}
 		for (const pendingPull of this._pendingPulls) {
 			pendingPull.reject(error);
@@ -890,13 +962,8 @@ export abstract class PacketDecoder<
 
 	/** @internal */
 	_abort() {
-		this._ended = true;
+		this._pushable = false;
 		this._pendingInputs.length = 0;
-
-		for (const result of this._results) {
-			result?.close();
-		}
-		this._results.length = 0;
 
 		this._release();
 		this._finishedResolver.resolve();
@@ -919,6 +986,8 @@ export abstract class PacketDecoder<
 export class VideoPacketDecoder extends PacketDecoder<VideoSample> {
 	/** @internal */
 	_type = 'video' as const;
+	/** @internal */
+	_highWaterMark: number;
 	/** @internal */
 	_options: VideoPacketDecoderOptions;
 	/** @internal */
@@ -986,30 +1055,18 @@ export class VideoPacketDecoder extends PacketDecoder<VideoSample> {
 
 	constructor(options: VideoPacketDecoderOptions = {}) {
 		validateVideoPacketDecoderOptions(options, 'options');
+		validateHighWaterMark(options.highWaterMark, 'options');
 
 		super();
 
 		this._options = options;
+		this._highWaterMark = options.highWaterMark ?? DEFAULT_HIGH_WATER_MARK;
 	}
 
 	/** @internal */
 	_decoderConfigsAreEqual(a: AnyDecoderConfig, b: AnyDecoderConfig) {
 		assert(a.type === 'video' && b.type === 'video');
-
-		return a.codec === b.codec
-			&& descriptionsAreEqual(a.description, b.description)
-			&& a.codedWidth === b.codedWidth
-			&& a.codedHeight === b.codedHeight
-			&& a.displayAspectWidth === b.displayAspectWidth
-			&& a.displayAspectHeight === b.displayAspectHeight
-			&& (a.colorSpace?.primaries ?? null) === (b.colorSpace?.primaries ?? null)
-			&& (a.colorSpace?.transfer ?? null) === (b.colorSpace?.transfer ?? null)
-			&& (a.colorSpace?.matrix ?? null) === (b.colorSpace?.matrix ?? null)
-			&& (a.colorSpace?.fullRange ?? null) === (b.colorSpace?.fullRange ?? null)
-			&& (a.hardwareAcceleration ?? 'no-preference') === (b.hardwareAcceleration ?? 'no-preference')
-			&& (a.optimizeForLatency ?? false) === (b.optimizeForLatency ?? false)
-			&& (a.rotation ?? 0) === (b.rotation ?? 0)
-			&& (a.flip ?? false) === (b.flip ?? false);
+		return videoDecoderConfigsAreEqual(a, b);
 	}
 
 	/** @internal */
@@ -1532,6 +1589,11 @@ export class VideoPacketDecoder extends PacketDecoder<VideoSample> {
 	 * @internal
 	 */
 	_sampleHandler(sample: VideoSample) {
+		if (this._released) {
+			sample.close();
+			return;
+		}
+
 		if (isWebKit()) {
 			// Safari keeps each frame's packet timestamp, but only to the microsecond and sometimes off by one, so we
 			// take the timing of the packet with the closest timestamp
@@ -2020,30 +2082,11 @@ export const colorAlphaMergerWorkerCode = () => {
 	};
 };
 
-const PCM_FORMAT_U8 = 0;
-const PCM_FORMAT_S8 = 1;
-const PCM_FORMAT_ULAW = 2;
-const PCM_FORMAT_ALAW = 3;
-const PCM_FORMAT_U16_LE = 4;
-const PCM_FORMAT_U16_BE = 5;
-const PCM_FORMAT_S16_LE = 6;
-const PCM_FORMAT_S16_BE = 7;
-const PCM_FORMAT_U24_LE = 8;
-const PCM_FORMAT_U24_BE = 9;
-const PCM_FORMAT_S24_LE = 10;
-const PCM_FORMAT_S24_BE = 11;
-const PCM_FORMAT_U32_LE = 12;
-const PCM_FORMAT_U32_BE = 13;
-const PCM_FORMAT_S32_LE = 14;
-const PCM_FORMAT_S32_BE = 15;
-const PCM_FORMAT_F32_LE = 16;
-const PCM_FORMAT_F32_BE = 17;
-const PCM_FORMAT_F64_LE = 18;
-const PCM_FORMAT_F64_BE = 19;
-
 export class AudioPacketDecoder extends PacketDecoder<AudioSample> {
 	/** @internal */
 	_type = 'audio' as const;
+	/** @internal */
+	_highWaterMark: number;
 	/** @internal */
 	_codec!: AudioCodec;
 	/** @internal */
@@ -2093,14 +2136,21 @@ export class AudioPacketDecoder extends PacketDecoder<AudioSample> {
 	/** @internal */
 	_opusPreSkip = 0;
 
+	constructor(options: AudioPacketDecoderOptions = {}) {
+		if (!options || typeof options !== 'object') {
+			throw new TypeError('options must be an object.');
+		}
+		validateHighWaterMark(options.highWaterMark, 'options');
+
+		super();
+
+		this._highWaterMark = options.highWaterMark ?? DEFAULT_HIGH_WATER_MARK;
+	}
+
 	/** @internal */
 	_decoderConfigsAreEqual(a: AnyDecoderConfig, b: AnyDecoderConfig) {
 		assert(a.type === 'audio' && b.type === 'audio');
-
-		return a.codec === b.codec
-			&& descriptionsAreEqual(a.description, b.description)
-			&& a.sampleRate === b.sampleRate
-			&& a.numberOfChannels === b.numberOfChannels;
+		return audioDecoderConfigsAreEqual(a, b);
 	}
 
 	/** @internal */
@@ -2137,64 +2187,9 @@ export class AudioPacketDecoder extends PacketDecoder<AudioSample> {
 
 			this._isPcmDecoder = true;
 
-			const { dataType, sampleSize, littleEndian } = parsePcmCodec(codec as PcmAudioCodec);
+			const { dataType, sampleSize } = parsePcmCodec(codec as PcmAudioCodec);
 			this._pcmInputSampleSize = sampleSize;
-
-			switch (sampleSize) {
-				case 1: {
-					if (dataType === 'unsigned') {
-						this._pcmInputFormat = PCM_FORMAT_U8;
-					} else if (dataType === 'signed') {
-						this._pcmInputFormat = PCM_FORMAT_S8;
-					} else if (dataType === 'ulaw') {
-						this._pcmInputFormat = PCM_FORMAT_ULAW;
-					} else if (dataType === 'alaw') {
-						this._pcmInputFormat = PCM_FORMAT_ALAW;
-					} else {
-						assert(false);
-					}
-				}; break;
-				case 2: {
-					if (dataType === 'unsigned') {
-						this._pcmInputFormat = littleEndian ? PCM_FORMAT_U16_LE : PCM_FORMAT_U16_BE;
-					} else if (dataType === 'signed') {
-						this._pcmInputFormat = littleEndian ? PCM_FORMAT_S16_LE : PCM_FORMAT_S16_BE;
-					} else {
-						assert(false);
-					}
-				}; break;
-				case 3: {
-					if (dataType === 'unsigned') {
-						this._pcmInputFormat = littleEndian ? PCM_FORMAT_U24_LE : PCM_FORMAT_U24_BE;
-					} else if (dataType === 'signed') {
-						this._pcmInputFormat = littleEndian ? PCM_FORMAT_S24_LE : PCM_FORMAT_S24_BE;
-					} else {
-						assert(false);
-					}
-				}; break;
-				case 4: {
-					if (dataType === 'unsigned') {
-						this._pcmInputFormat = littleEndian ? PCM_FORMAT_U32_LE : PCM_FORMAT_U32_BE;
-					} else if (dataType === 'signed') {
-						this._pcmInputFormat = littleEndian ? PCM_FORMAT_S32_LE : PCM_FORMAT_S32_BE;
-					} else if (dataType === 'float') {
-						this._pcmInputFormat = littleEndian ? PCM_FORMAT_F32_LE : PCM_FORMAT_F32_BE;
-					} else {
-						assert(false);
-					}
-				}; break;
-				case 8: {
-					if (dataType === 'float') {
-						this._pcmInputFormat = littleEndian ? PCM_FORMAT_F64_LE : PCM_FORMAT_F64_BE;
-					} else {
-						assert(false);
-					}
-				}; break;
-				default: {
-					assertNever(sampleSize);
-					assert(false);
-				};
-			}
+			this._pcmInputFormat = getPcmFormat(codec as PcmAudioCodec);
 
 			switch (sampleSize) {
 				case 1: {
@@ -2533,10 +2528,6 @@ export class AudioPacketDecoder extends PacketDecoder<AudioSample> {
 		}
 	}
 }
-
-const descriptionsAreEqual = (a: AllowSharedBufferSource | undefined, b: AllowSharedBufferSource | undefined) => {
-	return a === b || (!!a && !!b && uint8ArraysAreEqual(toUint8Array(a), toUint8Array(b)));
-};
 
 /**
  * Checks if the browser is able to decode the given codec.

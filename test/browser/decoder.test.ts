@@ -8,6 +8,7 @@ import {
 } from '../../src/custom-coder.js';
 import {
 	AudioPacketDecoder,
+	CoderClosedError,
 	ExtendedAudioDecoderConfig,
 	ExtendedVideoDecoderConfig,
 	PacketDecoder,
@@ -42,7 +43,7 @@ type DecoderType = {
 	globalName: 'VideoDecoder' | 'AudioDecoder';
 	getMockClass: () => typeof MockVideoDecoder | typeof MockAudioDecoder;
 	getCustomDecoderClass: () => typeof TestCustomVideoDecoder | typeof TestCustomAudioDecoder;
-	createDecoder: () => AnyPacketDecoder;
+	createDecoder: (options?: { highWaterMark?: number }) => AnyPacketDecoder;
 	createPacket: (index: number, type?: PacketType, decoderConfig?: AnyDecoderConfig | null) => EncodedPacket;
 	decoderConfig: AnyDecoderConfig;
 	otherDecoderConfig: AnyDecoderConfig;
@@ -71,7 +72,7 @@ const VIDEO: DecoderType = {
 	globalName: 'VideoDecoder',
 	getMockClass: () => MockVideoDecoder,
 	getCustomDecoderClass: () => TestCustomVideoDecoder,
-	createDecoder: () => new VideoPacketDecoder(),
+	createDecoder: options => new VideoPacketDecoder(options),
 	// The byte marks the frame as shown, in VP8 as well as in VP9
 	createPacket: (index, type = 'key', decoderConfig = VIDEO_DECODER_CONFIG) => new EncodedPacket({
 		data: new Uint8Array([0x92]),
@@ -93,7 +94,7 @@ const AUDIO: DecoderType = {
 	globalName: 'AudioDecoder',
 	getMockClass: () => MockAudioDecoder,
 	getCustomDecoderClass: () => TestCustomAudioDecoder,
-	createDecoder: () => new AudioPacketDecoder(),
+	createDecoder: options => new AudioPacketDecoder(options),
 	createPacket: (index, type = 'key', decoderConfig = AUDIO_DECODER_CONFIG) => new EncodedPacket({
 		data: new Uint8Array(8),
 		type,
@@ -130,7 +131,7 @@ const testDecoding = async (type: DecoderType) => {
 		sample.close();
 	}
 
-	expect(decoder.done).toBe(true);
+	expect(decoder.pullable).toBe(false);
 	expect(() => decoder.pull()).toThrow('Cannot pull past the end of the decoder.');
 };
 
@@ -181,13 +182,13 @@ const testFlushMarkers = async (type: DecoderType) => {
 	const results = await pullCount(decoder, 4);
 	expect(results.map(x => x === null)).toEqual([false, false, true, true]);
 	results.forEach(x => x?.close());
-	expect(decoder.done).toBe(false);
+	expect(decoder.pullable).toBe(true);
 
 	// Ending right after a flush still gives a final marker, without flushing again
 	void decoder.end();
 	expect(mock.flushCount).toBe(1);
 	expect(decoder.pull()).toBe(null);
-	expect(decoder.done).toBe(true);
+	expect(decoder.pullable).toBe(false);
 };
 
 test('Video decoding during flush', () => testDecodingDuringFlush(VIDEO));
@@ -229,7 +230,7 @@ const testKeyPacketRequirement = async (type: DecoderType) => {
 	const message = 'The first packet of a packet stream must be a key packet.';
 
 	expect(() => decoder.push(type.createPacket(0, 'delta'))).toThrow(message);
-	expect(decoder.ended).toBe(false);
+	expect(decoder.pushable).toBe(true);
 
 	void decoder.push(type.createPacket(0));
 	void decoder.push(type.createPacket(1, 'delta'));
@@ -275,6 +276,11 @@ const testBackpressure = async (type: DecoderType) => {
 
 	expect(decoder.push(type.createPacket(5))).not.toBe(null);
 	decoder.close();
+
+	const custom = createMockedDecoder(type, { paused: true }, () => type.createDecoder({ highWaterMark: 2 }));
+	expect(custom.decoder.push(type.createPacket(0))).toBe(null);
+	expect(custom.decoder.push(type.createPacket(1))).not.toBe(null);
+	custom.decoder.close();
 };
 
 test('Video backpressure with waiting pull', () => testBackpressureWithWaitingPull(VIDEO));
@@ -321,7 +327,7 @@ const testPacketsWaitingForRoom = async (type: DecoderType) => {
 	expect(mock.decodedChunks.length).toBeLessThan(8);
 
 	const results = await pullCount(decoder, 10);
-	expect(decoder.done).toBe(true);
+	expect(decoder.pullable).toBe(false);
 	expect(mock.state).toBe('closed');
 	expect(mock.decodedChunks.length).toBe(8);
 	expect(mock.flushCount).toBe(2);
@@ -357,14 +363,16 @@ const testErrorOnWaitingPacket = async (type: DecoderType) => {
 	for (let i = 0; i < 5; i++) {
 		void decoder.push(type.createPacket(i));
 	}
-	expect(decoder.ended).toBe(false);
+	expect(decoder.pushable).toBe(true);
 
 	mock.resume();
 	await tick();
-	expect(decoder.ended).toBe(true);
+	expect(decoder.pushable).toBe(false);
 	expect(mock.state).toBe('closed');
 	expect(() => decoder.pull()).toThrow('Malformed chunk.');
-	expect(() => decoder.push(type.createPacket(5))).toThrow('Malformed chunk.');
+	expect(() => decoder.push(type.createPacket(5))).toThrow(
+		'Cannot push after the decoder has been ended or closed.',
+	);
 };
 
 test('Video flush markers excluded from backpressure', () => testMarkerBackpressure(VIDEO));
@@ -398,8 +406,8 @@ const testEnd = async (type: DecoderType) => {
 
 	const finished = decoder.end();
 	expect(decoder.end()).toBe(finished);
-	expect(decoder.ended).toBe(true);
-	expect(decoder.done).toBe(false);
+	expect(decoder.pushable).toBe(false);
+	expect(decoder.pullable).toBe(true);
 	const message = 'Cannot push after the decoder has been ended or closed.';
 	expect(() => decoder.push(type.createPacket(1))).toThrow(message);
 	expect(() => decoder.push(null)).toThrow(message);
@@ -413,7 +421,7 @@ const testEnd = async (type: DecoderType) => {
 	mock.resume();
 	(await pulls[0])!.close();
 	expect(await pulls[1]).toBe(null);
-	expect(decoder.done).toBe(true);
+	expect(decoder.pullable).toBe(false);
 	expect(mock.state).toBe('closed');
 	expect(mock.flushCount).toBe(1);
 	await finished;
@@ -436,7 +444,7 @@ const testEndWithoutPackets = (type: DecoderType) => {
 	void decoder.end();
 	expect(mockInstances.length).toBe(0);
 	expect(decoder.pull()).toBe(null);
-	expect(decoder.done).toBe(true);
+	expect(decoder.pullable).toBe(false);
 };
 
 test('Video end during flush', () => testEndDuringFlush(VIDEO));
@@ -454,7 +462,7 @@ const testEndDuringFlush = async (type: DecoderType) => {
 	expect(results.map(x => x === null)).toEqual([false, true, true]);
 	results.forEach(x => x?.close());
 	expect(mock.flushCount).toBe(1);
-	expect(decoder.done).toBe(true);
+	expect(decoder.pullable).toBe(false);
 };
 
 test('Video end without pulling', () => testEndWithoutPulling(VIDEO));
@@ -477,7 +485,7 @@ const testEndWithoutPulling = async (type: DecoderType) => {
 	const results = await pullCount(decoder, 3);
 	expect(results.map(x => x === null)).toEqual([false, false, true]);
 	results.forEach(x => x?.close());
-	expect(decoder.done).toBe(true);
+	expect(decoder.pullable).toBe(false);
 	await finished;
 };
 
@@ -498,15 +506,12 @@ const testClose = async (type: DecoderType) => {
 	decoder.close();
 	expect(queued.every(x => x!._closed)).toBe(true);
 	expect(mock.state).toBe('closed');
-	expect(decoder.ended).toBe(true);
+	expect(decoder.pushable).toBe(false);
+	expect(decoder.pullable).toBe(false);
 	expect(() => decoder.push(type.createPacket(3))).toThrow(
 		'Cannot push after the decoder has been ended or closed.',
 	);
 
-	// The stream simply ends early
-	expect(decoder.done).toBe(false);
-	expect(decoder.pull()).toBe(null);
-	expect(decoder.done).toBe(true);
 	expect(() => decoder.pull()).toThrow('Cannot pull past the end of the decoder.');
 
 	decoder.close();
@@ -528,9 +533,12 @@ const testCloseWithWaitingPull = async (type: DecoderType) => {
 	assert(backpressure);
 
 	decoder.close();
-	expect(await pulls[0]).toBe(null);
-	expect(decoder.done).toBe(true);
-	await expect(pulls[1]).rejects.toThrow('Cannot pull past the end of the decoder.');
+	await Promise.all(pulls.map(async (pull) => {
+		await expect(pull).rejects.toThrow(CoderClosedError);
+		await expect(pull).rejects.toThrow('The decoder was closed during a pending pull.');
+	}));
+	expect(decoder.pullable).toBe(false);
+	expect(() => decoder.pull()).toThrow('Cannot pull past the end of the decoder.');
 	await backpressure;
 };
 
@@ -548,8 +556,8 @@ const testCloseAfterEnd = async (type: DecoderType) => {
 
 	first.decoder.close();
 	expect(first.mock.state).toBe('closed');
-	expect(first.decoder.pull()).toBe(null);
-	expect(first.decoder.done).toBe(true);
+	expect(first.decoder.pullable).toBe(false);
+	expect(() => first.decoder.pull()).toThrow('Cannot pull past the end of the decoder.');
 
 	// The aborted flush isn't reported as an error, and the waiting packet never reaches the decoder
 	first.mock.resume();
@@ -568,12 +576,11 @@ const testCloseAfterEnd = async (type: DecoderType) => {
 	const queued = [...second.decoder._results];
 	expect(queued.length).toBe(3);
 
-	// Ending completes on close, even though nothing has been pulled
 	second.decoder.close();
 	await finished;
 	expect(queued.every(x => !x || x._closed)).toBe(true);
-	expect(second.decoder.pull()).toBe(null);
-	expect(second.decoder.done).toBe(true);
+	expect(second.decoder.pullable).toBe(false);
+	expect(() => second.decoder.pull()).toThrow('Cannot pull past the end of the decoder.');
 };
 
 test('Video dispose', () => testDispose(VIDEO));
@@ -589,16 +596,16 @@ const testDispose = (type: DecoderType) => {
 
 	// Disposing closes the decoder right away
 	expect(mock.state).toBe('closed');
-	expect(decoder.ended).toBe(true);
-	expect(decoder.pull()).toBe(null);
-	expect(decoder.done).toBe(true);
+	expect(decoder.pushable).toBe(false);
+	expect(decoder.pullable).toBe(false);
+	expect(() => decoder.pull()).toThrow('Cannot pull past the end of the decoder.');
 };
 
 test('Video producer and consumer failures', () => testProducerAndConsumerFailures(VIDEO));
 test('Audio producer and consumer failures', () => testProducerAndConsumerFailures(AUDIO));
 
 const testProducerAndConsumerFailures = async (type: DecoderType) => {
-	// A failing producer closes the decoder, so the consumer just sees the stream end
+	// Failing producer
 	const first = createMockedDecoder(type);
 	const produceAndFail = async () => {
 		using decoder = first.decoder;
@@ -606,17 +613,28 @@ const testProducerAndConsumerFailures = async (type: DecoderType) => {
 			const backpressure = decoder.push(type.createPacket(i));
 			if (backpressure) await backpressure;
 		}
+		while (decoder._pendingPulls.length === 0) {
+			await tick();
+		}
 
 		throw new Error('Packet retrieval failed.');
 	};
+	const consume = async () => {
+		while (true) {
+			using sample = await first.decoder.pull();
+			if (!sample) {
+				return;
+			}
+		}
+	};
 
-	const [produced, consumed] = await Promise.allSettled([produceAndFail(), pullUntilNull(first.decoder)]);
+	const [produced, consumed] = await Promise.allSettled([produceAndFail(), consume()]);
 	expect(produced.status).toBe('rejected');
-	assert(consumed.status === 'fulfilled');
-	consumed.value.forEach(x => x.close());
-	expect(first.decoder.done).toBe(true);
+	assert(consumed.status === 'rejected');
+	expect(consumed.reason).toBeInstanceOf(CoderClosedError);
+	expect(first.decoder.pullable).toBe(false);
 
-	// A failing consumer closes the decoder, so the producer stops instead of waiting forever
+	// Failing consumer
 	const second = createMockedDecoder(type);
 	const produce = async () => {
 		using decoder = second.decoder;
@@ -649,9 +667,16 @@ const testInvalidDecodeArguments = (type: DecoderType) => {
 
 	expect(() => decoder.push(undefined as unknown as null)).toThrow(TypeError);
 	expect(() => decoder.push({} as EncodedPacket)).toThrow('packet must be an EncodedPacket or null.');
-	expect(decoder.ended).toBe(false);
+	expect(decoder.pushable).toBe(true);
 
 	decoder.close();
+
+	expect(() => type.createDecoder({ highWaterMark: 0 })).toThrow(
+		'options.highWaterMark, when provided, must be a positive integer.',
+	);
+	expect(() => type.createDecoder({ highWaterMark: 1.5 })).toThrow(
+		'options.highWaterMark, when provided, must be a positive integer.',
+	);
 };
 
 test('Video configure throwing', () => testConfigureThrowing(VIDEO));
@@ -660,11 +685,10 @@ test('Audio configure throwing', () => testConfigureThrowing(AUDIO));
 const testConfigureThrowing = async (type: DecoderType) => {
 	const first = createMockedDecoder(type, { rejectedConfigIndex: 0 });
 
-	expect(() => first.decoder.push(type.createPacket(0))).toThrow('Invalid configuration.');
-	expect(first.decoder.ended).toBe(true);
+	expect(first.decoder.push(type.createPacket(0))).toBe(null);
+	expect(first.decoder.pushable).toBe(false);
 	expect(() => first.decoder.pull()).toThrow('Invalid configuration.');
 
-	// With nothing left to flush, a config change happens right within push()
 	const second = createMockedDecoder(type, { rejectedConfigIndex: 1 });
 
 	void second.decoder.push(type.createPacket(0));
@@ -672,22 +696,21 @@ const testConfigureThrowing = async (type: DecoderType) => {
 	await tick();
 	(await second.decoder.pull())!.close();
 	expect(second.decoder.pull()).toBe(null);
-	expect(() => second.decoder.push(type.createPacket(1, 'key', type.otherDecoderConfig))).toThrow(
-		'Invalid configuration.',
-	);
-	expect(second.decoder.ended).toBe(true);
+	expect(second.decoder.push(type.createPacket(1, 'key', type.otherDecoderConfig))).toBe(null);
+	expect(second.decoder.pushable).toBe(false);
+	expect(() => second.decoder.pull()).toThrow('Invalid configuration.');
 
-	// Otherwise, it happens after the flush, so the error comes out of pull()
 	const third = createMockedDecoder(type, { rejectedConfigIndex: 1 });
 
 	void third.decoder.push(type.createPacket(0));
 	expect(third.decoder.push(type.createPacket(1, 'key', type.otherDecoderConfig))).toBe(null);
 	await tick();
+	expect(() => third.decoder.push(type.createPacket(2, 'key', null))).toThrow(
+		'Cannot push after the decoder has been ended or closed.',
+	);
+	using thirdSample = await third.decoder.pull();
+	expectTimestamps([thirdSample], [0]);
 	expect(() => third.decoder.pull()).toThrow('Invalid configuration.');
-	expect(() => third.decoder.push(type.createPacket(2, 'key', null))).toThrow('Invalid configuration.');
-
-	// The sample from the old config was decoded, but got discarded with the error
-	expect(third.mock.outputs.length).toBe(1);
 };
 
 test('Video unsupported config', () => testUnsupportedConfig(VIDEO));
@@ -698,23 +721,23 @@ const testUnsupportedConfig = async (type: DecoderType) => {
 
 	void first.decoder.push(type.createPacket(0));
 	await expect(first.decoder.pull()).rejects.toThrow('Unsupported configuration.');
-	expect(first.decoder.ended).toBe(true);
-	expect(first.decoder.done).toBe(true);
-	expect(() => first.decoder.push(type.createPacket(0))).toThrow('Unsupported configuration.');
-	expect(() => first.decoder.pull()).toThrow('Unsupported configuration.');
+	expect(first.decoder.pushable).toBe(false);
+	expect(first.decoder.pullable).toBe(false);
+	expect(() => first.decoder.push(type.createPacket(0))).toThrow(
+		'Cannot push after the decoder has been ended or closed.',
+	);
+	expect(() => first.decoder.pull()).toThrow('Cannot pull past the end of the decoder.');
 
-	// A config change that turns out to be unsupported
 	const second = createMockedDecoder(type, { failingConfigIndex: 1 });
 
 	void second.decoder.push(type.createPacket(0));
 	void second.decoder.push(type.createPacket(1, 'key', type.otherDecoderConfig));
 	await tick();
 	await tick();
+	expect(second.decoder.pushable).toBe(false);
+	using secondSample = await second.decoder.pull();
+	expectTimestamps([secondSample], [0]);
 	expect(() => second.decoder.pull()).toThrow('Unsupported configuration.');
-	expect(second.decoder.ended).toBe(true);
-
-	// The sample from the old config was decoded, but got discarded with the error
-	expect(second.mock.outputs.length).toBe(1);
 };
 
 test('Video error after setup', () => testErrorAfterSetup(VIDEO));
@@ -725,18 +748,20 @@ const testErrorAfterSetup = (type: DecoderType) => {
 
 	void decoder.push(type.createPacket(0));
 	mock.fail(new DOMException('Codec reclaimed.', 'QuotaExceededError'));
-	expect(decoder.ended).toBe(true);
-	expect(() => decoder.push(type.createPacket(1))).toThrow('Codec reclaimed.');
+	expect(decoder.pushable).toBe(false);
+	expect(() => decoder.push(type.createPacket(1))).toThrow(
+		'Cannot push after the decoder has been ended or closed.',
+	);
 
-	// Only pulling delivers the error to the consumer
-	expect(decoder.done).toBe(false);
+	expect(decoder.pullable).toBe(true);
 	expect(() => decoder.pull()).toThrow('Codec reclaimed.');
-	expect(decoder.done).toBe(true);
+	expect(decoder.pullable).toBe(false);
+	expect(() => decoder.pull()).toThrow('Cannot pull past the end of the decoder.');
 
 	// Ending and closing an errored decoder changes nothing
 	void decoder.end();
 	decoder.close();
-	expect(() => decoder.pull()).toThrow('Codec reclaimed.');
+	expect(() => decoder.pull()).toThrow('Cannot pull past the end of the decoder.');
 };
 
 test('Video decode throwing', () => testDecodeThrowing(VIDEO));
@@ -746,11 +771,13 @@ const testDecodeThrowing = (type: DecoderType) => {
 	const { decoder, mock } = createMockedDecoder(type, { rejectedChunkIndex: 1 });
 
 	void decoder.push(type.createPacket(0));
-	expect(() => decoder.push(type.createPacket(1))).toThrow('Malformed chunk.');
-	expect(decoder.ended).toBe(true);
+	expect(decoder.push(type.createPacket(1))).toBe(null);
+	expect(decoder.pushable).toBe(false);
 	expect(mock.state).toBe('closed');
 	expect(() => decoder.pull()).toThrow('Malformed chunk.');
-	expect(() => decoder.push(type.createPacket(2))).toThrow('Malformed chunk.');
+	expect(() => decoder.push(type.createPacket(2))).toThrow(
+		'Cannot push after the decoder has been ended or closed.',
+	);
 };
 
 test('Video decoding error', () => testDecodingError(VIDEO));
@@ -763,12 +790,37 @@ const testDecodingError = async (type: DecoderType) => {
 		void decoder.push(type.createPacket(i));
 	}
 	await tick();
+	expect(decoder.pushable).toBe(false);
+	expect(() => decoder.push(type.createPacket(4))).toThrow(
+		'Cannot push after the decoder has been ended or closed.',
+	);
 
-	// The samples decoded before the error are discarded
-	expect(() => decoder.pull()).toThrow('Decoding failed.');
 	expect(mock.outputs.length).toBe(2);
-	expect(mock.outputs.every(x => x.format === null)).toBe(true);
-	expect(() => decoder.push(type.createPacket(4))).toThrow('Decoding failed.');
+	const samples = await pullCount(decoder, 2);
+	expectTimestamps(samples, [0, type.packetDuration]);
+	samples.forEach(x => x?.close());
+	expect(decoder.pullable).toBe(true);
+	expect(() => decoder.pull()).toThrow('Decoding failed.');
+	expect(decoder.pullable).toBe(false);
+};
+
+test('Video close with an unpulled error', () => testCloseWithUnpulledError(VIDEO));
+test('Audio close with an unpulled error', () => testCloseWithUnpulledError(AUDIO));
+
+const testCloseWithUnpulledError = async (type: DecoderType) => {
+	const { decoder } = createMockedDecoder(type, { failingChunkIndex: 2 });
+
+	for (let i = 0; i < 4; i++) {
+		void decoder.push(type.createPacket(i));
+	}
+	await tick();
+
+	const queued = [...decoder._results];
+	expect(queued.length).toBe(2);
+	decoder.close();
+	expect(queued.every(x => x!._closed)).toBe(true);
+	expect(decoder.pullable).toBe(false);
+	expect(() => decoder.pull()).toThrow('Cannot pull past the end of the decoder.');
 };
 
 test('Video decoding error with waiting pull', () => testDecodingErrorWithWaitingPull(VIDEO));
@@ -780,7 +832,7 @@ const testDecodingErrorWithWaitingPull = async (type: DecoderType) => {
 	const pulled = decoder.pull();
 	void decoder.push(type.createPacket(0));
 	await expect(pulled).rejects.toThrow('Decoding failed.');
-	expect(decoder.done).toBe(true);
+	expect(decoder.pullable).toBe(false);
 };
 
 test('Video error during flush', () => testErrorDuringFlush(VIDEO));
@@ -1107,7 +1159,7 @@ const testCustomDecoderClose = async (type: DecoderType) => {
 
 	void decoder.push(type.createPacket(0));
 	decoder.close();
-	expect(decoder.pull()).toBe(null);
+	expect(decoder.pullable).toBe(false);
 
 	// The custom decoder finishes its queued calls before closing, and what comes out late is discarded
 	await tick();
@@ -1214,8 +1266,8 @@ const expectCustomDecoderFailure = async (type: DecoderType, hooks: CustomHooks,
 			result?.close();
 		}
 	})()).rejects.toThrow(error);
-	expect(decoder.ended).toBe(true);
-	expect(decoder.done).toBe(true);
+	expect(decoder.pushable).toBe(false);
+	expect(decoder.pullable).toBe(false);
 
 	unregisterDecoder(type.getCustomDecoderClass());
 	customCalls.length = 0;
@@ -1322,7 +1374,7 @@ const testDecoderConfigRequirement = async (type: DecoderType) => {
 	expect(() => decoder.push(type.createPacket(0, 'key', type.foreignDecoderConfig))).toThrow(
 		`Packets for this decoder must have a ${type.decoderConfig.type} decoder config.`,
 	);
-	expect(decoder.ended).toBe(false);
+	expect(decoder.pushable).toBe(true);
 
 	// Packets without a config keep using the current one
 	void decoder.push(type.createPacket(0));
@@ -1797,7 +1849,7 @@ const decodeTrack = async (
 			if (isThenable(result)) result = await result;
 			results.push(result);
 
-			if (!result && decoder.done) {
+			if (!result && !decoder.pullable) {
 				return;
 			}
 		}
@@ -1835,8 +1887,7 @@ const testCloseWithWebCodecs = async (trackType: 'video' | 'audio') => {
 
 	expect(sample._closed).toBe(false);
 	sample.close();
-	expect(decoder.pull()).toBe(null);
-	expect(decoder.done).toBe(true);
+	expect(decoder.pullable).toBe(false);
 };
 
 const createDecoderForTrack = (track: InputVideoTrack | InputAudioTrack) => {

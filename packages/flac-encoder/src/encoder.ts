@@ -11,6 +11,7 @@ import {
 	AudioCodec,
 	AudioSample,
 	EncodedPacket,
+	type ExtendedAudioDecoderConfig,
 	registerEncoder,
 } from 'mediabunny';
 import type { PacketInfo, WorkerCommand, WorkerResponse, WorkerResponseData } from './shared';
@@ -31,8 +32,7 @@ class FlacEncoder extends CustomAudioEncoder {
 	}>();
 
 	private ctx: number | null = null;
-	private chunkMetadata: EncodedAudioChunkMetadata = {};
-	private description: Uint8Array | null = null;
+	private decoderConfig!: ExtendedAudioDecoderConfig;
 	private nextTimestampInSamples: number | null = null;
 	private inFlightEncode: Promise<void> | null = null;
 
@@ -86,15 +86,6 @@ class FlacEncoder extends CustomAudioEncoder {
 
 	private resetInternalState() {
 		this.nextTimestampInSamples = null;
-
-		this.chunkMetadata = {
-			decoderConfig: {
-				codec: 'flac',
-				numberOfChannels: this.config.numberOfChannels,
-				sampleRate: this.config.sampleRate,
-				description: this.description!,
-			},
-		};
 	}
 
 	async encode(audioSample: AudioSample) {
@@ -130,7 +121,13 @@ class FlacEncoder extends CustomAudioEncoder {
 			});
 
 			this.ctx = result.ctx;
-			this.description = new Uint8Array(result.header);
+			this.decoderConfig = {
+				type: 'audio',
+				codec: 'flac',
+				numberOfChannels: this.config.numberOfChannels,
+				sampleRate: this.config.sampleRate,
+				description: new Uint8Array(result.header),
+			};
 			this.resetInternalState();
 		}
 
@@ -187,15 +184,11 @@ class FlacEncoder extends CustomAudioEncoder {
 				type: 'key',
 				timestamp: this.nextTimestampInSamples / this.config.sampleRate,
 				duration: p.samples / this.config.sampleRate,
+				decoderConfig: this.decoderConfig,
 			});
 			this.nextTimestampInSamples += p.samples;
 
-			this.onPacket(
-				packet,
-				this.chunkMetadata,
-			);
-
-			this.chunkMetadata = {};
+			this.onPacket(packet);
 		}
 	}
 

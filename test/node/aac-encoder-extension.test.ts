@@ -186,9 +186,11 @@ const testCanceledDuringInit = async (cancelOnFirstWorkerMessage: boolean) => {
 		await output.cancel();
 		await addPromise;
 
-		const workers = [...new Set(onSpy.mock.contexts)];
-		expect(workers).toHaveLength(1);
-		expect(terminateSpy.mock.contexts).toContain(workers[0]);
+		await vi.waitFor(() => {
+			const workers = [...new Set(onSpy.mock.contexts)];
+			expect(workers).toHaveLength(1);
+			expect(terminateSpy.mock.contexts).toContain(workers[0]);
+		});
 	} finally {
 		vi.restoreAllMocks();
 	}

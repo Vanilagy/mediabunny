@@ -22,6 +22,7 @@ import {
 	Quality,
 	resolveQuality,
 	VideoEncodingConfig,
+	VideoSampleEncoder,
 } from './encode';
 import { Input } from './input';
 import { InputAudioTrack, InputTrack, InputVideoTrack } from './input-track';
@@ -52,7 +53,6 @@ import {
 	Rotation,
 } from './misc';
 import { Output, OutputTrackGroup } from './output';
-import { NullOutputFormat } from './output-format';
 import { EncodedPacket } from './packet';
 import {
 	AudioSample,
@@ -64,7 +64,6 @@ import {
 	VideoSampleResource,
 } from './sample';
 import { MetadataTags, validateMetadataTags } from './metadata';
-import { NullTarget } from './target';
 import { PacketOrderValidator } from './muxer';
 
 /**
@@ -1892,40 +1891,32 @@ export class Conversion {
 				// to lack of support of certain video frame formats, like when HDR is at play. To check for this, we
 				// first try to pass a single frame to the encoder to see how it behaves. If it throws, we then fall
 				// back to the rerender path.
-				//
-				// Creating a new temporary Output is sort of hacky, but due to a lack of an isolated encoder API right
-				// now, this is the simplest way. Will refactor in the future! TODO
-
-				const tempOutput = new Output({
-					format: new NullOutputFormat(),
-					target: new NullTarget(),
-				});
-
-				const tempSource = new VideoSampleSource(encodingConfig);
-				tempOutput.addVideoTrack(tempSource);
-
-				await tempOutput.start();
 
 				// Let's just use the first sample to test
 				const sink = new VideoSampleSink(track, { hardwareAcceleration: trackOptions.hardwareAcceleration });
 				using firstSample = await sink.getSample(await track.getFirstTimestamp());
 
 				if (firstSample) {
+					using encoder = new VideoSampleEncoder(encodingConfig);
+
 					try {
-						await tempSource.add(firstSample);
-						firstSample.close();
-						await tempOutput.finalize();
+						void encoder.push(firstSample);
+						void encoder.end();
+
+						while (true) {
+							const packet = await encoder.pull();
+							if (!packet) {
+								break;
+							}
+						}
 					} catch (error) {
 						Logging._warn(
 							'An error occurred when probing encoder support. Falling back to rerender path.', error,
 						);
-						void tempOutput.cancel();
 
 						needsRerender = true;
 						encodingConfig.transform.force = true;
 					}
-				} else {
-					await tempOutput.cancel();
 				}
 			}
 

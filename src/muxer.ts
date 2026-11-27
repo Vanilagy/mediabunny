@@ -87,19 +87,6 @@ export class PacketOrderValidator {
 	}
 }
 
-export class NullMuxer extends Muxer {
-	async start() {}
-
-	async getMimeType() {
-		return 'application/x-black-hole';
-	}
-
-	async addEncodedVideoPacket() {}
-	async addEncodedAudioPacket() {}
-	async addSubtitleCue() {}
-	async finalize() {}
-}
-
 export const validateVideoTrackDecoderConfig = (
 	decoderConfig: VideoDecoderConfig | EncodedPacket['decoderConfig'] | undefined,
 	trackCodec: VideoCodec | null,

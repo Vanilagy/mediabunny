@@ -1,2 +1,3 @@
 - Make the getDecoderConfig() docs say that the decoder config is for both Mediabunny's decoders as well as for WebCodecs, it's compatible with both
 - In the documentation for the extended decoder configs, say that the type is backwards compat with webcodecs.
+- finalization warnings for encoders/decoders that are GCd but not closed

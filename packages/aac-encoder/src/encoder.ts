@@ -17,6 +17,7 @@ import {
 	AudioCodec,
 	AudioSample,
 	EncodedPacket,
+	type ExtendedAudioDecoderConfig,
 	registerEncoder,
 } from 'mediabunny';
 import type { PacketInfo, WorkerCommand, WorkerResponse, WorkerResponseData } from './shared';
@@ -41,10 +42,9 @@ class AacEncoder extends CustomAudioEncoder {
 	private encoderFrameSize = 0;
 	private sampleRate = 0;
 	private numberOfChannels = 0;
-	private chunkMetadata: EncodedAudioChunkMetadata = {};
+	private decoderConfig!: ExtendedAudioDecoderConfig;
 	private useAdts = false;
 	private adtsHeaderTemplate: AdtsHeaderTemplate | null = null;
-	private description: Uint8Array | null = null;
 
 	// Accumulate interleaved f32 samples until we have a full frame
 	private pendingBuffer = new Float32Array(2 ** 16);
@@ -127,22 +127,19 @@ class AacEncoder extends CustomAudioEncoder {
 			this.adtsHeaderTemplate = buildAdtsHeaderTemplate(audioSpecificConfig);
 		}
 
-		this.description = this.useAdts ? null : description;
+		this.decoderConfig = {
+			type: 'audio',
+			codec: 'mp4a.40.2',
+			numberOfChannels: this.config.numberOfChannels,
+			sampleRate: this.config.sampleRate,
+			...(this.useAdts ? {} : { description }),
+		};
 		this.resetInternalState();
 	}
 
 	private resetInternalState() {
 		this.pendingFrames = 0;
 		this.nextSampleTimestampInSamples = null;
-
-		this.chunkMetadata = {
-			decoderConfig: {
-				codec: 'mp4a.40.2',
-				numberOfChannels: this.config.numberOfChannels,
-				sampleRate: this.config.sampleRate,
-				...(this.description ? { description: this.description } : {}),
-			},
-		};
 	}
 
 	async encode(audioSample: AudioSample) {
@@ -253,19 +250,13 @@ class AacEncoder extends CustomAudioEncoder {
 				data = adtsFrame;
 			}
 
-			const packet = new EncodedPacket({
+			this.onPacket(new EncodedPacket({
 				data,
 				type: 'key',
 				timestamp: p.pts / this.sampleRate,
 				duration: p.duration / this.sampleRate,
-			});
-
-			this.onPacket(
-				packet,
-				this.chunkMetadata,
-			);
-
-			this.chunkMetadata = {};
+				decoderConfig: this.decoderConfig,
+			}));
 		}
 	}
 

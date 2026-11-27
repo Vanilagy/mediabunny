@@ -38,7 +38,7 @@ import {
 	toDataView,
 	toUint8Array,
 } from './misc';
-import { PCM_ENCODER_PACKET_SIZE } from './media-source';
+import { PCM_ENCODER_PACKET_SIZE } from './encode';
 
 /**
  * List of known video codecs, ordered by encoding preference.

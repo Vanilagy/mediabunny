@@ -158,10 +158,9 @@ test('Custom encoder failing to initialize', async () => {
 	});
 
 	const { output, source } = await startVideoOutput(new BufferTarget());
-	const addAssertion = expect(addSample(source, 0)).rejects.toThrow('Initialization failed.');
+	await addSample(source, 0);
 
 	await expect(output.finalize()).rejects.toThrow('Initialization failed.');
-	await addAssertion;
 });
 
 test('Key frame request for a negative first timestamp', async () => {
@@ -302,11 +301,14 @@ test('Custom encoder close after an encode error', async () => {
 
 	const { output, source } = await startAudioOutput();
 
-	await source.add(makeAudioSample(0));
-	await source.add(makeAudioSample(0.1));
+	using first = makeAudioSample(0);
+	using second = makeAudioSample(0.1);
+	using third = makeAudioSample(0.2);
+	await source.add(first);
+	await source.add(second);
 	await wait(10);
 
-	await expect(source.add(makeAudioSample(0.2))).rejects.toThrow('Encode failed');
+	await expect(source.add(third)).rejects.toThrow('Encode failed');
 	await output.cancel();
 
 	expect(events).toEqual(['encode', 'encode', 'close']);
@@ -327,7 +329,8 @@ test('Custom encoder close after its first encode fails', async () => {
 	});
 
 	const { output, source } = await startAudioOutput();
-	await source.add(makeAudioSample(0));
+	using sample = makeAudioSample(0);
+	await source.add(sample);
 
 	await expect(output.finalize()).rejects.toThrow('Encode failed');
 	expect(events).toEqual(['encode', 'close']);
@@ -352,7 +355,8 @@ test('Custom encoder close after a flush error', async () => {
 	});
 
 	const { output, source } = await startAudioOutput();
-	await source.add(makeAudioSample(0));
+	using sample = makeAudioSample(0);
+	await source.add(sample);
 
 	await expect(output.finalize()).rejects.toThrow('Flush failed');
 	expect(events).toEqual(['encode', 'flush', 'close']);
@@ -366,29 +370,33 @@ test('Custom audio encoder failing to initialize', async () => {
 	});
 
 	const { output, source } = await startAudioOutput();
-	const addAssertion = expect(source.add(makeAudioSample(0))).rejects.toThrow('Initialization failed.');
+	using sample = makeAudioSample(0);
+	await source.add(sample);
 
 	await expect(output.finalize()).rejects.toThrow('Initialization failed.');
-	await addAssertion;
 });
 
 test('Custom encoder init pending during cancel', async () => {
 	const events = useSlowInitAudioEncoder();
 	const { output, source } = await startAudioOutput();
 
-	const addPromise = source.add(makeAudioSample(0));
+	using sample = makeAudioSample(0);
+	const addPromise = source.add(sample);
 	await output.cancel();
 	await addPromise;
 
-	expect(events[0]).toBe('init');
-	expect(events.at(-1)).toBe('close');
+	await vi.waitFor(() => {
+		expect(events[0]).toBe('init');
+		expect(events.at(-1)).toBe('close');
+	});
 });
 
 test('Custom encoder init pending during finalize', async () => {
 	const events = useSlowInitAudioEncoder();
 	const { output, source } = await startAudioOutput();
 
-	const addPromise = source.add(makeAudioSample(0));
+	using sample = makeAudioSample(0);
+	const addPromise = source.add(sample);
 	await output.finalize();
 	await addPromise;
 
@@ -466,7 +474,8 @@ test('Muxer error for a packet emitted by the final flush', async () => {
 			await wait(30);
 		},
 	})));
-	await source.add(makeAudioSample(0));
+	using sample = makeAudioSample(0);
+	await source.add(sample);
 
 	await expect(output.finalize()).rejects.toThrow('Timestamps cannot be smaller');
 });

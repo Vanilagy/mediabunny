@@ -6,7 +6,15 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { CustomAudioEncoder, AudioCodec, AudioSample, EncodedPacket, Logging, registerEncoder } from 'mediabunny';
+import {
+	CustomAudioEncoder,
+	AudioCodec,
+	AudioSample,
+	EncodedPacket,
+	type ExtendedAudioDecoderConfig,
+	Logging,
+	registerEncoder,
+} from 'mediabunny';
 import { MP3_DECODER_DELAY, MP3_FRAME_HEADER_SIZE, readMp3FrameHeader, SAMPLING_RATES } from '../../../shared/mp3-misc';
 import type { WorkerCommand, WorkerResponse, WorkerResponseData } from './shared';
 // @ts-expect-error An esbuild plugin handles this, TypeScript doesn't need to understand
@@ -35,7 +43,7 @@ class Mp3Encoder extends CustomAudioEncoder {
 	private buffer = new Uint8Array(2 ** 16);
 	private currentBufferOffset = 0;
 	private nextTimestampInSamples: number | null = null;
-	private chunkMetadata: EncodedAudioChunkMetadata = {};
+	private decoderConfig!: ExtendedAudioDecoderConfig;
 	private inFlightEncode: Promise<void> | null = null;
 
 	static override supports(codec: AudioCodec, config: AudioDecoderConfig): boolean {
@@ -97,19 +105,18 @@ class Mp3Encoder extends CustomAudioEncoder {
 			},
 		});
 
+		this.decoderConfig = {
+			type: 'audio',
+			codec: 'mp3',
+			numberOfChannels: this.config.numberOfChannels,
+			sampleRate: this.config.sampleRate,
+		};
 		this.resetInternalState();
 	}
 
 	private resetInternalState() {
 		this.currentBufferOffset = 0;
 		this.nextTimestampInSamples = null;
-		this.chunkMetadata = {
-			decoderConfig: {
-				codec: 'mp3',
-				numberOfChannels: this.config.numberOfChannels,
-				sampleRate: this.config.sampleRate,
-			},
-		};
 	}
 
 	async encode(audioSample: AudioSample) {
@@ -206,9 +213,8 @@ class Mp3Encoder extends CustomAudioEncoder {
 				type: 'key',
 				timestamp,
 				duration,
-			}), this.chunkMetadata);
-
-			this.chunkMetadata = {}; // Mimic WebCodecs-like behavior
+				decoderConfig: this.decoderConfig,
+			}));
 
 			this.nextTimestampInSamples += header.audioSamplesInFrame;
 			pos += header.totalSize;
