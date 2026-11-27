@@ -90,12 +90,12 @@ const testNegativeTimestampRoundTrip = async (timestamps: number[], duration: nu
 	await output.start();
 
 	const meta = { decoderConfig: { codec: 'vp8', codedWidth: 1280, codedHeight: 720 } };
-	const inputPackets = timestamps.map((timestamp, index) => new EncodedPacket(
-		new Uint8Array(1024).fill(index),
-		'key',
+	const inputPackets = timestamps.map((timestamp, index) => new EncodedPacket({
+		data: new Uint8Array(1024).fill(index),
+		type: 'key',
 		timestamp,
 		duration,
-	));
+	}));
 
 	for (let i = 0; i < inputPackets.length; i++) {
 		await source.add(inputPackets[i]!, i === 0 ? meta : undefined);
@@ -164,12 +164,12 @@ test('Negative audio start timestamps via CodecDelay', async () => {
 			description: new Uint8Array([0x12, 0x90]),
 		},
 	};
-	const inputPackets = Array.from({ length: 50 }, (_, index) => new EncodedPacket(
-		new Uint8Array(64).fill(index),
-		'key',
-		(index - 1) * 32 / 1000,
-		32 / 1000,
-	));
+	const inputPackets = Array.from({ length: 50 }, (_, index) => new EncodedPacket({
+		data: new Uint8Array(64).fill(index),
+		type: 'key',
+		timestamp: (index - 1) * 32 / 1000,
+		duration: 32 / 1000,
+	}));
 
 	for (let i = 0; i < inputPackets.length; i++) {
 		await source.add(inputPackets[i]!, i === 0 ? meta : undefined);
@@ -217,8 +217,15 @@ test('MaxBlockAdditionID with alpha side data', async () => {
 	output.addVideoTrack(source);
 	await output.start();
 
-	const packet = new EncodedPacket(new Uint8Array(16), 'key', 0, 1 / 30, -1, undefined, {
-		alpha: new Uint8Array(4),
+	const packet = new EncodedPacket({
+		data: new Uint8Array(16),
+		type: 'key',
+		timestamp: 0,
+		duration: 1 / 30,
+		sequenceNumber: -1,
+		sideData: {
+			alpha: new Uint8Array(4),
+		},
 	});
 	await source.add(packet, {
 		decoderConfig: {
@@ -257,7 +264,12 @@ test('DefaultDuration rounding', async () => {
 	const source = new EncodedVideoPacketSource('vp8');
 	output.addVideoTrack(source, { frameRate: 30000 / 1001 });
 	await output.start();
-	await source.add(new EncodedPacket(new Uint8Array(16), 'key', 0, 1001 / 30000), {
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(16),
+		type: 'key',
+		timestamp: 0,
+		duration: 1001 / 30000,
+	}), {
 		decoderConfig: {
 			codec: 'vp8',
 			codedWidth: 16,
@@ -282,7 +294,12 @@ test('Output sampling frequency', async () => {
 	const source = new EncodedAudioPacketSource('aac');
 	output.addAudioTrack(source);
 	await output.start();
-	await source.add(new EncodedPacket(new Uint8Array(16), 'key', 0, 2048 / 48000), {
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(16),
+		type: 'key',
+		timestamp: 0,
+		duration: 2048 / 48000,
+	}), {
 		decoderConfig: {
 			codec: 'mp4a.40.5',
 			numberOfChannels: 2,
@@ -320,7 +337,12 @@ test('AV1 key packet without a sequence header', async () => {
 	await output.start();
 
 	// Just a temporal delimiter OBU, so there's no sequence header to derive the codec info from
-	const packet = new EncodedPacket(new Uint8Array([0x12, 0x00]), 'key', 0, 1);
+	const packet = new EncodedPacket({
+		data: new Uint8Array([0x12, 0x00]),
+		type: 'key',
+		timestamp: 0,
+		duration: 1,
+	});
 	await source.add(packet, {
 		decoderConfig: {
 			codec: 'av01.0.08M.08',
@@ -353,7 +375,12 @@ test('Last frame duration with B-frames', async () => {
 	// Two GOPs in decode order, I0 P3 B1 B2 P6 B4 B5 and I7 P10 B8 B9 P13 B11 B12, all landing in the same cluster
 	const frames = [0, 3, 1, 2, 6, 4, 5, 7, 10, 8, 9, 13, 11, 12];
 	for (const frame of frames) {
-		const packet = new EncodedPacket(new Uint8Array(8), frame % 7 === 0 ? 'key' : 'delta', frame / 10, 0.1);
+		const packet = new EncodedPacket({
+			data: new Uint8Array(8),
+			type: frame % 7 === 0 ? 'key' : 'delta',
+			timestamp: frame / 10,
+			duration: 0.1,
+		});
 		await source.add(packet, {
 			decoderConfig: {
 				codec: 'vp8',
@@ -398,7 +425,12 @@ test('Write error surfacing in track close', async () => {
 	output.addAudioTrack(audioSource);
 	await output.start();
 
-	await videoSource.add(new EncodedPacket(new Uint8Array(16), 'key', 0, 0.1), {
+	await videoSource.add(new EncodedPacket({
+		data: new Uint8Array(16),
+		type: 'key',
+		timestamp: 0,
+		duration: 0.1,
+	}), {
 		decoderConfig: {
 			codec: 'vp8',
 			codedWidth: 16,
@@ -407,7 +439,12 @@ test('Write error surfacing in track close', async () => {
 	});
 
 	failWrites = true;
-	await audioSource.add(new EncodedPacket(new Uint8Array(16), 'key', 0, 0.1), {
+	await audioSource.add(new EncodedPacket({
+		data: new Uint8Array(16),
+		type: 'key',
+		timestamp: 0,
+		duration: 0.1,
+	}), {
 		decoderConfig: {
 			codec: 'pcm-s16',
 			numberOfChannels: 1,
@@ -446,7 +483,12 @@ test('Attached image larger than 256 MiB', async () => {
 	const source = new EncodedVideoPacketSource('vp8');
 	output.addVideoTrack(source);
 	await output.start();
-	await source.add(new EncodedPacket(new Uint8Array(16), 'key', 0, 1 / 30), {
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(16),
+		type: 'key',
+		timestamp: 0,
+		duration: 1 / 30,
+	}), {
 		decoderConfig: {
 			codec: 'vp8',
 			codedWidth: 1280,
@@ -475,14 +517,24 @@ test('Packets larger than 256 MiB', async () => {
 	await output.start();
 
 	const data = new Uint8Array(2 ** 28);
-	await source.add(new EncodedPacket(data, 'key', 0, 1 / 30), {
+	await source.add(new EncodedPacket({
+		data,
+		type: 'key',
+		timestamp: 0,
+		duration: 1 / 30,
+	}), {
 		decoderConfig: {
 			codec: 'vp8',
 			codedWidth: 1280,
 			codedHeight: 720,
 		},
 	});
-	await source.add(new EncodedPacket(data, 'key', 1 / 30, 1 / 30));
+	await source.add(new EncodedPacket({
+		data,
+		type: 'key',
+		timestamp: 1 / 30,
+		duration: 1 / 30,
+	}));
 	await output.finalize();
 
 	using input = new Input({

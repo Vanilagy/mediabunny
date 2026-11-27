@@ -99,6 +99,23 @@ test('MP4: stts entry claiming more samples than stsz has', async () => {
 	expect(await countPackets(input)).toBe(2);
 });
 
+test('MP4: AVC without parameter sets', async () => {
+	// Neither an avcC box nor the samples hold the parameter sets, so packets can't get a decoder config
+	using input = new Input({
+		source: new BufferSource(mp4([trak({
+			handler: 'vide',
+			stbl: [stsd(videoSampleEntry('avc1')), stts([[1, 1]]), stsc([[1, 1, 1]]), stsz([4]), stco([0])],
+		})])),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryVideoTrack();
+	expect(track).not.toBe(null);
+
+	const message = 'AVC decoder description is not provided or is not at least 4 bytes long.';
+	await expect(track!.getDecoderConfig()).rejects.toThrow(message);
+	await expect(new EncodedPacketSink(track!).getFirstPacket()).rejects.toThrow(message);
+});
+
 test('MP4: Constant sample size with billions of samples', async () => {
 	await expectGracefulRead(mp4([trak({
 		handler: 'vide',
@@ -676,7 +693,7 @@ const mdhd = (timescale = 1000) => fullBox('mdhd', 0, 0, u32(0), u32(0), u32(tim
 
 const hdlr = (type: 'vide' | 'soun') => fullBox('hdlr', 0, 0, u32(0), ascii(type), zeros(12), u8(0));
 
-const videoSampleEntry = (name = 'avc1', children: Bytes | Bytes[] = [], size = 64) => box(
+const videoSampleEntry = (name = 'vp08', children: Bytes | Bytes[] = [], size = 64) => box(
 	name, zeros(6), u16(1), zeros(16), u16(size), u16(size), u32(0x480000), u32(0x480000), u32(0), u16(1), zeros(32),
 	u16(24), u16(0xffff), ...(children instanceof Uint8Array ? [children] : children as Bytes[]),
 );

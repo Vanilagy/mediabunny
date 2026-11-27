@@ -61,6 +61,7 @@ import {
 	InputVideoTrackBacking,
 } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
+import { ExtendedAudioDecoderConfig, ExtendedVideoDecoderConfig } from '../decode';
 import {
 	assert,
 	binarySearchExact,
@@ -86,6 +87,8 @@ import {
 	EMPTY_COLOR_SPACE,
 	colorSpaceIsComplete,
 	parseIsoSuffix,
+	extractRotationFromMatrix,
+	matrixIsFlipped,
 } from '../misc';
 import { EncodedPacket, PLACEHOLDER_DATA } from '../packet';
 import {
@@ -3243,10 +3246,18 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 
 	nextEac3Frames = new WeakMap<EncodedPacket, EncodedPacket>();
 
+	decoderConfig: ExtendedVideoDecoderConfig | ExtendedAudioDecoderConfig | null = null;
+	decoderConfigResolved = false;
+
 	constructor(public internalTrack: InternalTrack) {}
 
 	abstract getType(): TrackType;
-	abstract getDecoderConfig(): Promise<VideoDecoderConfig | AudioDecoderConfig | null>;
+	abstract getDecoderConfig(): Promise<ExtendedVideoDecoderConfig | ExtendedAudioDecoderConfig | null>;
+
+	async resolveDecoderConfig() {
+		this.decoderConfig = await this.getDecoderConfig();
+		this.decoderConfigResolved = true;
+	}
 
 	getNumber() {
 		const demuxer = this.internalTrack.demuxer;
@@ -3325,7 +3336,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 
 		assert(track.trackBacking);
 
-		const firstPacket = await track.trackBacking.getFirstPacket({ metadataOnly: true });
+		const firstPacket = await this.fetchFirstPacket({ metadataOnly: true });
 		return (firstPacket?.timestamp ?? 0) + track.durationInMediaTimescale / track.timescale;
 	}
 
@@ -3334,6 +3345,13 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 	}
 
 	async getFirstPacket(options: PacketRetrievalOptions) {
+		if (!this.decoderConfigResolved) await this.resolveDecoderConfig();
+
+		return this.fetchFirstPacket(options);
+	}
+
+	// Gets the first packet but without resolving the decoder config
+	async fetchFirstPacket(options: PacketRetrievalOptions) {
 		const regularPacket = await this.fetchPacketForSampleIndex(0, options);
 		if (regularPacket || !this.internalTrack.demuxer.isFragmented) {
 			// If there's a non-fragmented packet, always prefer that
@@ -3351,6 +3369,8 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 	}
 
 	async getPacket(timestamp: number, options: PacketRetrievalOptions) {
+		if (!this.decoderConfigResolved) await this.resolveDecoderConfig();
+
 		const timestampInTimescale = this.mapTimestampIntoTimescale(timestamp);
 
 		const sampleTable = this.internalTrack.demuxer.getSampleTableForTrack(this.internalTrack);
@@ -3451,6 +3471,8 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 	}
 
 	async getKeyPacket(timestamp: number, options: PacketRetrievalOptions) {
+		if (!this.decoderConfigResolved) await this.resolveDecoderConfig();
+
 		const timestampInTimescale = this.mapTimestampIntoTimescale(timestamp);
 
 		const sampleTable = this.internalTrack.demuxer.getSampleTableForTrack(this.internalTrack);
@@ -3635,14 +3657,15 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		const timestamp = (sampleInfo.presentationTimestamp - this.internalTrack.timestampOffset)
 			/ this.internalTrack.timescale;
 		const duration = sampleInfo.duration / this.internalTrack.timescale;
-		const packet = new EncodedPacket(
+		const packet = new EncodedPacket({
 			data,
-			sampleInfo.isKeyFrame ? 'key' : 'delta',
+			type: sampleInfo.isKeyFrame ? 'key' : 'delta',
 			timestamp,
 			duration,
-			sampleIndex,
-			sampleInfo.sampleSize,
-		);
+			sequenceNumber: sampleIndex,
+			byteLength: sampleInfo.sampleSize,
+			decoderConfig: this.decoderConfig ?? undefined,
+		});
 
 		if (this.internalTrack.info?.codec === 'eac3') {
 			return this.splitEac3Sample(packet, options, searchTimestamp, this.packetToSampleIndex, sampleIndex);
@@ -3699,14 +3722,15 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 		const timestamp = (fragmentSample.presentationTimestamp - this.internalTrack.timestampOffset)
 			/ this.internalTrack.timescale;
 		const duration = fragmentSample.duration / this.internalTrack.timescale;
-		const packet = new EncodedPacket(
+		const packet = new EncodedPacket({
 			data,
-			fragmentSample.isKeyFrame ? 'key' : 'delta',
+			type: fragmentSample.isKeyFrame ? 'key' : 'delta',
 			timestamp,
 			duration,
-			fragment.moofOffset + sampleIndex,
-			fragmentSample.byteSize,
-		);
+			sequenceNumber: fragment.moofOffset + sampleIndex,
+			byteLength: fragmentSample.byteSize,
+			decoderConfig: this.decoderConfig ?? undefined,
+		});
 
 		if (this.internalTrack.info?.codec === 'eac3') {
 			return this.splitEac3Sample(packet, options, searchTimestamp, this.packetToFragmentLocation, {
@@ -3893,16 +3917,17 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 			const timestamp = samplePacket.timestamp + 256 * blocksBefore / info.sampleRate;
 			const duration = frames.length === 1 ? samplePacket.duration : 256 * frame.blockCount / info.sampleRate;
 
-			const packet = new EncodedPacket(
-				options.metadataOnly
+			const packet = new EncodedPacket({
+				data: options.metadataOnly
 					? PLACEHOLDER_DATA
 					: samplePacket.data.subarray(frame.offset, frame.offset + frame.size),
-				'key',
+				type: 'key',
 				timestamp,
 				duration,
-				8 * samplePacket.sequenceNumber + i,
-				frame.size,
-			);
+				sequenceNumber: 8 * samplePacket.sequenceNumber + i,
+				byteLength: frame.size,
+				decoderConfig: this.decoderConfig ?? undefined,
+			});
 
 			locations.set(packet, location);
 			if (previousPacket) {
@@ -3923,7 +3948,7 @@ abstract class IsobmffTrackBacking implements InputTrackBacking {
 
 class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideoTrackBacking {
 	declare internalTrack: InternalVideoTrack;
-	decoderConfigPromise: Promise<VideoDecoderConfig> | null = null;
+	decoderConfigPromise: Promise<ExtendedVideoDecoderConfig> | null = null;
 
 	constructor(internalTrack: InternalVideoTrack) {
 		super(internalTrack);
@@ -3978,18 +4003,18 @@ class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideo
 		);
 	}
 
-	async getDecoderConfig(): Promise<VideoDecoderConfig | null> {
+	async getDecoderConfig(): Promise<ExtendedVideoDecoderConfig | null> {
 		if (!this.internalTrack.info.codec) {
 			return null;
 		}
 
-		return this.decoderConfigPromise ??= (async (): Promise<VideoDecoderConfig> => {
+		return this.decoderConfigPromise ??= (async (): Promise<ExtendedVideoDecoderConfig> => {
 			if (this.internalTrack.info.codec === 'avc' && !this.internalTrack.info.codecDescription) {
-				const firstPacket = await this.getFirstPacket({});
+				const firstPacket = await this.fetchFirstPacket({});
 				this.internalTrack.info.avcCodecInfo
 					= firstPacket && extractAvcDecoderConfigurationRecord(firstPacket.data);
 			} else if (this.internalTrack.info.codec === 'hevc' && !this.internalTrack.info.codecDescription) {
-				const firstPacket = await this.getFirstPacket({});
+				const firstPacket = await this.fetchFirstPacket({});
 				this.internalTrack.info.hevcCodecInfo
 					= firstPacket && extractHevcDecoderConfigurationRecord(firstPacket.data);
 			} else if (
@@ -4000,7 +4025,7 @@ class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideo
 					|| !vp9CodecInfoHasColorInfo(this.internalTrack.info.vp9CodecInfo)
 				)
 			) {
-				const firstPacket = await this.getFirstPacket({});
+				const firstPacket = await this.fetchFirstPacket({});
 				const packetInfo = firstPacket && extractVp9CodecInfoFromPacket(firstPacket.data);
 
 				if (packetInfo) {
@@ -4022,14 +4047,14 @@ class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideo
 					)
 				)
 			) {
-				const firstPacket = await this.getFirstPacket({});
+				const firstPacket = await this.fetchFirstPacket({});
 				const packetInfo = firstPacket && extractAv1CodecInfoFromPacket(firstPacket.data);
 
 				if (packetInfo) {
 					this.internalTrack.info.av1CodecInfo = packetInfo;
 				}
 			} else if (this.internalTrack.info.codec === 'prores' && !this.internalTrack.info.proresCodecInfo) {
-				const firstPacket = await this.getFirstPacket({});
+				const firstPacket = await this.fetchFirstPacket({});
 				this.internalTrack.info.proresCodecInfo
 					= firstPacket && extractProresCodecInfoFromPacket(firstPacket.data);
 			}
@@ -4044,12 +4069,15 @@ class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideo
 				this.internalTrack.info.colorSpace.fullRange ??= colorSpace.fullRange;
 			}
 
-			const config: VideoDecoderConfig = {
+			const config: ExtendedVideoDecoderConfig = {
+				type: 'video',
 				codec: extractVideoCodecString(this.internalTrack.info),
 				codedWidth: this.internalTrack.info.width,
 				codedHeight: this.internalTrack.info.height,
 				description: this.internalTrack.info.codecDescription ?? undefined,
 				colorSpace: this.internalTrack.info.colorSpace,
+				rotation: extractRotationFromMatrix(this.internalTrack.matrix),
+				flip: matrixIsFlipped(this.internalTrack.matrix),
 			};
 
 			if (
@@ -4067,7 +4095,7 @@ class IsobmffVideoTrackBacking extends IsobmffTrackBacking implements InputVideo
 
 class IsobmffAudioTrackBacking extends IsobmffTrackBacking implements InputAudioTrackBacking {
 	declare internalTrack: InternalAudioTrack;
-	decoderConfigPromise: Promise<AudioDecoderConfig> | null = null;
+	decoderConfigPromise: Promise<ExtendedAudioDecoderConfig> | null = null;
 
 	constructor(internalTrack: InternalAudioTrack) {
 		super(internalTrack);
@@ -4089,19 +4117,20 @@ class IsobmffAudioTrackBacking extends IsobmffTrackBacking implements InputAudio
 		return this.internalTrack.info.sampleRate;
 	}
 
-	async getDecoderConfig(): Promise<AudioDecoderConfig | null> {
+	async getDecoderConfig(): Promise<ExtendedAudioDecoderConfig | null> {
 		if (!this.internalTrack.info.codec) {
 			return null;
 		}
 
-		return this.decoderConfigPromise ??= (async (): Promise<AudioDecoderConfig> => {
+		return this.decoderConfigPromise ??= (async (): Promise<ExtendedAudioDecoderConfig> => {
 			if (this.internalTrack.info.codec === 'dts' && !this.internalTrack.info.dtsFormat) {
 				// Gotta check the packet to determine the DTS variant
-				const firstPacket = await this.getFirstPacket({});
+				const firstPacket = await this.fetchFirstPacket({});
 				this.internalTrack.info.dtsFormat = firstPacket && extractDtsFourCcFromPacket(firstPacket.data);
 			}
 
 			return {
+				type: 'audio',
 				codec: extractAudioCodecString(this.internalTrack.info),
 				numberOfChannels: this.internalTrack.info.numberOfChannels,
 				sampleRate: this.internalTrack.info.sampleRate,

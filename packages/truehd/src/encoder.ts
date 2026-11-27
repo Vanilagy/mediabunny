@@ -11,6 +11,7 @@ import {
 	AudioCodec,
 	AudioSample,
 	EncodedPacket,
+	type ExtendedAudioDecoderConfig,
 	registerEncoder,
 } from 'mediabunny';
 import { sendCommand, refWorker, unrefWorker } from './worker-client';
@@ -24,7 +25,7 @@ class TrueHdEncoder extends CustomAudioEncoder {
 	private encoderFrameSize = 0;
 	private sampleRate = 0;
 	private numberOfChannels = 0;
-	private chunkMetadata: EncodedAudioChunkMetadata = {};
+	private decoderConfig!: ExtendedAudioDecoderConfig;
 
 	// Accumulate interleaved f32 samples until we have a full batch
 	private pendingBuffer = new Float32Array(2 ** 16);
@@ -55,6 +56,12 @@ class TrueHdEncoder extends CustomAudioEncoder {
 
 		this.ctx = result.ctx;
 		this.encoderFrameSize = result.frameSize;
+		this.decoderConfig = {
+			type: 'audio',
+			codec: 'mlpa',
+			numberOfChannels: this.config.numberOfChannels,
+			sampleRate: this.config.sampleRate,
+		};
 
 		this.resetInternalState();
 	}
@@ -63,14 +70,6 @@ class TrueHdEncoder extends CustomAudioEncoder {
 		this.pendingFrames = 0;
 		this.receivedFrames = 0;
 		this.nextSampleTimestampInSamples = null;
-
-		this.chunkMetadata = {
-			decoderConfig: {
-				codec: 'mlpa',
-				numberOfChannels: this.config.numberOfChannels,
-				sampleRate: this.config.sampleRate,
-			},
-		};
 	}
 
 	async encode(audioSample: AudioSample) {
@@ -184,19 +183,13 @@ class TrueHdEncoder extends CustomAudioEncoder {
 			// Only access units carrying a major sync are restart points
 			const syncWord = encodedData.byteLength >= 8 ? new DataView(encodedData).getUint32(4) : null;
 
-			const packet = new EncodedPacket(
-				new Uint8Array(encodedData),
-				syncWord === TRUEHD_MAJOR_SYNC_WORD ? 'key' : 'delta',
-				pts / this.sampleRate,
-				duration / this.sampleRate,
-			);
-
-			this.onPacket(
-				packet,
-				this.chunkMetadata,
-			);
-
-			this.chunkMetadata = {};
+			this.onPacket(new EncodedPacket({
+				data: new Uint8Array(encodedData),
+				type: syncWord === TRUEHD_MAJOR_SYNC_WORD ? 'key' : 'delta',
+				timestamp: pts / this.sampleRate,
+				duration: duration / this.sampleRate,
+				decoderConfig: this.decoderConfig,
+			}));
 		}
 	}
 }

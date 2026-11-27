@@ -40,17 +40,20 @@ import {
 } from '../input-track';
 import { AttachedFile, DEFAULT_TRACK_DISPOSITION, MetadataTags, TrackDisposition } from '../metadata';
 import { PacketRetrievalOptions } from '../media-sink';
+import { ExtendedAudioDecoderConfig, ExtendedVideoDecoderConfig } from '../decode';
 import {
 	assert,
 	binarySearchLessOrEqual,
 	COLOR_PRIMARIES_MAP_INVERSE,
 	colorSpaceIsComplete,
 	EMPTY_COLOR_SPACE,
+	extractRotationFromMatrix,
 	findLastIndex,
 	isIso639Dash2LanguageCode,
 	isThenable,
 	last,
 	MATRIX_COEFFICIENTS_MAP_INVERSE,
+	matrixIsFlipped,
 	centeredTransformationMatrix,
 	DEG_TO_RAD,
 	multiplyMatrices,
@@ -2278,10 +2281,18 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 		blockIndex: number;
 	}>();
 
+	decoderConfig: ExtendedVideoDecoderConfig | ExtendedAudioDecoderConfig | null = null;
+	decoderConfigResolved = false;
+
 	constructor(public internalTrack: InternalTrack) {}
 
 	abstract getType(): TrackType;
-	abstract getDecoderConfig(): Promise<VideoDecoderConfig | AudioDecoderConfig | null>;
+	abstract getDecoderConfig(): Promise<ExtendedVideoDecoderConfig | ExtendedAudioDecoderConfig | null>;
+
+	async resolveDecoderConfig() {
+		this.decoderConfig = await this.getDecoderConfig();
+		this.decoderConfigResolved = true;
+	}
 
 	getNumber() {
 		const demuxer = this.internalTrack.demuxer;
@@ -2356,6 +2367,12 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 	}
 
 	async getFirstPacket(options: PacketRetrievalOptions) {
+		if (!this.decoderConfigResolved) await this.resolveDecoderConfig();
+
+		return this.fetchFirstPacket(options);
+	}
+
+	fetchFirstPacket(options: PacketRetrievalOptions) {
 		return this.performClusterLookup(
 			null,
 			(cluster) => {
@@ -2387,6 +2404,8 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 	}
 
 	async getPacket(timestamp: number, options: PacketRetrievalOptions) {
+		if (!this.decoderConfigResolved) await this.resolveDecoderConfig();
+
 		const timestampInTimescale = this.intoTimescale(timestamp);
 
 		return this.performClusterLookup(
@@ -2454,6 +2473,8 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 	}
 
 	async getKeyPacket(timestamp: number, options: PacketRetrievalOptions) {
+		if (!this.decoderConfigResolved) await this.resolveDecoderConfig();
+
 		const timestampInTimescale = this.intoTimescale(timestamp);
 
 		return this.performClusterLookup(
@@ -2582,15 +2603,16 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 			sideData.alphaByteLength = block.mainAdditional.byteLength;
 		}
 
-		const packet = new EncodedPacket(
+		const packet = new EncodedPacket({
 			data,
-			block.isKeyFrame ? 'key' : 'delta',
+			type: block.isKeyFrame ? 'key' : 'delta',
 			timestamp,
 			duration,
-			cluster.dataStartPos + blockIndex,
-			block.data.byteLength,
+			sequenceNumber: cluster.dataStartPos + blockIndex,
+			byteLength: block.data.byteLength,
 			sideData,
-		);
+			decoderConfig: this.decoderConfig ?? undefined,
+		});
 
 		this.packetToClusterLocation.set(packet, { cluster, blockIndex });
 
@@ -2799,7 +2821,7 @@ abstract class MatroskaTrackBacking implements InputTrackBacking {
 
 class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVideoTrackBacking {
 	declare internalTrack: InternalVideoTrack;
-	decoderConfigPromise: Promise<VideoDecoderConfig> | null = null;
+	decoderConfigPromise: Promise<ExtendedVideoDecoderConfig> | null = null;
 
 	constructor(internalTrack: InternalVideoTrack) {
 		super(internalTrack);
@@ -2864,12 +2886,12 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 		);
 	}
 
-	async getDecoderConfig(): Promise<VideoDecoderConfig | null> {
+	async getDecoderConfig(): Promise<ExtendedVideoDecoderConfig | null> {
 		if (!this.internalTrack.info.codec) {
 			return null;
 		}
 
-		return this.decoderConfigPromise ??= (async (): Promise<VideoDecoderConfig> => {
+		return this.decoderConfigPromise ??= (async (): Promise<ExtendedVideoDecoderConfig> => {
 			const codecPrivate = this.internalTrack.codecPrivate;
 
 			// CodecPrivate holds 4 bytes like those of the AV1CodecConfigurationRecord, optionally followed by OBUs
@@ -2889,7 +2911,7 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 					|| (this.internalTrack.info.codec === 'hevc' && !this.internalTrack.info.codecDescription);
 
 			if (needsPacketForAdditionalInfo) {
-				firstPacket = await this.getFirstPacket({});
+				firstPacket = await this.fetchFirstPacket({});
 			}
 
 			if (this.internalTrack.info.codec === 'av1' && firstPacket) {
@@ -2930,12 +2952,16 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 				this.internalTrack.info.colorSpace.fullRange ??= colorSpace.fullRange;
 			}
 
-			const config: VideoDecoderConfig = {
+			const matrix = this.getTransformationMatrix();
+			const config: ExtendedVideoDecoderConfig = {
+				type: 'video',
 				codec: extractVideoCodecString(codecInfo),
 				codedWidth: this.internalTrack.info.width,
 				codedHeight: this.internalTrack.info.height,
 				description: this.internalTrack.info.codecDescription ?? undefined,
 				colorSpace: this.internalTrack.info.colorSpace,
+				rotation: extractRotationFromMatrix(matrix),
+				flip: matrixIsFlipped(matrix),
 			};
 
 			if (
@@ -2953,7 +2979,7 @@ class MatroskaVideoTrackBacking extends MatroskaTrackBacking implements InputVid
 
 class MatroskaAudioTrackBacking extends MatroskaTrackBacking implements InputAudioTrackBacking {
 	declare internalTrack: InternalAudioTrack;
-	decoderConfigPromise: Promise<AudioDecoderConfig> | null = null;
+	decoderConfigPromise: Promise<ExtendedAudioDecoderConfig> | null = null;
 
 	constructor(internalTrack: InternalAudioTrack) {
 		super(internalTrack);
@@ -2975,19 +3001,20 @@ class MatroskaAudioTrackBacking extends MatroskaTrackBacking implements InputAud
 		return this.internalTrack.info.sampleRate;
 	}
 
-	async getDecoderConfig(): Promise<AudioDecoderConfig | null> {
+	async getDecoderConfig(): Promise<ExtendedAudioDecoderConfig | null> {
 		if (!this.internalTrack.info.codec) {
 			return null;
 		}
 
-		return this.decoderConfigPromise ??= (async (): Promise<AudioDecoderConfig> => {
+		return this.decoderConfigPromise ??= (async (): Promise<ExtendedAudioDecoderConfig> => {
 			if (this.internalTrack.info.codec === 'dts' && !this.internalTrack.info.dtsFormat) {
 				// Gotta check the packet to determine the DTS variant
-				const firstPacket = await this.getFirstPacket({});
+				const firstPacket = await this.fetchFirstPacket({});
 				this.internalTrack.info.dtsFormat = firstPacket && extractDtsFourCcFromPacket(firstPacket.data);
 			}
 
 			return {
+				type: 'audio',
 				codec: extractAudioCodecString({
 					codec: this.internalTrack.info.codec,
 					codecDescription: this.internalTrack.info.codecDescription,

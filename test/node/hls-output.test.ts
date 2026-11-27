@@ -1009,7 +1009,12 @@ const setUpSegmentationEnvironment = async (options: {
 		assert(_videoSource);
 
 		return _videoSource.add(
-			new EncodedPacket(avcPacketData, type, timestamp, duration),
+			new EncodedPacket({
+				data: avcPacketData,
+				type,
+				timestamp,
+				duration,
+			}),
 			avcMetadata,
 		);
 	};
@@ -1018,7 +1023,12 @@ const setUpSegmentationEnvironment = async (options: {
 		assert(_audioSource);
 
 		return _audioSource.add(
-			new EncodedPacket(aacPacketData, 'key', timestamp, duration),
+			new EncodedPacket({
+				data: aacPacketData,
+				type: 'key',
+				timestamp,
+				duration,
+			}),
 			aacMetadata,
 		);
 	};
@@ -2189,20 +2199,60 @@ test('write, onSegment, onPlaylist, onMaster events', async () => {
 	await output.start();
 
 	// First segment
-	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 0,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 0.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1.5,
+		duration: 0,
+	}), avcMetadata);
 	expect(onSegment).toHaveBeenCalledTimes(0);
 
 	// Second segment starts, first one is finalized
-	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 2,
+		duration: 0,
+	}), avcMetadata);
 	expect(onSegment).toHaveBeenCalledTimes(1);
 	expect(onSegment.mock.calls[0]![1]).toEqual(expect.objectContaining({ n: 1 }));
 
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 2.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3.5,
+		duration: 0,
+	}), avcMetadata);
 
 	expect(onPlaylist).not.toHaveBeenCalled();
 	expect(onMaster).not.toHaveBeenCalled();
@@ -2262,14 +2312,54 @@ test('Single-file mode', async () => {
 
 	await output.start();
 
-	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 0,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 0.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 2,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 2.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3.5,
+		duration: 0,
+	}), avcMetadata);
 
 	expect(onSegment).toHaveBeenCalledTimes(0);
 
@@ -2325,14 +2415,54 @@ test('Single-file mode with fragmented MP4 produces proper standalone segment fi
 
 	await output.start();
 
-	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 0,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 0.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 2,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 2.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3.5,
+		duration: 0,
+	}), avcMetadata);
 
 	expect(onSegment).toHaveBeenCalledTimes(0);
 
@@ -2394,14 +2524,54 @@ test('StreamTarget, write is called for each target', async () => {
 
 	await output.start();
 
-	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 0,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 0.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 2,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 2.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3.5,
+		duration: 0,
+	}), avcMetadata);
 
 	await output.finalize();
 
@@ -2434,9 +2604,24 @@ test('I-frame stream', async () => {
 	expect(muxer.playlistDeclarations[0]!.playlist.tracks).toHaveLength(1);
 	expect(muxer.playlistDeclarations[0]!.groupId).toBeNull();
 
-	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 1), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'key', 1, 1), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 1), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 0,
+		duration: 1,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 1,
+		duration: 1,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 2,
+		duration: 1,
+	}), avcMetadata);
 
 	await output.finalize();
 
@@ -2505,14 +2690,54 @@ test('CMAF segmentation', async () => {
 
 	await output.start();
 
-	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 0,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 0.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 2,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 2.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3.5,
+		duration: 0,
+	}), avcMetadata);
 
 	await output.finalize();
 
@@ -2593,14 +2818,54 @@ test('CMAF segmentation, single file per playlist', async () => {
 
 	await output.start();
 
-	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 0,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 0.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 2,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 2.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3.5,
+		duration: 0,
+	}), avcMetadata);
 
 	await output.finalize();
 
@@ -2669,15 +2934,55 @@ test('Opus codec string in master playlist', async () => {
 
 	await output.start();
 
-	await video.add(new EncodedPacket(avcPacketData, 'key', 0, 0), avcMetadata);
-	await video.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0), avcMetadata);
-	await video.add(new EncodedPacket(avcPacketData, 'delta', 1, 0), avcMetadata);
-	await video.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0), avcMetadata);
+	await video.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 0,
+		duration: 0,
+	}), avcMetadata);
+	await video.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 0.5,
+		duration: 0,
+	}), avcMetadata);
+	await video.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1,
+		duration: 0,
+	}), avcMetadata);
+	await video.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1.5,
+		duration: 0,
+	}), avcMetadata);
 
-	await audio.add(new EncodedPacket(opusPacketData, 'key', 0, 0.02), opusMetadata);
-	await audio.add(new EncodedPacket(opusPacketData, 'key', 0.5, 0.02), opusMetadata);
-	await audio.add(new EncodedPacket(opusPacketData, 'key', 1, 0.02), opusMetadata);
-	await audio.add(new EncodedPacket(opusPacketData, 'key', 1.5, 0.02), opusMetadata);
+	await audio.add(new EncodedPacket({
+		data: opusPacketData,
+		type: 'key',
+		timestamp: 0,
+		duration: 0.02,
+	}), opusMetadata);
+	await audio.add(new EncodedPacket({
+		data: opusPacketData,
+		type: 'key',
+		timestamp: 0.5,
+		duration: 0.02,
+	}), opusMetadata);
+	await audio.add(new EncodedPacket({
+		data: opusPacketData,
+		type: 'key',
+		timestamp: 1,
+		duration: 0.02,
+	}), opusMetadata);
+	await audio.add(new EncodedPacket({
+		data: opusPacketData,
+		type: 'key',
+		timestamp: 1.5,
+		duration: 0.02,
+	}), opusMetadata);
 
 	await output.finalize();
 
@@ -2921,23 +3226,103 @@ const testSparseTracksInSegments = async (hlsOptions: HlsOutputFormatOptions) =>
 
 	// We expect three segments: First one with just video, second with video and audio, last one with just audio.
 
-	await video.add(new EncodedPacket(avcPacketData, 'key', 0, 0), avcMetadata);
-	await video.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0), avcMetadata);
-	await video.add(new EncodedPacket(avcPacketData, 'delta', 1, 0), avcMetadata);
-	await video.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0), avcMetadata);
-	await video.add(new EncodedPacket(avcPacketData, 'key', 2, 0), avcMetadata);
-	await video.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0), avcMetadata);
-	await video.add(new EncodedPacket(avcPacketData, 'delta', 3, 0), avcMetadata);
-	await video.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0), avcMetadata);
+	await video.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 0,
+		duration: 0,
+	}), avcMetadata);
+	await video.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 0.5,
+		duration: 0,
+	}), avcMetadata);
+	await video.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1,
+		duration: 0,
+	}), avcMetadata);
+	await video.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1.5,
+		duration: 0,
+	}), avcMetadata);
+	await video.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 2,
+		duration: 0,
+	}), avcMetadata);
+	await video.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 2.5,
+		duration: 0,
+	}), avcMetadata);
+	await video.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3,
+		duration: 0,
+	}), avcMetadata);
+	await video.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3.5,
+		duration: 0,
+	}), avcMetadata);
 
-	await audio.add(new EncodedPacket(aacPacketData, 'key', 2, 0), aacMetadata);
-	await audio.add(new EncodedPacket(aacPacketData, 'key', 2.5, 0), aacMetadata);
-	await audio.add(new EncodedPacket(aacPacketData, 'key', 3, 0), aacMetadata);
-	await audio.add(new EncodedPacket(aacPacketData, 'key', 3.5, 0), aacMetadata);
-	await audio.add(new EncodedPacket(aacPacketData, 'key', 4, 0), aacMetadata);
-	await audio.add(new EncodedPacket(aacPacketData, 'key', 4.5, 0), aacMetadata);
-	await audio.add(new EncodedPacket(aacPacketData, 'key', 5, 0), aacMetadata);
-	await audio.add(new EncodedPacket(aacPacketData, 'key', 5.5, 0), aacMetadata);
+	await audio.add(new EncodedPacket({
+		data: aacPacketData,
+		type: 'key',
+		timestamp: 2,
+		duration: 0,
+	}), aacMetadata);
+	await audio.add(new EncodedPacket({
+		data: aacPacketData,
+		type: 'key',
+		timestamp: 2.5,
+		duration: 0,
+	}), aacMetadata);
+	await audio.add(new EncodedPacket({
+		data: aacPacketData,
+		type: 'key',
+		timestamp: 3,
+		duration: 0,
+	}), aacMetadata);
+	await audio.add(new EncodedPacket({
+		data: aacPacketData,
+		type: 'key',
+		timestamp: 3.5,
+		duration: 0,
+	}), aacMetadata);
+	await audio.add(new EncodedPacket({
+		data: aacPacketData,
+		type: 'key',
+		timestamp: 4,
+		duration: 0,
+	}), aacMetadata);
+	await audio.add(new EncodedPacket({
+		data: aacPacketData,
+		type: 'key',
+		timestamp: 4.5,
+		duration: 0,
+	}), aacMetadata);
+	await audio.add(new EncodedPacket({
+		data: aacPacketData,
+		type: 'key',
+		timestamp: 5,
+		duration: 0,
+	}), aacMetadata);
+	await audio.add(new EncodedPacket({
+		data: aacPacketData,
+		type: 'key',
+		timestamp: 5.5,
+		duration: 0,
+	}), aacMetadata);
 
 	await output.finalize();
 
@@ -2998,14 +3383,39 @@ test('Live mode', async () => {
 
 	await output.start();
 
-	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 0,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 0.5,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1.5,
+		duration: 0.5,
+	}), avcMetadata);
 
 	expect(writtenTexts.size).toBe(0);
 
-	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0.5), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 2,
+		duration: 0.5,
+	}), avcMetadata);
 
 	expect(writtenTexts.has('playlist-1.m3u8')).toBe(true);
 	expect(writtenTexts.has('master.m3u8')).toBe(true);
@@ -3019,11 +3429,31 @@ test('Live mode', async () => {
 segment-1-1.ts
 `);
 
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 2.5,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3.5,
+		duration: 0.5,
+	}), avcMetadata);
 
-	await source.add(new EncodedPacket(avcPacketData, 'key', 4, 0.5), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 4,
+		duration: 0.5,
+	}), avcMetadata);
 
 	expect(writtenTexts.get('playlist-1.m3u8')).toBe(`#EXTM3U
 #EXT-X-VERSION:3
@@ -3036,9 +3466,24 @@ segment-1-1.ts
 segment-1-2.ts
 `);
 
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 4.5, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 5, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 5.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 4.5,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 5,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 5.5,
+		duration: 0.5,
+	}), avcMetadata);
 
 	await output.finalize();
 
@@ -3085,14 +3530,39 @@ test('Live mode, CMAF', async () => {
 
 	await output.start();
 
-	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 0,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 0.5,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1.5,
+		duration: 0.5,
+	}), avcMetadata);
 
 	expect(writtenTexts.size).toBe(0);
 
-	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0.5), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 2,
+		duration: 0.5,
+	}), avcMetadata);
 
 	expect(writtenTexts.has('playlist-1.m3u8')).toBe(true);
 	expect(writtenTexts.has('master.m3u8')).toBe(true);
@@ -3107,11 +3577,31 @@ test('Live mode, CMAF', async () => {
 segment-1-1.m4s
 `);
 
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 2.5,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3.5,
+		duration: 0.5,
+	}), avcMetadata);
 
-	await source.add(new EncodedPacket(avcPacketData, 'key', 4, 0.5), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 4,
+		duration: 0.5,
+	}), avcMetadata);
 
 	expect(writtenTexts.get('playlist-1.m3u8')).toBe(`#EXTM3U
 #EXT-X-VERSION:6
@@ -3125,9 +3615,24 @@ segment-1-1.m4s
 segment-1-2.m4s
 `);
 
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 4.5, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 5, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 5.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 4.5,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 5,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 5.5,
+		duration: 0.5,
+	}), avcMetadata);
 
 	await output.finalize();
 
@@ -3175,12 +3680,42 @@ test('Live mode, fixed target duration', async () => {
 
 	await output.start();
 
-	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 2, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 0,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 0.5,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1.5,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 2,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 2.5,
+		duration: 0.5,
+	}), avcMetadata);
 
 	await output.finalize();
 
@@ -3221,8 +3756,18 @@ test('Same target duration across playlists', async () => {
 	await output.start();
 
 	for (let i = 0; i < 12; i++) {
-		await audioEng.add(new EncodedPacket(aacPacketData, 'key', 0.5 * i, 0.5), aacMetadata);
-		await audioSpa.add(new EncodedPacket(aacPacketData, 'key', 0.5 * i, 0.5), aacMetadata);
+		await audioEng.add(new EncodedPacket({
+			data: aacPacketData,
+			type: 'key',
+			timestamp: 0.5 * i,
+			duration: 0.5,
+		}), aacMetadata);
+		await audioSpa.add(new EncodedPacket({
+			data: aacPacketData,
+			type: 'key',
+			timestamp: 0.5 * i,
+			duration: 0.5,
+		}), aacMetadata);
 	}
 
 	// The audio playlists are done before the video produces its overlong segment
@@ -3232,7 +3777,12 @@ test('Same target duration across playlists', async () => {
 	// A single 6-second GOP
 	for (let i = 0; i < 12; i++) {
 		const type = i === 0 ? 'key' : 'delta';
-		await video.add(new EncodedPacket(avcPacketData, type, 0.5 * i, 0.5), avcMetadata);
+		await video.add(new EncodedPacket({
+			data: avcPacketData,
+			type,
+			timestamp: 0.5 * i,
+			duration: 0.5,
+		}), avcMetadata);
 	}
 
 	await output.finalize();
@@ -3301,14 +3851,54 @@ test('EXT-X-PROGRAM-DATE-TIME writing', async () => {
 
 	const base = Date.parse('2026-01-01T00:00:00.250Z') / 1000;
 
-	await source.add(new EncodedPacket(avcPacketData, 'key', base + 0, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', base + 0.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', base + 1, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', base + 1.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'key', base + 2, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', base + 2.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', base + 3, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', base + 3.5, 0), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: base + 0,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: base + 0.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: base + 1,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: base + 1.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: base + 2,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: base + 2.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: base + 3,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: base + 3.5,
+		duration: 0,
+	}), avcMetadata);
 
 	await output.finalize();
 
@@ -3390,12 +3980,37 @@ test('Live mode, maxLiveSegmentCount', async () => {
 
 	await output.start();
 
-	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 0,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 0.5,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1.5,
+		duration: 0.5,
+	}), avcMetadata);
 
-	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0.5), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 2,
+		duration: 0.5,
+	}), avcMetadata);
 
 	expect(writtenTexts.get('playlist-1.m3u8')).toBe(`#EXTM3U
 #EXT-X-VERSION:3
@@ -3407,11 +4022,31 @@ test('Live mode, maxLiveSegmentCount', async () => {
 segment-1-1.ts
 `);
 
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 2.5,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3.5,
+		duration: 0.5,
+	}), avcMetadata);
 
-	await source.add(new EncodedPacket(avcPacketData, 'key', 4, 0.5), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 4,
+		duration: 0.5,
+	}), avcMetadata);
 
 	expect(writtenTexts.get('playlist-1.m3u8')).toBe(`#EXTM3U
 #EXT-X-VERSION:3
@@ -3425,11 +4060,31 @@ segment-1-1.ts
 segment-1-2.ts
 `);
 
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 4.5, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 5, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 5.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 4.5,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 5,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 5.5,
+		duration: 0.5,
+	}), avcMetadata);
 
-	await source.add(new EncodedPacket(avcPacketData, 'key', 6, 0.5), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 6,
+		duration: 0.5,
+	}), avcMetadata);
 
 	expect(writtenTexts.get('playlist-1.m3u8')).toBe(`#EXTM3U
 #EXT-X-VERSION:3
@@ -3448,9 +4103,24 @@ segment-1-3.ts
 	expect(poppedSegments[0]!.info.n).toBe(1);
 	expect(poppedSegments[0]!.info.isSingleFile).toBe(false);
 
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 6.5, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 7, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 7.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 6.5,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 7,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 7.5,
+		duration: 0.5,
+	}), avcMetadata);
 
 	await output.finalize();
 
@@ -3498,25 +4168,105 @@ test('Live mode, maxLiveSegmentCount with singleFilePerPlaylist', async () => {
 
 	await output.start();
 
-	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 0,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 0.5,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1.5,
+		duration: 0.5,
+	}), avcMetadata);
 
-	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 2,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 2.5,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3.5,
+		duration: 0.5,
+	}), avcMetadata);
 
-	await source.add(new EncodedPacket(avcPacketData, 'key', 4, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 4.5, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 5, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 5.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 4,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 4.5,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 5,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 5.5,
+		duration: 0.5,
+	}), avcMetadata);
 
-	await source.add(new EncodedPacket(avcPacketData, 'key', 6, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 6.5, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 7, 0.5), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 7.5, 0.5), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 6,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 6.5,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 7,
+		duration: 0.5,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 7.5,
+		duration: 0.5,
+	}), avcMetadata);
 
 	await output.finalize();
 
@@ -3552,14 +4302,54 @@ test('Append-only stream', async () => {
 
 	await output.start();
 
-	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 0,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 0.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 2,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 2.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3.5,
+		duration: 0,
+	}), avcMetadata);
 
 	await output.finalize();
 
@@ -3597,14 +4387,54 @@ test('Append-only stream, single file', async () => {
 
 	await output.start();
 
-	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 0,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 0.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 2,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 2.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3.5,
+		duration: 0,
+	}), avcMetadata);
 
 	await output.finalize();
 
@@ -3642,14 +4472,54 @@ test('Append-only stream, single file with CMAF', async () => {
 
 	await output.start();
 
-	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 0,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 0.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 2,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 2.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3.5,
+		duration: 0,
+	}), avcMetadata);
 
 	await output.finalize();
 
@@ -3687,12 +4557,37 @@ test('Append-only stream with monotonicity violation', async () => {
 
 	await output.start();
 
-	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 0,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 0.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1.5,
+		duration: 0,
+	}), avcMetadata);
 
-	await expect(source.add(new EncodedPacket(avcPacketData, 'key', 2, 0), avcMetadata))
+	await expect(source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 2,
+		duration: 0,
+	}), avcMetadata))
 		.rejects.toThrow('AppendOnlyStreamTarget');
 });
 
@@ -3718,14 +4613,54 @@ test('Relative paths & isRoot', async () => {
 
 	await output.start();
 
-	await source.add(new EncodedPacket(avcPacketData, 'key', 0, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 1.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'key', 2, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 2.5, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 3, 0), avcMetadata);
-	await source.add(new EncodedPacket(avcPacketData, 'delta', 3.5, 0), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 0,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 0.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 1.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 2,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 2.5,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3,
+		duration: 0,
+	}), avcMetadata);
+	await source.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 3.5,
+		duration: 0,
+	}), avcMetadata);
 
 	await output.finalize();
 });
@@ -3766,8 +4701,18 @@ const testCrossVariantTimestamps = async (hlsOptions: HlsOutputFormatOptions) =>
 	// Video starts at 1 second, audio half a second earlier
 	for (let i = 0; i < 8; i++) {
 		const type = i % 4 === 0 ? 'key' : 'delta';
-		await video.add(new EncodedPacket(avcPacketData, type, 1 + 0.5 * i, 0), avcMetadata);
-		await audio.add(new EncodedPacket(aacPacketData, 'key', 0.5 + 0.5 * i, 0), aacMetadata);
+		await video.add(new EncodedPacket({
+			data: avcPacketData,
+			type,
+			timestamp: 1 + 0.5 * i,
+			duration: 0,
+		}), avcMetadata);
+		await audio.add(new EncodedPacket({
+			data: aacPacketData,
+			type: 'key',
+			timestamp: 0.5 + 0.5 * i,
+			duration: 0,
+		}), aacMetadata);
 	}
 
 	await output.finalize();
@@ -3962,7 +4907,12 @@ const testTimestampWraparound = async (
 	const packetCount = 240;
 	for (let i = 0; i < packetCount; i++) {
 		const type = i % 4 === 0 ? 'key' : 'delta';
-		await source.add(new EncodedPacket(avcPacketData, type, start + 0.5 * i, 0.5), avcMetadata);
+		await source.add(new EncodedPacket({
+			data: avcPacketData,
+			type,
+			timestamp: start + 0.5 * i,
+			duration: 0.5,
+		}), avcMetadata);
 	}
 
 	await output.finalize();
@@ -4084,8 +5034,18 @@ test('Reserve-mode MP4 segments', async () => {
 	// Two segments of four packets per track each
 	for (let i = 0; i < 8; i++) {
 		const type = i % 4 === 0 ? 'key' : 'delta';
-		await video.add(new EncodedPacket(avcPacketData, type, 0.5 * i, 0.5), avcMetadata);
-		await audio.add(new EncodedPacket(aacPacketData, 'key', 0.5 * i, 0.5), aacMetadata);
+		await video.add(new EncodedPacket({
+			data: avcPacketData,
+			type,
+			timestamp: 0.5 * i,
+			duration: 0.5,
+		}), avcMetadata);
+		await audio.add(new EncodedPacket({
+			data: aacPacketData,
+			type: 'key',
+			timestamp: 0.5 * i,
+			duration: 0.5,
+		}), aacMetadata);
 	}
 
 	await output.finalize();
@@ -4151,11 +5111,21 @@ test('Peak bitrate window based on the written target duration', async () => {
 
 	// Segments of 1.4, 2.5 and 2.5 seconds, the first being way denser than the rest
 	for (let i = 0; i < 140; i++) {
-		await source.add(new EncodedPacket(avcPacketData, i === 0 ? 'key' : 'delta', 0.01 * i, 0.01), avcMetadata);
+		await source.add(new EncodedPacket({
+			data: avcPacketData,
+			type: i === 0 ? 'key' : 'delta',
+			timestamp: 0.01 * i,
+			duration: 0.01,
+		}), avcMetadata);
 	}
 	for (let i = 0; i < 10; i++) {
 		const type = i % 5 === 0 ? 'key' : 'delta';
-		await source.add(new EncodedPacket(avcPacketData, type, 1.4 + 0.5 * i, 0.5), avcMetadata);
+		await source.add(new EncodedPacket({
+			data: avcPacketData,
+			type,
+			timestamp: 1.4 + 0.5 * i,
+			duration: 0.5,
+		}), avcMetadata);
 	}
 
 	await output.finalize();
@@ -4216,11 +5186,26 @@ test('MPEG-TS PIDs consistent across segments', async () => {
 	await output.start();
 
 	// The video ends after the first segment, so the later segments hold only audio
-	await video.add(new EncodedPacket(avcPacketData, 'key', 0, 0.5), avcMetadata);
-	await video.add(new EncodedPacket(avcPacketData, 'delta', 0.5, 0.5));
+	await video.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'key',
+		timestamp: 0,
+		duration: 0.5,
+	}), avcMetadata);
+	await video.add(new EncodedPacket({
+		data: avcPacketData,
+		type: 'delta',
+		timestamp: 0.5,
+		duration: 0.5,
+	}));
 	video.close();
 	for (let i = 0; i < 6; i++) {
-		await audio.add(new EncodedPacket(aacPacketData, 'key', 0.5 * i, 0.5), aacMetadata);
+		await audio.add(new EncodedPacket({
+			data: aacPacketData,
+			type: 'key',
+			timestamp: 0.5 * i,
+			duration: 0.5,
+		}), aacMetadata);
 	}
 	await output.finalize();
 

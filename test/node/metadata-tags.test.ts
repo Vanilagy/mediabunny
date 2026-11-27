@@ -52,7 +52,12 @@ const createDummyAudioTrack = (codec: AudioCodec, output: Output) => {
 				]);
 
 			await source.add(
-				new EncodedPacket(data, 'key', 0, 1),
+				new EncodedPacket({
+					data,
+					type: 'key',
+					timestamp: 0,
+					duration: 1,
+				}),
 				{
 					decoderConfig: {
 						codec: buildAudioCodecString(codec),

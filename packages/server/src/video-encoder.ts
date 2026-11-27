@@ -14,6 +14,7 @@ import {
 	VideoSample,
 	EncodedPacket,
 	EncodedPacketSideData,
+	type ExtendedVideoDecoderConfig,
 } from 'mediabunny';
 import * as NodeAv from 'node-av';
 import {
@@ -59,7 +60,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 	dstFrame: NodeAv.Frame | null = null;
 	avCodec!: NodeAv.Codec;
 	lastBuffer: Buffer | null = null;
-	packetEmitted = false;
+	decoderConfig: ExtendedVideoDecoderConfig | null = null;
 	quantizer: number | null = null;
 
 	// Bookkeeping to restore the original timing information
@@ -523,7 +524,6 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 			}
 		}
 
-		const metadata: EncodedVideoChunkMetadata = {};
 		let decoderConfigCodecString: string | null = null;
 		let decoderConfigDescription: Uint8Array | null = null;
 
@@ -537,7 +537,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 				expectsAnnexB = (this.config as any).hevc?.format === 'annexb';
 			}
 
-			if (!this.packetEmitted) {
+			if (!this.decoderConfig) {
 				let serializedRecord: Uint8Array;
 
 				if (this.codec === 'avc') {
@@ -632,7 +632,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 				packetData = lengthPrefixedData;
 			}
 		} else if (this.codec === 'vp8') {
-			if (!this.packetEmitted) {
+			if (!this.decoderConfig) {
 				decoderConfigCodecString = extractVideoCodecString({
 					width: this.config.width,
 					height: this.config.height,
@@ -649,7 +649,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 				});
 			}
 		} else if (this.codec === 'vp9') {
-			if (!this.packetEmitted) {
+			if (!this.decoderConfig) {
 				const vp9CodecInfo = extractVp9CodecInfoFromPacket(packetData);
 
 				decoderConfigCodecString = extractVideoCodecString({
@@ -668,7 +668,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 				});
 			}
 		} else if (this.codec === 'av1') {
-			if (!this.packetEmitted) {
+			if (!this.decoderConfig) {
 				const av1CodecInfo = extractAv1CodecInfoFromPacket(packetData);
 
 				decoderConfigCodecString = extractVideoCodecString({
@@ -687,7 +687,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 				});
 			}
 		} else if (this.codec === 'prores') {
-			if (!this.packetEmitted) {
+			if (!this.decoderConfig) {
 				decoderConfigCodecString = extractVideoCodecString({
 					width: this.config.width,
 					height: this.config.height,
@@ -713,19 +713,10 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 			sideData.alpha = toUint8Array(matroskaBlockAdditional).subarray(8); // Skip the BlockAddId
 		}
 
-		const packet = new EncodedPacket(
-			packetData,
-			this.packet.isKeyframe ? 'key' : 'delta',
-			timestamp,
-			duration,
-			undefined,
-			undefined,
-			sideData,
-		);
-
 		if (decoderConfigCodecString !== null) {
 			// Create the decoder config
-			metadata.decoderConfig = {
+			this.decoderConfig = {
+				type: 'video',
 				codec: decoderConfigCodecString,
 				codedWidth: this.codecContext.width,
 				codedHeight: this.codecContext.height,
@@ -745,9 +736,16 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 				},
 			};
 		}
+		assert(this.decoderConfig);
 
-		this.packetEmitted = true;
-		this.onPacket(packet, metadata);
+		this.onPacket(new EncodedPacket({
+			data: packetData,
+			type: this.packet.isKeyframe ? 'key' : 'delta',
+			timestamp,
+			duration,
+			sideData,
+			decoderConfig: this.decoderConfig,
+		}));
 	}
 
 	async flush(): Promise<void> {
@@ -772,7 +770,7 @@ export class NodeAvVideoEncoder extends CustomVideoEncoder {
 			// codec context.
 		}
 
-		this.packetEmitted = false;
+		this.decoderConfig = null;
 		this.preciseTimings.length = 0;
 	}
 

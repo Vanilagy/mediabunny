@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { OPUS_SAMPLE_RATE, validateAudioChunkMetadata } from '../codec';
+import { OPUS_SAMPLE_RATE } from '../codec';
 import { createVorbisComments, parseModesFromVorbisSetupPacket, parseOpusIdentificationHeader } from '../codec-data';
 import {
 	assert,
@@ -17,7 +17,7 @@ import {
 	toDataView,
 	toUint8Array,
 } from '../misc';
-import { Muxer } from '../muxer';
+import { Muxer, validateAudioTrackDecoderConfig } from '../muxer';
 import { Logging } from '../logging';
 import { Output,
 	OutputAudioTrack,
@@ -94,7 +94,7 @@ export class OggMuxer extends Muxer {
 			for (const track of this.output.tracks) {
 				assert(track.isAudioTrack());
 				if (track.metadata.decoderConfig) {
-					this.getTrackData(track, { decoderConfig: track.metadata.decoderConfig });
+					this.getTrackData(track, track.metadata.decoderConfig);
 				}
 			}
 		} finally {
@@ -114,7 +114,10 @@ export class OggMuxer extends Muxer {
 		throw new Error('Video tracks are not supported.');
 	}
 
-	private getTrackData(track: OutputAudioTrack, meta?: EncodedAudioChunkMetadata) {
+	private getTrackData(
+		track: OutputAudioTrack,
+		inputDecoderConfig: AudioDecoderConfig | EncodedPacket['decoderConfig'],
+	) {
 		const existingTrackData = this.trackDatas.find(td => td.track === track);
 		if (existingTrackData) {
 			return existingTrackData;
@@ -128,14 +131,11 @@ export class OggMuxer extends Muxer {
 
 		assert(track.source._codec === 'vorbis' || track.source._codec === 'opus');
 
-		validateAudioChunkMetadata(meta, track.source._codec);
-
-		assert(meta);
-		assert(meta.decoderConfig);
+		const decoderConfig = validateAudioTrackDecoderConfig(inputDecoderConfig, track.source._codec);
 
 		let internalSampleRate: number;
 		if (track.source._codec === 'vorbis') {
-			internalSampleRate = meta.decoderConfig.sampleRate;
+			internalSampleRate = decoderConfig.sampleRate;
 		} else if (track.source._codec === 'opus') {
 			internalSampleRate = OPUS_SAMPLE_RATE;
 		} else {
@@ -168,7 +168,7 @@ export class OggMuxer extends Muxer {
 			currentPageStartTimestampInSamples: 0,
 		};
 
-		this.queueHeaderPackets(newTrackData, meta);
+		this.queueHeaderPackets(newTrackData, decoderConfig);
 
 		this.trackDatas.push(newTrackData);
 
@@ -179,13 +179,11 @@ export class OggMuxer extends Muxer {
 		return newTrackData;
 	}
 
-	private queueHeaderPackets(trackData: OggTrackData, meta: EncodedAudioChunkMetadata) {
-		assert(meta.decoderConfig);
-
+	private queueHeaderPackets(trackData: OggTrackData, decoderConfig: AudioDecoderConfig) {
 		if (trackData.codecInfo.codec === 'vorbis') {
-			assert(meta.decoderConfig.description);
+			assert(decoderConfig.description);
 
-			const bytes = toUint8Array(meta.decoderConfig.description);
+			const bytes = toUint8Array(decoderConfig.description);
 			if (bytes[0] !== 2) {
 				throw new TypeError('First byte of Vorbis decoder description must be 2.');
 			}
@@ -270,11 +268,11 @@ export class OggMuxer extends Muxer {
 				modeBlockflags: parseModesFromVorbisSetupPacket(setupHeader).modeBlockflags,
 			};
 		} else if (trackData.codecInfo.codec === 'opus') {
-			if (!meta.decoderConfig.description) {
+			if (!decoderConfig.description) {
 				throw new TypeError('For Ogg, Opus decoder description is required.');
 			}
 
-			const identificationHeader = toUint8Array(meta.decoderConfig.description);
+			const identificationHeader = toUint8Array(decoderConfig.description);
 
 			const commentHeaderHeader = new Uint8Array(8);
 			const commentHeaderHeaderView = toDataView(commentHeaderHeader);
@@ -306,11 +304,11 @@ export class OggMuxer extends Muxer {
 		}
 	}
 
-	async addEncodedAudioPacket(track: OutputAudioTrack, packet: EncodedPacket, meta?: EncodedAudioChunkMetadata) {
+	async addEncodedAudioPacket(track: OutputAudioTrack, packet: EncodedPacket) {
 		const release = await this.mutex.acquire();
 
 		try {
-			const trackData = this.getTrackData(track, meta);
+			const trackData = this.getTrackData(track, packet.decoderConfig);
 
 			this.validateTimestamp(trackData.track, packet.timestamp, packet.type === 'key');
 

@@ -185,7 +185,12 @@ const createAdtsOutput = (target: Target) => {
 };
 
 const addPacket = (source: EncodedAudioPacketSource) => {
-	return source.add(new EncodedPacket(new Uint8Array(64), 'key', 0, 0.02), {
+	return source.add(new EncodedPacket({
+		data: new Uint8Array(64),
+		type: 'key',
+		timestamp: 0,
+		duration: 0.02,
+	}), {
 		decoderConfig: {
 			codec: 'mp4a.40.2',
 			numberOfChannels: 2,

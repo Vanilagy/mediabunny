@@ -8,6 +8,7 @@
 
 import { TrackType } from './output';
 import { MediaCodec } from './codec';
+import { ExtendedAudioDecoderConfig, ExtendedVideoDecoderConfig } from './decode';
 import { DurationMetadataRequestOptions } from './demuxer';
 import { Input } from './input';
 import {
@@ -667,7 +668,7 @@ class SegmentedInputInputVideoTrackBacking
 		return this.delegate(() => this.metadataInputTrack!._backing.canBeTransparent());
 	}
 
-	override async getDecoderConfig(): Promise<VideoDecoderConfig | null> {
+	override async getDecoderConfig(): Promise<ExtendedVideoDecoderConfig | null> {
 		return this.delegate(() => this.metadataInputTrack!._backing.getDecoderConfig());
 	}
 }
@@ -693,7 +694,7 @@ class SegmentedInputInputAudioTrackBacking
 		return this.delegate(() => this.metadataInputTrack._backing.getSampleRate());
 	}
 
-	override async getDecoderConfig(): Promise<AudioDecoderConfig | null> {
+	override async getDecoderConfig(): Promise<ExtendedAudioDecoderConfig | null> {
 		return this.delegate(() => this.metadataInputTrack._backing.getDecoderConfig());
 	}
 }

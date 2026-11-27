@@ -120,7 +120,12 @@ const decodeAacFrames = async (frames: Uint8Array[], description?: AllowSharedBu
 
 	await decoder.init();
 	for (let i = 0; i < frames.length; i++) {
-		await decoder.decode(new EncodedPacket(frames[i]!, 'key', 1024 * i / 48000, 1024 / 48000));
+		await decoder.decode(new EncodedPacket({
+			data: frames[i]!,
+			type: 'key',
+			timestamp: 1024 * i / 48000,
+			duration: 1024 / 48000,
+		}));
 	}
 	await decoder.flush();
 	await decoder.close();

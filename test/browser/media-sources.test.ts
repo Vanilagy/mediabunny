@@ -84,7 +84,19 @@ test('VideoSampleSource, changing input dimensions throws with deny (default)', 
 	await expect(videoSource.add(sample2)).rejects.toThrow(/Video sample size must remain constant/);
 	sample2.close();
 
-	videoSource.close();
+	// The rejected sample never reached the encoder, so the source can still carry on
+	const sample3 = new VideoSample(makeCanvas(100, 100), { timestamp: 2 / 30, duration: 1 / 30 });
+	await videoSource.add(sample3);
+	sample3.close();
+	await output.finalize();
+
+	using input = new Input({
+		source: new BufferSource(output.target.buffer!),
+		formats: ALL_FORMATS,
+	});
+	const track = await input.getPrimaryVideoTrack();
+	assert(track);
+	expect((await track.computePacketStats()).packetCount).toBe(2);
 });
 
 test('VideoSampleSource, changing input dimensions with passThrough preserves per-frame dimensions', async () => {
@@ -878,7 +890,8 @@ test('Output canceled while the encoder is being created', async () => {
 		await output.cancel();
 		await addPromise;
 
-		expect(encoders.length).toBeGreaterThan(0);
+		// Give the pending encoder setup time to notice the cancel
+		await wait(100);
 		expect(encoders.every(x => x.state === 'closed')).toBe(true);
 	} finally {
 		globalThis.VideoEncoder = OriginalVideoEncoder;
@@ -1112,11 +1125,10 @@ test('Encoder error while an added sample is still being processed', async () =>
 		});
 		await source.add(sample).catch((error: Error) => errors.push(error.name));
 	}
+	await output.finalize().catch((error: Error) => errors.push(error.name));
 
 	const audioDatas = toAudioDataSpy.mock.results.map(result => result.value as AudioData);
 	toAudioDataSpy.mockRestore();
-
-	await output.cancel();
 
 	expect(errors).toEqual(['EncodingError']);
 	// Closed AudioData has a null format

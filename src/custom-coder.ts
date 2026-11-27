@@ -7,10 +7,15 @@
  */
 
 import { AudioCodec, VideoCodec } from './codec';
-import { canDecodeAudioMemo, canDecodeVideoMemo } from './decode';
+import {
+	canDecodeAudioMemo,
+	canDecodeVideoMemo,
+	ExtendedAudioDecoderConfig,
+	ExtendedVideoDecoderConfig,
+} from './decode';
 import { canEncodeAudioMemo, canEncodeVideoMemo } from './encode';
 import { Logging } from './logging';
-import { MaybePromise } from './misc';
+import { MaybePromise, removeItem } from './misc';
 import { EncodedPacket } from './packet';
 import { AudioSample, VideoSample } from './sample';
 
@@ -24,7 +29,7 @@ export abstract class CustomVideoDecoder {
 	/** The input video's codec. */
 	readonly codec!: VideoCodec;
 	/** The input video's decoder config. */
-	readonly config!: VideoDecoderConfig;
+	readonly config!: ExtendedVideoDecoderConfig;
 	/** The callback to call when a decoded VideoSample is available. */
 	readonly onSample!: (sample: VideoSample) => unknown;
 	/** The callback to call to surface out-of-band errors that can't be surfaced through the main methods. */
@@ -32,7 +37,7 @@ export abstract class CustomVideoDecoder {
 
 	/** Returns true if and only if the decoder can decode the given codec configuration. */
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
-	static supports(codec: VideoCodec, config: VideoDecoderConfig): boolean {
+	static supports(codec: VideoCodec, config: ExtendedVideoDecoderConfig): boolean {
 		return false;
 	}
 
@@ -56,7 +61,7 @@ export abstract class CustomAudioDecoder {
 	/** The input audio's codec. */
 	readonly codec!: AudioCodec;
 	/** The input audio's decoder config. */
-	readonly config!: AudioDecoderConfig;
+	readonly config!: ExtendedAudioDecoderConfig;
 	/** The callback to call when a decoded AudioSample is available. */
 	readonly onSample!: (sample: AudioSample) => unknown;
 	/** The callback to call to surface out-of-band errors that can't be surfaced through the main methods. */
@@ -64,7 +69,7 @@ export abstract class CustomAudioDecoder {
 
 	/** Returns true if and only if the decoder can decode the given codec configuration. */
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
-	static supports(codec: AudioCodec, config: AudioDecoderConfig): boolean {
+	static supports(codec: AudioCodec, config: ExtendedAudioDecoderConfig): boolean {
 		return false;
 	}
 
@@ -209,4 +214,12 @@ export const registerEncoder = (encoder: typeof CustomVideoEncoder | typeof Cust
 	} else {
 		throw new TypeError('Encoder must be a CustomVideoEncoder or CustomAudioEncoder.');
 	}
+};
+
+// For internal use only
+export const unregisterDecoder = (decoder: typeof CustomVideoDecoder | typeof CustomAudioDecoder) => {
+	removeItem(customVideoDecoders, decoder as typeof CustomVideoDecoder);
+	removeItem(customAudioDecoders, decoder as typeof CustomAudioDecoder);
+	canDecodeVideoMemo.clear();
+	canDecodeAudioMemo.clear();
 };

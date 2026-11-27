@@ -13,19 +13,16 @@ export type SubtitleCue = {
 	identifier?: string;
 	settings?: string;
 	notes?: string;
+	config: SubtitleConfig | null;
 };
 
 export type SubtitleConfig = {
 	description: string;
 };
 
-export type SubtitleMetadata = {
-	config?: SubtitleConfig;
-};
-
 type SubtitleParserOptions = {
 	codec: 'webvtt';
-	output: (cue: SubtitleCue, metadata: SubtitleMetadata) => unknown;
+	output: (cue: SubtitleCue) => unknown;
 };
 
 const cueBlockHeaderRegex = /(?:(.+?)\n)?((?:\d{2,}:)?\d{2}:\d{2}.\d{3})\s+-->\s+((?:\d{2,}:)?\d{2}:\d{2}.\d{3})/g;
@@ -98,17 +95,17 @@ export class SubtitleParser {
 				identifier: cueIdentifier,
 				settings: cueSettings,
 				notes,
+				config: null,
 			};
 
-			const meta: SubtitleMetadata = {};
 			if (!this.preambleEmitted) {
-				meta.config = {
+				cue.config = {
 					description: this.preambleText,
 				};
 				this.preambleEmitted = true;
 			}
 
-			this.options.output(cue, meta);
+			this.options.output(cue);
 		}
 	}
 }

@@ -88,14 +88,16 @@ An encoded packet represents encoded media data of any type (video or audio). Th
 
 To create an `EncodedPacket`, you can use its constructor:
 ```ts
-constructor(
+constructor(init: {
     data: Uint8Array,
     type: 'key' | 'delta',
     timestamp: number, // in seconds
     duration: number, // in seconds
     sequenceNumber?: number,
     byteLength?: number,
-);
+    sideData?: EncodedPacketSideData,
+    decoderConfig?: ExtendedVideoDecoderConfig | ExtendedAudioDecoderConfig,
+});
 ```
 
 When creating a packet for a given codec, you *must* adhere to the data format specified in the [Mediabunny Codec Registry](/codec-registry/overview).
@@ -109,7 +111,12 @@ For example, here we're creating a packet from some encoded video data:
 import { EncodedPacket } from 'mediabunny';
 
 const encodedVideoData = new Uint8Array([...]);
-const encodedPacket = new EncodedPacket(encodedVideoData, 'key', 5, 1/24);
+const encodedPacket = new EncodedPacket({
+    data: encodedVideoData,
+    type: 'key',
+    timestamp: 5,
+    duration: 1/24,
+});
 ```
 
 Alternatively, if you're coming from WebCodecs encoded chunks, you can create an `EncodedPacket` from them:
@@ -121,6 +128,26 @@ const encodedPacket = EncodedPacket.fromEncodedChunk(encodedVideoChunk);
 
 // From EncodedAudioChunk:
 const encodedPacket = EncodedPacket.fromEncodedChunk(encodedAudioChunk);
+```
+
+It's recommended to pass the packet's `decoderConfig`. It defines what the data in the packet actually is: its codec, the codec-specific bytes and the stream's parameters. For example, here we're creating a packet holding AAC audio:
+```ts
+import { EncodedPacket } from 'mediabunny';
+
+const encodedAudioData = new Uint8Array([...]);
+const encodedPacket = new EncodedPacket({
+    data: encodedAudioData,
+    type: 'key',
+    timestamp: 0,
+    duration: 1024 / 48000,
+    decoderConfig: {
+        type: 'audio',
+        codec: 'mp4a.40.2', // AAC-LC
+        sampleRate: 48000,
+        numberOfChannels: 2,
+        description: new Uint8Array([0x11, 0x90]), // AudioSpecificConfig
+    },
+});
 ```
 
 ### Inspecting packets

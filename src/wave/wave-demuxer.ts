@@ -7,6 +7,7 @@
  */
 
 import { AudioCodec } from '../codec';
+import { ExtendedAudioDecoderConfig } from '../decode';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrackBacking } from '../input-track';
@@ -49,6 +50,8 @@ export class WaveDemuxer extends Demuxer {
 		sampleSizeInBytes: number;
 		blockSizeInBytes: number;
 	} | null = null;
+
+	decoderConfig: ExtendedAudioDecoderConfig | null = null;
 
 	trackBackings: WaveAudioTrackBacking[] = [];
 	metadataTags: MetadataTags = {};
@@ -166,6 +169,16 @@ export class WaveDemuxer extends Demuxer {
 			const blockSize = this.audioInfo.blockSizeInBytes;
 			this.dataSize = Math.floor(this.dataSize / blockSize) * blockSize;
 			this.maybeCapDataSize();
+
+			const codec = this.getCodec();
+			if (codec) {
+				this.decoderConfig = {
+					type: 'audio',
+					codec,
+					numberOfChannels: this.audioInfo.numberOfChannels,
+					sampleRate: this.audioInfo.sampleRate,
+				};
+			}
 
 			this.trackBackings.push(new WaveAudioTrackBacking(this));
 		})();
@@ -466,18 +479,8 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 		return this.demuxer.audioInfo.format;
 	}
 
-	async getDecoderConfig(): Promise<AudioDecoderConfig | null> {
-		const codec = this.demuxer.getCodec();
-		if (!codec) {
-			return null;
-		}
-
-		assert(this.demuxer.audioInfo);
-		return {
-			codec,
-			numberOfChannels: this.demuxer.audioInfo.numberOfChannels,
-			sampleRate: this.demuxer.audioInfo.sampleRate,
-		};
+	async getDecoderConfig() {
+		return this.demuxer.decoderConfig;
 	}
 
 	getNumberOfChannels() {
@@ -592,14 +595,15 @@ class WaveAudioTrackBacking implements InputAudioTrackBacking {
 		const timestamp = packetIndex * PACKET_SIZE_IN_FRAMES / this.demuxer.audioInfo.sampleRate;
 		const duration = sizeInBytes / blockSize / this.demuxer.audioInfo.sampleRate;
 
-		return new EncodedPacket(
+		return new EncodedPacket({
 			data,
-			'key',
+			type: 'key',
 			timestamp,
 			duration,
-			packetIndex,
-			sizeInBytes,
-		);
+			sequenceNumber: packetIndex,
+			byteLength: sizeInBytes,
+			decoderConfig: this.demuxer.decoderConfig ?? undefined,
+		});
 	}
 
 	getFirstPacket(options: PacketRetrievalOptions) {

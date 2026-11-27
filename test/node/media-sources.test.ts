@@ -75,7 +75,12 @@ class TestAudioEncoder extends CustomAudioEncoder {
 
 	encode(sample: AudioSample) {
 		this.onPacket(
-			new EncodedPacket(new Uint8Array(16), 'key', sample.timestamp, sample.duration),
+			new EncodedPacket({
+				data: new Uint8Array(16),
+				type: 'key',
+				timestamp: sample.timestamp,
+				duration: sample.duration,
+			}),
 			AAC_META,
 		);
 	}
@@ -100,8 +105,18 @@ test('Muxer error when closing a source', async () => {
 
 	// The audio track isn't known yet, so the muxer holds on to these instead of writing them
 	const videoMeta = { decoderConfig: { codec: 'vp8', codedWidth: 1280, codedHeight: 720 } };
-	await videoSource.add(new EncodedPacket(new Uint8Array(8), 'key', 0, 0.1), videoMeta);
-	await videoSource.add(new EncodedPacket(new Uint8Array(8), 'delta', 0.1, 0.1));
+	await videoSource.add(new EncodedPacket({
+		data: new Uint8Array(8),
+		type: 'key',
+		timestamp: 0,
+		duration: 0.1,
+	}), videoMeta);
+	await videoSource.add(new EncodedPacket({
+		data: new Uint8Array(8),
+		type: 'delta',
+		timestamp: 0.1,
+		duration: 0.1,
+	}));
 
 	const unhandledRejections: unknown[] = [];
 	const onUnhandledRejection = (reason: unknown) => {
@@ -143,10 +158,9 @@ test('Custom encoder failing to initialize', async () => {
 	});
 
 	const { output, source } = await startVideoOutput(new BufferTarget());
-	const addAssertion = expect(addSample(source, 0)).rejects.toThrow('Initialization failed.');
+	await addSample(source, 0);
 
 	await expect(output.finalize()).rejects.toThrow('Initialization failed.');
-	await addAssertion;
 });
 
 test('Key frame request for a negative first timestamp', async () => {
@@ -169,12 +183,32 @@ test('Muxer error for a packet emitted during the encoder flush', async () => {
 	useTestEncoder({
 		flush: (encoder) => {
 			const decoderConfig = { codec: 'vp09.00.10.08', codedWidth: 64, codedHeight: 64 };
-			encoder.onPacket(new EncodedPacket(new Uint8Array(8), 'key', 0, 0.3), { decoderConfig });
-			encoder.onPacket(new EncodedPacket(new Uint8Array(8), 'delta', 0.3, 0.3));
+			encoder.onPacket(new EncodedPacket({
+				data: new Uint8Array(8),
+				type: 'key',
+				timestamp: 0,
+				duration: 0.3,
+			}), { decoderConfig });
+			encoder.onPacket(new EncodedPacket({
+				data: new Uint8Array(8),
+				type: 'delta',
+				timestamp: 0.3,
+				duration: 0.3,
+			}));
 			// Completes the first chunk, making the muxer wait for the slow target
-			encoder.onPacket(new EncodedPacket(new Uint8Array(8), 'key', 0.6, 0.3));
+			encoder.onPacket(new EncodedPacket({
+				data: new Uint8Array(8),
+				type: 'key',
+				timestamp: 0.6,
+				duration: 0.3,
+			}));
 			// Invalid since it lies before the end of the previous GOP
-			encoder.onPacket(new EncodedPacket(new Uint8Array(8), 'delta', 0.1, 0.3));
+			encoder.onPacket(new EncodedPacket({
+				data: new Uint8Array(8),
+				type: 'delta',
+				timestamp: 0.1,
+				duration: 0.3,
+			}));
 		},
 	});
 
@@ -267,11 +301,14 @@ test('Custom encoder close after an encode error', async () => {
 
 	const { output, source } = await startAudioOutput();
 
-	await source.add(makeAudioSample(0));
-	await source.add(makeAudioSample(0.1));
+	using first = makeAudioSample(0);
+	using second = makeAudioSample(0.1);
+	using third = makeAudioSample(0.2);
+	await source.add(first);
+	await source.add(second);
 	await wait(10);
 
-	await expect(source.add(makeAudioSample(0.2))).rejects.toThrow('Encode failed');
+	await expect(source.add(third)).rejects.toThrow('Encode failed');
 	await output.cancel();
 
 	expect(events).toEqual(['encode', 'encode', 'close']);
@@ -292,7 +329,8 @@ test('Custom encoder close after its first encode fails', async () => {
 	});
 
 	const { output, source } = await startAudioOutput();
-	await source.add(makeAudioSample(0));
+	using sample = makeAudioSample(0);
+	await source.add(sample);
 
 	await expect(output.finalize()).rejects.toThrow('Encode failed');
 	expect(events).toEqual(['encode', 'close']);
@@ -317,7 +355,8 @@ test('Custom encoder close after a flush error', async () => {
 	});
 
 	const { output, source } = await startAudioOutput();
-	await source.add(makeAudioSample(0));
+	using sample = makeAudioSample(0);
+	await source.add(sample);
 
 	await expect(output.finalize()).rejects.toThrow('Flush failed');
 	expect(events).toEqual(['encode', 'flush', 'close']);
@@ -331,29 +370,33 @@ test('Custom audio encoder failing to initialize', async () => {
 	});
 
 	const { output, source } = await startAudioOutput();
-	const addAssertion = expect(source.add(makeAudioSample(0))).rejects.toThrow('Initialization failed.');
+	using sample = makeAudioSample(0);
+	await source.add(sample);
 
 	await expect(output.finalize()).rejects.toThrow('Initialization failed.');
-	await addAssertion;
 });
 
 test('Custom encoder init pending during cancel', async () => {
 	const events = useSlowInitAudioEncoder();
 	const { output, source } = await startAudioOutput();
 
-	const addPromise = source.add(makeAudioSample(0));
+	using sample = makeAudioSample(0);
+	const addPromise = source.add(sample);
 	await output.cancel();
 	await addPromise;
 
-	expect(events[0]).toBe('init');
-	expect(events.at(-1)).toBe('close');
+	await vi.waitFor(() => {
+		expect(events[0]).toBe('init');
+		expect(events.at(-1)).toBe('close');
+	});
 });
 
 test('Custom encoder init pending during finalize', async () => {
 	const events = useSlowInitAudioEncoder();
 	const { output, source } = await startAudioOutput();
 
-	const addPromise = source.add(makeAudioSample(0));
+	using sample = makeAudioSample(0);
+	const addPromise = source.add(sample);
 	await output.finalize();
 	await addPromise;
 
@@ -411,8 +454,18 @@ test('Muxer error for a packet emitted by the final flush', async () => {
 	useAudioEncoder(class extends TestAudioEncoder {
 		override flush() {
 			// The first packet keeps the muxer busy with the slow target while the second one is still queued up
-			this.onPacket(new EncodedPacket(new Uint8Array(16), 'key', 0.1, 0.1), AAC_META);
-			this.onPacket(new EncodedPacket(new Uint8Array(16), 'key', -1, 0.1), AAC_META);
+			this.onPacket(new EncodedPacket({
+				data: new Uint8Array(16),
+				type: 'key',
+				timestamp: 0.1,
+				duration: 0.1,
+			}), AAC_META);
+			this.onPacket(new EncodedPacket({
+				data: new Uint8Array(16),
+				type: 'key',
+				timestamp: -1,
+				duration: 0.1,
+			}), AAC_META);
 		}
 	});
 
@@ -421,7 +474,8 @@ test('Muxer error for a packet emitted by the final flush', async () => {
 			await wait(30);
 		},
 	})));
-	await source.add(makeAudioSample(0));
+	using sample = makeAudioSample(0);
+	await source.add(sample);
 
 	await expect(output.finalize()).rejects.toThrow('Timestamps cannot be smaller');
 });
@@ -534,7 +588,12 @@ test('Add while the source is closing', async () => {
 
 	// The source is still flushing, but no more data must come in
 	source.close();
-	expect(() => source.add(new EncodedPacket(new Uint8Array(16), 'key', 0, 0.1), AAC_META))
+	expect(() => source.add(new EncodedPacket({
+		data: new Uint8Array(16),
+		type: 'key',
+		timestamp: 0,
+		duration: 0.1,
+	}), AAC_META))
 		.toThrow('Source is closed.');
 
 	await output.finalize();

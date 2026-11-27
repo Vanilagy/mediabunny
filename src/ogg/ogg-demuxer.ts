@@ -8,6 +8,7 @@
 
 import { OPUS_SAMPLE_RATE } from '../codec';
 import { parseModesFromVorbisSetupPacket, parseOpusIdentificationHeader, readVorbisComments } from '../codec-data';
+import { ExtendedAudioDecoderConfig } from '../decode';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrackBacking } from '../input-track';
@@ -413,12 +414,8 @@ export class OggDemuxer extends Demuxer {
 	async getMimeType() {
 		await this.readMetadata();
 
-		const codecStrings = await Promise.all(this.trackBackings.map(
-			x => x.getDecoderConfig().then(c => c?.codec ?? null),
-		));
-
 		return buildOggMimeType({
-			codecStrings: codecStrings.filter(Boolean) as string[],
+			codecStrings: this.trackBackings.map(x => x.decoderConfig.codec),
 		});
 	}
 
@@ -447,10 +444,19 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 	sequentialScanCache: EncodedPacketMetadata[] = [];
 	sequentialScanMutex = new AsyncMutex();
 	firstTimestampInSamplesPromise: Promise<number> | null = null;
+	decoderConfig: ExtendedAudioDecoderConfig;
 
 	constructor(public bitstream: LogicalBitstream, public demuxer: OggDemuxer) {
 		const codec = bitstream.codecInfo.codec;
 		assert(codec);
+
+		this.decoderConfig = {
+			type: 'audio',
+			codec,
+			numberOfChannels: bitstream.numberOfChannels,
+			sampleRate: bitstream.sampleRate,
+			description: bitstream.description ?? undefined,
+		};
 
 		if (codec === 'vorbis') {
 			this.internalSampleRate = bitstream.sampleRate;
@@ -525,15 +531,8 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		return null;
 	}
 
-	async getDecoderConfig(): Promise<AudioDecoderConfig | null> {
-		assert(this.bitstream.codecInfo.codec);
-
-		return {
-			codec: this.bitstream.codecInfo.codec,
-			numberOfChannels: this.bitstream.numberOfChannels,
-			sampleRate: this.bitstream.sampleRate,
-			description: this.bitstream.description ?? undefined,
-		};
+	async getDecoderConfig(): Promise<ExtendedAudioDecoderConfig> {
+		return this.decoderConfig;
 	}
 
 	getName() {
@@ -584,14 +583,15 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 			additional.vorbisLastBlocksize,
 		);
 
-		const encodedPacket = new EncodedPacket(
-			options.metadataOnly ? PLACEHOLDER_DATA : packet.data,
-			'key',
-			additional.timestampInSamples / this.internalSampleRate,
-			durationInSamples / this.internalSampleRate,
-			packet.endPage.headerStartPos + packet.endSegmentIndex,
-			packet.data.byteLength,
-		);
+		const encodedPacket = new EncodedPacket({
+			data: options.metadataOnly ? PLACEHOLDER_DATA : packet.data,
+			type: 'key',
+			timestamp: additional.timestampInSamples / this.internalSampleRate,
+			duration: durationInSamples / this.internalSampleRate,
+			sequenceNumber: packet.endPage.headerStartPos + packet.endSegmentIndex,
+			byteLength: packet.data.byteLength,
+			decoderConfig: this.decoderConfig,
+		});
 
 		this.encodedPacketToMetadata.set(encodedPacket, {
 			packet,

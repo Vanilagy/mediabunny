@@ -97,6 +97,15 @@ export {
 	SUBTITLE_CODECS,
 } from './codec';
 export {
+	CoderClosedError,
+	PacketDecoder,
+	VideoPacketDecoder,
+	AudioPacketDecoder,
+	type ExtendedVideoDecoderConfig,
+	type ExtendedAudioDecoderConfig,
+	type PacketDecoderOptions,
+	type VideoPacketDecoderOptions,
+	type AudioPacketDecoderOptions,
 	canDecode,
 	canDecodeVideo,
 	canDecodeAudio,
@@ -105,6 +114,12 @@ export {
 	getDecodableAudioCodecs,
 } from './decode';
 export {
+	SampleEncoder,
+	VideoSampleEncoder,
+	AudioSampleEncoder,
+	type SampleEncoderOptions,
+	type VideoSampleEncoderOptions,
+	type AudioSampleEncoderOptions,
 	type VideoEncodingConfig,
 	type VideoEncodingAdditionalOptions,
 	type VideoTransformOptions,
@@ -262,6 +277,7 @@ export {
 } from './input-track';
 export {
 	EncodedPacket,
+	type EncodedPacketInit,
 	type EncodedPacketSideData,
 	type PacketType,
 } from './packet';

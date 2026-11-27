@@ -51,6 +51,7 @@ import {
 	DTS_EXSS_HEADER_PREFIX_SIZE,
 	DTS_EXSS_MAX_HEADER_SIZE,
 } from '../codec-data';
+import { ExtendedAudioDecoderConfig, ExtendedVideoDecoderConfig } from '../decode';
 import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { Logging } from '../logging';
@@ -134,7 +135,7 @@ type ElementaryStream = {
 	info: {
 		type: 'video';
 		codec: VideoCodec;
-		decoderConfig: VideoDecoderConfig | null;
+		decoderConfig: ExtendedVideoDecoderConfig | null;
 		avcCodecInfo: AvcDecoderConfigurationRecord | null;
 		hevcCodecInfo: HevcDecoderConfigurationRecord | null;
 		colorSpace: VideoColorSpaceInit;
@@ -146,7 +147,7 @@ type ElementaryStream = {
 	} | {
 		type: 'audio';
 		codec: AudioCodec;
-		decoderConfig: AudioDecoderConfig | null;
+		decoderConfig: ExtendedAudioDecoderConfig | null;
 		aacCodecInfo: AacCodecInfo | null;
 		dtsFormat: DtsFourCc | null;
 		numberOfChannels: number;
@@ -701,6 +702,7 @@ export class MpegTsDemuxer extends Demuxer {
 							}
 
 							elementaryStream.info.decoderConfig = {
+								type: 'video',
 								codec: extractVideoCodecString({
 									width: elementaryStream.info.width,
 									height: elementaryStream.info.height,
@@ -718,6 +720,8 @@ export class MpegTsDemuxer extends Demuxer {
 								codedWidth: elementaryStream.info.width,
 								codedHeight: elementaryStream.info.height,
 								colorSpace: elementaryStream.info.colorSpace,
+								rotation: 0,
+								flip: false,
 							};
 
 							if (
@@ -843,6 +847,7 @@ export class MpegTsDemuxer extends Demuxer {
 							}
 
 							elementaryStream.info.decoderConfig = {
+								type: 'audio',
 								codec: extractAudioCodecString({
 									codec: elementaryStream.info.codec,
 									codecDescription: null,
@@ -1184,7 +1189,7 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 	constructor(public elementaryStream: ElementaryStream) {}
 
 	abstract getType(): TrackType;
-	abstract getDecoderConfig(): Promise<VideoDecoderConfig | AudioDecoderConfig | null>;
+	abstract getDecoderConfig(): Promise<ExtendedVideoDecoderConfig | ExtendedAudioDecoderConfig | null>;
 
 	getNumber() {
 		const demuxer = this.elementaryStream.demuxer;
@@ -1278,14 +1283,15 @@ abstract class MpegTsTrackBacking implements InputTrackBacking {
 				: 'delta';
 		}
 
-		return new EncodedPacket(
-			options.metadataOnly ? PLACEHOLDER_DATA : suppliedPacket.data,
-			packetType,
-			suppliedPacket.pts / MPEG_TS_TIMESCALE,
-			Math.max(duration / MPEG_TS_TIMESCALE, 0),
-			suppliedPacket.sequenceNumber,
-			suppliedPacket.data.byteLength,
-		);
+		return new EncodedPacket({
+			data: options.metadataOnly ? PLACEHOLDER_DATA : suppliedPacket.data,
+			type: packetType,
+			timestamp: suppliedPacket.pts / MPEG_TS_TIMESCALE,
+			duration: Math.max(duration / MPEG_TS_TIMESCALE, 0),
+			sequenceNumber: suppliedPacket.sequenceNumber,
+			byteLength: suppliedPacket.data.byteLength,
+			decoderConfig: this.elementaryStream.info.decoderConfig ?? undefined,
+		});
 	}
 
 	async getFirstPacket(options: PacketRetrievalOptions): Promise<EncodedPacket | null> {
@@ -1835,7 +1841,7 @@ class MpegTsVideoTrackBacking extends MpegTsTrackBacking implements InputVideoTr
 		return false;
 	}
 
-	async getDecoderConfig(): Promise<VideoDecoderConfig> {
+	async getDecoderConfig(): Promise<ExtendedVideoDecoderConfig> {
 		assert(this.elementaryStream.info.decoderConfig);
 		return this.elementaryStream.info.decoderConfig;
 	}
@@ -1868,7 +1874,7 @@ class MpegTsAudioTrackBacking extends MpegTsTrackBacking implements InputAudioTr
 		return this.elementaryStream.info.sampleRate;
 	}
 
-	async getDecoderConfig(): Promise<AudioDecoderConfig> {
+	async getDecoderConfig(): Promise<ExtendedAudioDecoderConfig> {
 		assert(this.elementaryStream.info.decoderConfig);
 		return this.elementaryStream.info.decoderConfig;
 	}

@@ -396,8 +396,10 @@ test('AC-3 with huge timestamps', async () => {
 	const iterator = sampleSink.samples(timestamp);
 	const firstSample = (await iterator.next()).value;
 	assert(firstSample);
+	await iterator.return();
 
 	expect(firstSample.timestamp).toBe(timestamp - primingDelay);
+	firstSample.close();
 });
 
 test('E-AC-3 with huge timestamps', async () => {
@@ -448,8 +450,10 @@ test('E-AC-3 with huge timestamps', async () => {
 	const iterator = sampleSink.samples(timestamp);
 	const firstSample = (await iterator.next()).value;
 	assert(firstSample);
+	await iterator.return();
 
 	expect(firstSample.timestamp).toBe(timestamp - primingDelay);
+	firstSample.close();
 });
 
 test('Encode AC-3 input that fills its last frame', async () => {
@@ -595,7 +599,12 @@ test('E-AC-3 7.1 in MP4', async () => {
 	]);
 
 	for (let i = 0; i < 3; i++) {
-		await source.add(new EncodedPacket(data, 'key', 0.032 * i, 0.032), {
+		await source.add(new EncodedPacket({
+			data,
+			type: 'key',
+			timestamp: 0.032 * i,
+			duration: 0.032,
+		}), {
 			decoderConfig: {
 				codec: 'ec-3',
 				numberOfChannels: 8,
@@ -648,7 +657,12 @@ test('E-AC-3 dependent substreams in MPEG-TS', async () => {
 
 	const accessUnitCount = 10;
 	for (let i = 0; i < accessUnitCount; i++) {
-		await source.add(new EncodedPacket(data, 'key', 0.032 * i, 0.032), {
+		await source.add(new EncodedPacket({
+			data,
+			type: 'key',
+			timestamp: 0.032 * i,
+			duration: 0.032,
+		}), {
 			decoderConfig: {
 				codec: 'ec-3',
 				numberOfChannels: 8,
@@ -853,7 +867,12 @@ test('Lone E-AC-3 syncframe shorter than six blocks alongside another track, fra
 		chanmap: null,
 		numblkscod: 2, // Three blocks
 	});
-	await eac3Source.add(new EncodedPacket(eac3Frame, 'key', 0, 0.016), {
+	await eac3Source.add(new EncodedPacket({
+		data: eac3Frame,
+		type: 'key',
+		timestamp: 0,
+		duration: 0.016,
+	}), {
 		decoderConfig: {
 			codec: 'ec-3',
 			numberOfChannels: 2,
@@ -862,7 +881,12 @@ test('Lone E-AC-3 syncframe shorter than six blocks alongside another track, fra
 	});
 
 	for (let i = 0; i < 100; i++) {
-		await mp3Source.add(new EncodedPacket(new Uint8Array(100), 'key', 0.024 * i, 0.024), {
+		await mp3Source.add(new EncodedPacket({
+			data: new Uint8Array(100),
+			type: 'key',
+			timestamp: 0.024 * i,
+			duration: 0.024,
+		}), {
 			decoderConfig: {
 				codec: 'mp3',
 				numberOfChannels: 2,

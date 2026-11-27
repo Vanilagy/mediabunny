@@ -6,6 +6,9 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { parsePcmCodec, PcmAudioCodec } from './codec';
+import { assert, assertNever } from './misc';
+
 // Original source:
 // https://github.com/dystopiancode/pcm-g711/blob/master/pcm-g711/g711.c
 
@@ -111,4 +114,77 @@ export const fromAlaw = (u8: number) => {
 	}
 
 	return ((sign === 0) ? -decoded : decoded) << 3;
+};
+
+// Integer keys, since switching over these in per-value loops is much faster than over strings
+export const PCM_FORMAT_U8 = 0;
+export const PCM_FORMAT_S8 = 1;
+export const PCM_FORMAT_ULAW = 2;
+export const PCM_FORMAT_ALAW = 3;
+export const PCM_FORMAT_U16_LE = 4;
+export const PCM_FORMAT_U16_BE = 5;
+export const PCM_FORMAT_S16_LE = 6;
+export const PCM_FORMAT_S16_BE = 7;
+export const PCM_FORMAT_U24_LE = 8;
+export const PCM_FORMAT_U24_BE = 9;
+export const PCM_FORMAT_S24_LE = 10;
+export const PCM_FORMAT_S24_BE = 11;
+export const PCM_FORMAT_U32_LE = 12;
+export const PCM_FORMAT_U32_BE = 13;
+export const PCM_FORMAT_S32_LE = 14;
+export const PCM_FORMAT_S32_BE = 15;
+export const PCM_FORMAT_F32_LE = 16;
+export const PCM_FORMAT_F32_BE = 17;
+export const PCM_FORMAT_F64_LE = 18;
+export const PCM_FORMAT_F64_BE = 19;
+
+export const getPcmFormat = (codec: PcmAudioCodec) => {
+	const { dataType, sampleSize, littleEndian } = parsePcmCodec(codec);
+
+	switch (sampleSize) {
+		case 1: {
+			if (dataType === 'unsigned') {
+				return PCM_FORMAT_U8;
+			} else if (dataType === 'signed') {
+				return PCM_FORMAT_S8;
+			} else if (dataType === 'ulaw') {
+				return PCM_FORMAT_ULAW;
+			} else if (dataType === 'alaw') {
+				return PCM_FORMAT_ALAW;
+			}
+		}; break;
+		case 2: {
+			if (dataType === 'unsigned') {
+				return littleEndian ? PCM_FORMAT_U16_LE : PCM_FORMAT_U16_BE;
+			} else if (dataType === 'signed') {
+				return littleEndian ? PCM_FORMAT_S16_LE : PCM_FORMAT_S16_BE;
+			}
+		}; break;
+		case 3: {
+			if (dataType === 'unsigned') {
+				return littleEndian ? PCM_FORMAT_U24_LE : PCM_FORMAT_U24_BE;
+			} else if (dataType === 'signed') {
+				return littleEndian ? PCM_FORMAT_S24_LE : PCM_FORMAT_S24_BE;
+			}
+		}; break;
+		case 4: {
+			if (dataType === 'unsigned') {
+				return littleEndian ? PCM_FORMAT_U32_LE : PCM_FORMAT_U32_BE;
+			} else if (dataType === 'signed') {
+				return littleEndian ? PCM_FORMAT_S32_LE : PCM_FORMAT_S32_BE;
+			} else if (dataType === 'float') {
+				return littleEndian ? PCM_FORMAT_F32_LE : PCM_FORMAT_F32_BE;
+			}
+		}; break;
+		case 8: {
+			if (dataType === 'float') {
+				return littleEndian ? PCM_FORMAT_F64_LE : PCM_FORMAT_F64_BE;
+			}
+		}; break;
+		default: {
+			assertNever(sampleSize);
+		};
+	}
+
+	assert(false);
 };

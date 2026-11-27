@@ -1,7 +1,9 @@
 import { expect, test } from 'vitest';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Input, InputDisposedError, UnsupportedInputFormatError } from '../../src/input.js';
 import { ALL_FORMATS, MP4, QTFF } from '../../src/input-format.js';
-import { BufferSource, CustomPathedSource } from '../../src/source.js';
+import { BufferSource, CustomPathedSource, FilePathSource } from '../../src/source.js';
 import { EncodedPacketSink } from '../../src/media-sink.js';
 import { EncodedVideoPacketSource } from '../../src/media-source.js';
 import { EncodedPacket } from '../../src/packet.js';
@@ -140,7 +142,12 @@ const createMp4File = async (fastStart: false | 'in-memory') => {
 	await output.start();
 
 	for (let i = 0; i < 5; i++) {
-		await source.add(new EncodedPacket(new Uint8Array(100).fill(i), i === 0 ? 'key' : 'delta', i / 10, 1 / 10), {
+		await source.add(new EncodedPacket({
+			data: new Uint8Array(100).fill(i),
+			type: i === 0 ? 'key' : 'delta',
+			timestamp: i / 10,
+			duration: 1 / 10,
+		}), {
 			decoderConfig: {
 				codec: 'vp09.00.10.08',
 				codedWidth: 64,
@@ -193,7 +200,12 @@ test('Disposal while waiting for a live HLS stream', async () => {
 	const videoSource = new EncodedVideoPacketSource('vp9');
 	output.addVideoTrack(videoSource);
 	await output.start();
-	await videoSource.add(new EncodedPacket(new Uint8Array(100), 'key', 0, 1), {
+	await videoSource.add(new EncodedPacket({
+		data: new Uint8Array(100),
+		type: 'key',
+		timestamp: 0,
+		duration: 1,
+	}), {
 		decoderConfig: {
 			codec: 'vp09.00.10.08',
 			codedWidth: 64,
@@ -218,4 +230,58 @@ test('Disposal while waiting for a live HLS stream', async () => {
 	input.dispose();
 
 	await expect(durationPromise).rejects.toThrow(InputDisposedError);
+});
+
+test('Packets carry the decoder config of their track', async () => {
+	const publicPath = path.join(fileURLToPath(new URL('.', import.meta.url)), '..', 'public');
+
+	for (const file of [
+		'demo.mp4',
+		'fragments-without-keyframes.mp4',
+		'annex-b.mp4', // The config is built from the first packet
+		'eac3.mp4', // Samples are split into multiple packets
+		'toothsome-dts.mp4', // The DTS variant is read from the first packet
+		'demo.webm',
+		'annex-b-avc.mkv', // The config is built from the first packet
+		'0.ts',
+		'sample.flac',
+		'Toothsome-Meme.VBRv2.mp3',
+		'glitch-hop-is-dead.wav',
+		'sample3.aac',
+		'preroll-test.opus',
+	]) {
+		using input = new Input({
+			source: new FilePathSource(path.join(publicPath, file)),
+			formats: ALL_FORMATS,
+		});
+
+		for (const track of await input.getTracks()) {
+			assert(track.isVideoTrack() || track.isAudioTrack());
+			const sink = new EncodedPacketSink(track);
+
+			// Packets are requested before the config, so they have to resolve it themselves
+			const firstPacket = await sink.getFirstPacket();
+			assert(firstPacket);
+			const packets = [
+				firstPacket,
+				await sink.getPacket(firstPacket.timestamp),
+				await sink.getKeyPacket(firstPacket.timestamp),
+				await sink.getPacket(firstPacket.timestamp, { metadataOnly: true }),
+			];
+			let count = 0;
+			for await (const packet of sink.packets()) {
+				packets.push(packet);
+				if (++count === 10) {
+					break;
+				}
+			}
+
+			const decoderConfig = await track.getDecoderConfig();
+			expect(decoderConfig).not.toBe(null);
+			for (const packet of packets) {
+				assert(packet);
+				expect(packet.decoderConfig).toBe(decoderConfig);
+			}
+		}
+	}
 });

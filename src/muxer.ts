@@ -6,10 +6,11 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { AudioCodec, inferCodecFromCodecString, VideoCodec } from './codec';
 import { AsyncMutex } from './misc';
 import { Output, OutputAudioTrack, OutputSubtitleTrack, OutputTrack, OutputVideoTrack } from './output';
 import { EncodedPacket, PacketType } from './packet';
-import { SubtitleCue, SubtitleMetadata } from './subtitles';
+import { SubtitleCue } from './subtitles';
 
 export abstract class Muxer {
 	output: Output;
@@ -21,17 +22,9 @@ export abstract class Muxer {
 
 	abstract start(): Promise<void>;
 	abstract getMimeType(): Promise<string>;
-	abstract addEncodedVideoPacket(
-		track: OutputVideoTrack,
-		packet: EncodedPacket,
-		meta?: EncodedVideoChunkMetadata
-	): Promise<void>;
-	abstract addEncodedAudioPacket(
-		track: OutputAudioTrack,
-		packet: EncodedPacket,
-		meta?: EncodedAudioChunkMetadata
-	): Promise<void>;
-	abstract addSubtitleCue(track: OutputSubtitleTrack, cue: SubtitleCue, meta?: SubtitleMetadata): Promise<void>;
+	abstract addEncodedVideoPacket(track: OutputVideoTrack, packet: EncodedPacket): Promise<void>;
+	abstract addEncodedAudioPacket(track: OutputAudioTrack, packet: EncodedPacket): Promise<void>;
+	abstract addSubtitleCue(track: OutputSubtitleTrack, cue: SubtitleCue): Promise<void>;
 	abstract finalize(): Promise<void>;
 
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -94,15 +87,49 @@ export class PacketOrderValidator {
 	}
 }
 
-export class NullMuxer extends Muxer {
-	async start() {}
-
-	async getMimeType() {
-		return 'application/x-black-hole';
+export const validateVideoTrackDecoderConfig = (
+	decoderConfig: VideoDecoderConfig | EncodedPacket['decoderConfig'] | undefined,
+	trackCodec: VideoCodec | null,
+) => {
+	if (!decoderConfig) {
+		throw new TypeError('The first packet of a video track must have a decoder config.');
 	}
 
-	async addEncodedVideoPacket() {}
-	async addEncodedAudioPacket() {}
-	async addSubtitleCue() {}
-	async finalize() {}
-}
+	// The config itself was already validated
+	const config = decoderConfig as VideoDecoderConfig;
+
+	// Muxers need the dimensions, so unlike WebCodecs, we require them
+	if (config.codedWidth === undefined || config.codedHeight === undefined) {
+		throw new TypeError('Video track decoder config must specify codedWidth and codedHeight.');
+	}
+
+	if (trackCodec !== null && inferCodecFromCodecString(config.codec) !== trackCodec) {
+		throw new TypeError(
+			`Video track decoder config codec string '${config.codec}' does not fit to the track codec`
+			+ ` '${trackCodec}'.`,
+		);
+	}
+
+	return config;
+};
+
+export const validateAudioTrackDecoderConfig = (
+	decoderConfig: AudioDecoderConfig | EncodedPacket['decoderConfig'] | undefined,
+	trackCodec: AudioCodec | null,
+) => {
+	if (!decoderConfig) {
+		throw new TypeError('The first packet of an audio track must have a decoder config.');
+	}
+
+	// The config itself was already validated
+	const config = decoderConfig as AudioDecoderConfig;
+
+	if (trackCodec !== null && inferCodecFromCodecString(config.codec) !== trackCodec) {
+		throw new TypeError(
+			`Audio track decoder config codec string '${config.codec}' does not fit to the track codec`
+			+ ` '${trackCodec}'.`,
+		);
+	}
+
+	return config;
+};

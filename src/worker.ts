@@ -6,8 +6,9 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { colorAlphaMergerWorkerCode } from './media-sink';
-import { colorAlphaSplitterWorkerCode, mediaStreamTrackProcessorWorkerCode } from './media-source';
+import { colorAlphaMergerWorkerCode } from './decode';
+import { colorAlphaSplitterWorkerCode } from './encode';
+import { mediaStreamTrackProcessorWorkerCode } from './media-source';
 import { unthrottledTimerWorkerCode } from './misc';
 
 switch (self.name) {

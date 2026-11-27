@@ -11,6 +11,7 @@ import {
 	AudioCodec,
 	AudioSample,
 	EncodedPacket,
+	type ExtendedAudioDecoderConfig,
 	registerEncoder,
 } from 'mediabunny';
 import { sendCommand, refWorker, unrefWorker } from './worker-client';
@@ -25,7 +26,7 @@ class DtsEncoder extends CustomAudioEncoder {
 	private encoderFrameSize = 0;
 	private sampleRate = 0;
 	private numberOfChannels = 0;
-	private chunkMetadata: EncodedAudioChunkMetadata = {};
+	private decoderConfig!: ExtendedAudioDecoderConfig;
 
 	// Accumulate interleaved f32 samples until we have a full frame
 	private pendingBuffer = new Float32Array(2 ** 16);
@@ -58,6 +59,12 @@ class DtsEncoder extends CustomAudioEncoder {
 
 		this.ctx = result.ctx;
 		this.encoderFrameSize = result.frameSize;
+		this.decoderConfig = {
+			type: 'audio',
+			codec: 'dtsc',
+			numberOfChannels: this.config.numberOfChannels,
+			sampleRate: this.config.sampleRate,
+		};
 
 		this.resetInternalState();
 	}
@@ -65,14 +72,6 @@ class DtsEncoder extends CustomAudioEncoder {
 	private resetInternalState() {
 		this.pendingFrames = 0;
 		this.nextSampleTimestampInSamples = null;
-
-		this.chunkMetadata = {
-			decoderConfig: {
-				codec: 'dtsc',
-				numberOfChannels: this.config.numberOfChannels,
-				sampleRate: this.config.sampleRate,
-			},
-		};
 	}
 
 	async encode(audioSample: AudioSample) {
@@ -162,19 +161,13 @@ class DtsEncoder extends CustomAudioEncoder {
 			},
 		}, [audioData]).then((result) => {
 			// We always get exactly one packet because we encode the correct frame size
-			const packet = new EncodedPacket(
-				new Uint8Array(result.encodedData),
-				'key',
-				result.pts / this.sampleRate,
-				result.duration / this.sampleRate,
-			);
-
-			this.onPacket(
-				packet,
-				this.chunkMetadata,
-			);
-
-			this.chunkMetadata = {};
+			this.onPacket(new EncodedPacket({
+				data: new Uint8Array(result.encodedData),
+				type: 'key',
+				timestamp: result.pts / this.sampleRate,
+				duration: result.duration / this.sampleRate,
+				decoderConfig: this.decoderConfig,
+			}));
 		});
 		encode.catch(() => {}); // Surfaces through whoever awaits it next
 

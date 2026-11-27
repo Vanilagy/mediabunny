@@ -110,12 +110,12 @@ test('Multi-frame Opus packets', async () => {
 
 	for (let i = 0; i < packetCount; i++) {
 		await audioSource.add(
-			new EncodedPacket(
-				createOpusPacket(framesPerPacket),
-				'key',
-				i * packetDuration,
-				packetDuration,
-			),
+			new EncodedPacket({
+				data: createOpusPacket(framesPerPacket),
+				type: 'key',
+				timestamp: i * packetDuration,
+				duration: packetDuration,
+			}),
 			{
 				decoderConfig: {
 					codec: 'opus',
@@ -219,12 +219,12 @@ test('Opus start offset survives a demux-mux roundtrip', async () => {
 
 	const packets: EncodedPacket[] = [];
 	for (let i = 0; i < packetCount; i++) {
-		packets.push(new EncodedPacket(
-			new Uint8Array([31 << 3, 0]), // TOC byte: config 31 (CELT fullband, 20 ms), code 0
-			'key',
-			(startInSamples + i * SAMPLES_PER_FRAME) / SAMPLE_RATE,
-			SAMPLES_PER_FRAME / SAMPLE_RATE,
-		));
+		packets.push(new EncodedPacket({
+			data: new Uint8Array([31 << 3, 0]),
+			type: 'key',
+			timestamp: (startInSamples + i * SAMPLES_PER_FRAME) / SAMPLE_RATE,
+			duration: SAMPLES_PER_FRAME / SAMPLE_RATE,
+		}));
 	}
 
 	const first = await demux(await mux(packets));
@@ -239,12 +239,12 @@ test('Opus start offset survives a demux-mux roundtrip', async () => {
 	expect(second.duration).toBe(first.duration);
 
 	// A standard stream starts at -preSkip, such that the audible part begins at zero
-	const standard = await demux(await mux(packets.map((packet, i) => new EncodedPacket(
-		packet.data,
-		'key',
-		(i * SAMPLES_PER_FRAME - PRE_SKIP) / SAMPLE_RATE,
-		SAMPLES_PER_FRAME / SAMPLE_RATE,
-	))));
+	const standard = await demux(await mux(packets.map((packet, i) => new EncodedPacket({
+		data: packet.data,
+		type: 'key',
+		timestamp: (i * SAMPLES_PER_FRAME - PRE_SKIP) / SAMPLE_RATE,
+		duration: SAMPLES_PER_FRAME / SAMPLE_RATE,
+	}))));
 
 	expect(standard.packets[0]!.timestamp).toBe(-PRE_SKIP / SAMPLE_RATE);
 	expect(standard.packets[0]!.duration).toBe(SAMPLES_PER_FRAME / SAMPLE_RATE);
@@ -252,12 +252,12 @@ test('Opus start offset survives a demux-mux roundtrip', async () => {
 	expect(standard.preSkip).toBe(PRE_SKIP);
 
 	// An earlier start goes into a larger pre-skip
-	const early = await demux(await mux(packets.map((packet, i) => new EncodedPacket(
-		packet.data,
-		'key',
-		(i * SAMPLES_PER_FRAME - PRE_SKIP - 2000) / SAMPLE_RATE,
-		SAMPLES_PER_FRAME / SAMPLE_RATE,
-	))));
+	const early = await demux(await mux(packets.map((packet, i) => new EncodedPacket({
+		data: packet.data,
+		type: 'key',
+		timestamp: (i * SAMPLES_PER_FRAME - PRE_SKIP - 2000) / SAMPLE_RATE,
+		duration: SAMPLES_PER_FRAME / SAMPLE_RATE,
+	}))));
 
 	expect(early.preSkip).toBe(PRE_SKIP + 2000);
 	expect(early.packets).toHaveLength(packetCount);
@@ -266,12 +266,12 @@ test('Opus start offset survives a demux-mux roundtrip', async () => {
 
 	// The pre-skip can't go beyond 65535, so the packets starting before that are dropped
 	const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-	const tooEarly = await demux(await mux(packets.map((packet, i) => new EncodedPacket(
-		packet.data,
-		'key',
-		(i * SAMPLES_PER_FRAME - 100000) / SAMPLE_RATE,
-		SAMPLES_PER_FRAME / SAMPLE_RATE,
-	))));
+	const tooEarly = await demux(await mux(packets.map((packet, i) => new EncodedPacket({
+		data: packet.data,
+		type: 'key',
+		timestamp: (i * SAMPLES_PER_FRAME - 100000) / SAMPLE_RATE,
+		duration: SAMPLES_PER_FRAME / SAMPLE_RATE,
+	}))));
 	const firstKeptIndex = Math.ceil((100000 - 65535) / SAMPLES_PER_FRAME);
 
 	expect(tooEarly.preSkip).toBe(65535);
@@ -313,7 +313,12 @@ test('Granule positions of full pages', async () => {
 		const data = new Uint8Array(10);
 		data[0] = 16 << 3;
 
-		await audioSource.add(new EncodedPacket(data, 'key', i * packetDuration, packetDuration), {
+		await audioSource.add(new EncodedPacket({
+			data,
+			type: 'key',
+			timestamp: i * packetDuration,
+			duration: packetDuration,
+		}), {
 			decoderConfig: {
 				codec: 'opus',
 				numberOfChannels: 1,
@@ -696,7 +701,12 @@ const createOpusPacket = (index: number) => {
 	const data = new Uint8Array(100);
 	data[0] = 31 << 3; // TOC byte: config 31 (CELT fullband, 20 ms), code 0
 
-	return new EncodedPacket(data, 'key', (960 * index - OPUS_PRE_SKIP) / 48000, 960 / 48000);
+	return new EncodedPacket({
+		data,
+		type: 'key',
+		timestamp: (960 * index - OPUS_PRE_SKIP) / 48000,
+		duration: 960 / 48000,
+	});
 };
 
 test('Multiplexed header pages', async () => {
@@ -769,7 +779,12 @@ test('Opus start before the pre-skip with the header already written', async () 
 	// can't grow anymore and its packets starting before it have to be dropped
 	const timestamps = Array.from({ length: 10 }, (_, i) => 960 * (i - 2) - OPUS_PRE_SKIP);
 	for (const timestamp of timestamps) {
-		const packet = new EncodedPacket(new Uint8Array([31 << 3, 0]), 'key', timestamp / 48000, 960 / 48000);
+		const packet = new EncodedPacket({
+			data: new Uint8Array([31 << 3, 0]),
+			type: 'key',
+			timestamp: timestamp / 48000,
+			duration: 960 / 48000,
+		});
 		await firstSource.add(packet.clone({ timestamp: (timestamp + 1920) / 48000 }));
 		await secondSource.add(packet);
 	}

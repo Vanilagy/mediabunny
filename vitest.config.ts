@@ -30,6 +30,7 @@ export default defineConfig({
 					name: 'node',
 					root: 'test',
 					include: ['node/**/*.test.ts'],
+					setupFiles: ['./setup.ts', './node/setup.ts'],
 					environment: 'node',
 					// Run after the browser tests instead of alongside them so the two don't fight over CPU
 					sequence: { groupOrder: 1 },
@@ -41,6 +42,7 @@ export default defineConfig({
 					name: 'browser',
 					root: 'test',
 					include: ['browser/**/*.test.ts'],
+					setupFiles: ['./setup.ts', './browser/setup.ts'],
 					browser: {
 						enabled: true,
 						provider: webdriverio({
@@ -52,7 +54,7 @@ export default defineConfig({
 									cacheDir: path.resolve(__dirname, 'node_modules/.cache/webdriver'),
 								},
 								'goog:chromeOptions': {
-									args: ['--autoplay-policy=no-user-gesture-required'],
+									args: ['--autoplay-policy=no-user-gesture-required', '--js-flags=--expose-gc'],
 								},
 							},
 						}),

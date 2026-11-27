@@ -34,6 +34,7 @@ test('can loop over all samples', async () => {
 	assert(track);
 	expect(await track.computeDuration()).toEqual(19.714285714285715);
 	expect(await track.getDecoderConfig()).toEqual({
+		type: 'audio',
 		codec: 'flac',
 		numberOfChannels: 2,
 		sampleRate: 44100,
@@ -240,8 +241,9 @@ test('can re-mux a .flac', async () => {
 	assert(inputPacket);
 	assert(outputPacket);
 
-	const { data: inputPacketData, ...otherInputPacket } = inputPacket;
-	const { data: outputPacketData, ...otherOutputPacket } = outputPacket;
+	// The decoder configs differ in the description's checksum, which is compared below
+	const { data: inputPacketData, decoderConfig: inputPacketDecoderConfig, ...otherInputPacket } = inputPacket;
+	const { data: outputPacketData, decoderConfig: outputPacketDecoderConfig, ...otherOutputPacket } = outputPacket;
 
 	expect(otherInputPacket).toEqual(otherOutputPacket);
 	expect(inputPacketData).toEqual(outputPacketData);
@@ -250,6 +252,10 @@ test('can re-mux a .flac', async () => {
 	const outputDecoderConfig = await outputTrack.getDecoderConfig();
 	assert(inputDecoderConfig);
 	assert(outputDecoderConfig);
+
+	// Packets carry the very same config object their track hands out
+	expect(inputPacketDecoderConfig).toBe(inputDecoderConfig);
+	expect(outputPacketDecoderConfig).toBe(outputDecoderConfig);
 
 	const { description: inputDescription, ...otherInputDecoderConfig } = inputDecoderConfig;
 	const { description: outputDescription, ...otherOutputDecoderConfig } = outputDecoderConfig;
@@ -591,7 +597,12 @@ test('Single-frame output shorter than 16 samples', async () => {
 		0x00, // Frame number
 		blockSize - 1,
 	]);
-	await source.add(new EncodedPacket(frame, 'key', 0, blockSize / 44100), { decoderConfig });
+	await source.add(new EncodedPacket({
+		data: frame,
+		type: 'key',
+		timestamp: 0,
+		duration: blockSize / 44100,
+	}), { decoderConfig });
 	await output.finalize();
 
 	// STREAMINFO's block sizes must be at least 16, or FFmpeg refuses the file
@@ -729,7 +740,12 @@ test('Output with more than 2^32 samples', async () => {
 		(blockSize - 1) & 0xff,
 	]);
 	for (let i = 0; i < frameCount; i++) {
-		const packet = new EncodedPacket(frame, 'key', i * blockSize / 44100, blockSize / 44100);
+		const packet = new EncodedPacket({
+			data: frame,
+			type: 'key',
+			timestamp: i * blockSize / 44100,
+			duration: blockSize / 44100,
+		});
 		await source.add(packet, { decoderConfig });
 	}
 	await output.finalize();

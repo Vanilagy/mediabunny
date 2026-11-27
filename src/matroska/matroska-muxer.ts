@@ -48,7 +48,6 @@ import { Output, OutputAudioTrack, OutputSubtitleTrack, OutputTrack, OutputVideo
 import {
 	SubtitleConfig,
 	SubtitleCue,
-	SubtitleMetadata,
 	formatSubtitleTimestamp,
 	inlineTimestampRegex,
 	parseSubtitleTimestamp,
@@ -70,13 +69,10 @@ import {
 	getAudioPreRollDuration,
 	generateVp9CodecConfigurationFromCodecString,
 	parsePcmCodec,
-	validateAudioChunkMetadata,
-	validateSubtitleMetadata,
-	validateVideoChunkMetadata,
 } from '../codec';
 import { MAX_ADTS_FRAME_HEADER_SIZE, MIN_ADTS_FRAME_HEADER_SIZE, readAdtsFrameHeader } from '../adts/adts-reader';
 import { FileSlice } from '../reader';
-import { Muxer } from '../muxer';
+import { Muxer, validateAudioTrackDecoderConfig, validateVideoTrackDecoderConfig } from '../muxer';
 import { Writer } from '../writer';
 import { EncodedPacket } from '../packet';
 import { AttachedFile } from '../metadata';
@@ -200,17 +196,9 @@ export class MatroskaMuxer extends Muxer {
 
 			for (const track of this.output.tracks) {
 				if (track.isVideoTrack() && track.metadata.decoderConfig) {
-					this.getVideoTrackData(
-						track,
-						track.metadata.primingPacket ?? null,
-						{ decoderConfig: track.metadata.decoderConfig },
-					);
+					this.getVideoTrackData(track, track.metadata.primingPacket ?? null, track.metadata.decoderConfig);
 				} else if (track.isAudioTrack() && track.metadata.decoderConfig) {
-					this.getAudioTrackData(
-						track,
-						track.metadata.primingPacket ?? null,
-						{ decoderConfig: track.metadata.decoderConfig },
-					);
+					this.getAudioTrackData(track, track.metadata.primingPacket ?? null, track.metadata.decoderConfig);
 				}
 			}
 		} finally {
@@ -856,21 +844,22 @@ export class MatroskaMuxer extends Muxer {
 		});
 	}
 
-	private getVideoTrackData(track: OutputVideoTrack, packet: EncodedPacket | null, meta?: EncodedVideoChunkMetadata) {
+	private getVideoTrackData(
+		track: OutputVideoTrack,
+		packet: EncodedPacket | null,
+		inputDecoderConfig: VideoDecoderConfig | EncodedPacket['decoderConfig'],
+	) {
 		const existingTrackData = this.trackDatas.find(x => x.track === track);
 		if (existingTrackData) {
 			return existingTrackData as MatroskaVideoTrackData;
 		}
 
-		validateVideoChunkMetadata(meta, track.source._codec);
+		const decoderConfig = validateVideoTrackDecoderConfig(inputDecoderConfig, track.source._codec);
+		assert(decoderConfig.codedWidth !== undefined);
+		assert(decoderConfig.codedHeight !== undefined);
 
-		assert(meta);
-		assert(meta.decoderConfig);
-		assert(meta.decoderConfig.codedWidth !== undefined);
-		assert(meta.decoderConfig.codedHeight !== undefined);
-
-		const displayAspectWidth = meta.decoderConfig.displayAspectWidth;
-		const displayAspectHeight = meta.decoderConfig.displayAspectHeight;
+		const displayAspectWidth = decoderConfig.displayAspectWidth;
+		const displayAspectHeight = decoderConfig.displayAspectHeight;
 
 		const aspectRatio = displayAspectWidth === undefined || displayAspectHeight === undefined
 			? null
@@ -883,15 +872,15 @@ export class MatroskaMuxer extends Muxer {
 			track,
 			type: 'video',
 			info: {
-				width: meta.decoderConfig.codedWidth,
-				height: meta.decoderConfig.codedHeight,
+				width: decoderConfig.codedWidth,
+				height: decoderConfig.codedHeight,
 				aspectRatio,
-				decoderConfig: meta.decoderConfig,
+				decoderConfig,
 				alphaMode: track.metadata.canBeTransparent || (packet ? !!packet.sideData.alpha : null),
 			},
 			chunkQueue: [],
 			lastWrittenMsTimestamp: null,
-			codecPrivate: meta.decoderConfig.description ?? null,
+			codecPrivate: decoderConfig.description ?? null,
 		};
 
 		if (track.source._codec === 'vp9') {
@@ -909,7 +898,7 @@ export class MatroskaMuxer extends Muxer {
 			);
 		} else if (track.source._codec === 'prores') {
 			// "The Private Data contains the FourCC as found in MP4 movies"
-			newTrackData.codecPrivate = textEncoder.encode(meta.decoderConfig.codec);
+			newTrackData.codecPrivate = textEncoder.encode(decoderConfig.codec);
 		}
 
 		this.trackDatas.push(newTrackData);
@@ -922,18 +911,17 @@ export class MatroskaMuxer extends Muxer {
 		return newTrackData;
 	}
 
-	private getAudioTrackData(track: OutputAudioTrack, packet: EncodedPacket | null, meta?: EncodedAudioChunkMetadata) {
+	private getAudioTrackData(
+		track: OutputAudioTrack,
+		packet: EncodedPacket | null,
+		inputDecoderConfig: AudioDecoderConfig | EncodedPacket['decoderConfig'],
+	) {
 		const existingTrackData = this.trackDatas.find(x => x.track === track);
 		if (existingTrackData) {
 			return existingTrackData as MatroskaAudioTrackData;
 		}
 
-		validateAudioChunkMetadata(meta, track.source._codec);
-
-		assert(meta);
-		assert(meta.decoderConfig);
-
-		const decoderConfig = { ...meta.decoderConfig };
+		const decoderConfig = { ...validateAudioTrackDecoderConfig(inputDecoderConfig, track.source._codec) };
 		let requiresAdtsStripping = false;
 
 		if (track.source._codec === 'aac' && !decoderConfig.description) {
@@ -987,8 +975,8 @@ export class MatroskaMuxer extends Muxer {
 			track,
 			type: 'audio',
 			info: {
-				numberOfChannels: meta.decoderConfig.numberOfChannels,
-				sampleRate: meta.decoderConfig.sampleRate,
+				numberOfChannels: decoderConfig.numberOfChannels,
+				sampleRate: decoderConfig.sampleRate,
 				decoderConfig,
 				requiresAdtsStripping,
 				codecDelay: null,
@@ -1008,26 +996,24 @@ export class MatroskaMuxer extends Muxer {
 		return newTrackData;
 	}
 
-	private getSubtitleTrackData(track: OutputSubtitleTrack, meta?: SubtitleMetadata) {
+	private getSubtitleTrackData(track: OutputSubtitleTrack, cue: SubtitleCue) {
 		const existingTrackData = this.trackDatas.find(x => x.track === track);
 		if (existingTrackData) {
 			return existingTrackData as MatroskaAudioTrackData;
 		}
 
-		validateSubtitleMetadata(meta);
-
-		assert(meta);
-		assert(meta.config);
+		// The first cue always carries the config
+		assert(cue.config);
 
 		const newTrackData: MatroskaSubtitleTrackData = {
 			track,
 			type: 'subtitle',
 			info: {
-				config: meta.config,
+				config: cue.config,
 			},
 			chunkQueue: [],
 			lastWrittenMsTimestamp: null,
-			codecPrivate: textEncoder.encode(meta.config.description),
+			codecPrivate: textEncoder.encode(cue.config.description),
 		};
 
 		this.trackDatas.push(newTrackData);
@@ -1040,11 +1026,11 @@ export class MatroskaMuxer extends Muxer {
 		return newTrackData;
 	}
 
-	async addEncodedVideoPacket(track: OutputVideoTrack, packet: EncodedPacket, meta?: EncodedVideoChunkMetadata) {
+	async addEncodedVideoPacket(track: OutputVideoTrack, packet: EncodedPacket) {
 		const release = await this.mutex.acquire();
 
 		try {
-			const trackData = this.getVideoTrackData(track, packet, meta);
+			const trackData = this.getVideoTrackData(track, packet, packet.decoderConfig);
 			trackData.info.alphaMode ??= !!packet.sideData.alpha;
 
 			let packetData = packet.data;
@@ -1083,11 +1069,11 @@ export class MatroskaMuxer extends Muxer {
 		}
 	}
 
-	async addEncodedAudioPacket(track: OutputAudioTrack, packet: EncodedPacket, meta?: EncodedAudioChunkMetadata) {
+	async addEncodedAudioPacket(track: OutputAudioTrack, packet: EncodedPacket) {
 		const release = await this.mutex.acquire();
 
 		try {
-			const trackData = this.getAudioTrackData(track, packet, meta);
+			const trackData = this.getAudioTrackData(track, packet, packet.decoderConfig);
 
 			let packetData = packet.data;
 			if (trackData.info.requiresAdtsStripping) {
@@ -1129,11 +1115,11 @@ export class MatroskaMuxer extends Muxer {
 		}
 	}
 
-	async addSubtitleCue(track: OutputSubtitleTrack, cue: SubtitleCue, meta?: SubtitleMetadata) {
+	async addSubtitleCue(track: OutputSubtitleTrack, cue: SubtitleCue) {
 		const release = await this.mutex.acquire();
 
 		try {
-			const trackData = this.getSubtitleTrackData(track, meta);
+			const trackData = this.getSubtitleTrackData(track, cue);
 
 			this.validateTimestamp(trackData.track, cue.timestamp, true);
 

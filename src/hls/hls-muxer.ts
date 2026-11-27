@@ -6,7 +6,8 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { MediaCodec, validateAudioChunkMetadata, validateVideoChunkMetadata } from '../codec';
+import { MediaCodec } from '../codec';
+import { ExtendedAudioDecoderConfig, ExtendedVideoDecoderConfig } from '../decode';
 import { Quality } from '../encode';
 import { Logging } from '../logging';
 import { EncodedAudioPacketSource, EncodedVideoPacketSource } from '../media-source';
@@ -21,7 +22,7 @@ import {
 	toDataView,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
-import { Muxer } from '../muxer';
+import { Muxer, validateAudioTrackDecoderConfig, validateVideoTrackDecoderConfig } from '../muxer';
 import {
 	Output,
 	OutputAudioTrack,
@@ -39,7 +40,7 @@ import {
 } from '../output-format';
 import { Writer } from '../writer';
 import { EncodedPacket } from '../packet';
-import { SubtitleCue, SubtitleMetadata } from '../subtitles';
+import { SubtitleCue } from '../subtitles';
 import { NullTarget, PathedTarget, Target, TargetRequest } from '../target';
 import { HLS_MIME_TYPE, TIMESTAMP_PRIV_OWNER } from './hls-misc';
 import { secondsToMpegTsTimestamp } from '../mpeg-ts/mpeg-ts-misc';
@@ -564,17 +565,9 @@ export class HlsMuxer extends Muxer {
 
 			for (const track of this.output.tracks) {
 				if (track.isVideoTrack() && track.metadata.decoderConfig) {
-					this.getVideoTrackData(
-						track,
-						track.metadata.primingPacket ?? null,
-						{ decoderConfig: track.metadata.decoderConfig },
-					);
+					this.getVideoTrackData(track, track.metadata.primingPacket ?? null, track.metadata.decoderConfig);
 				} else if (track.isAudioTrack() && track.metadata.decoderConfig) {
-					this.getAudioTrackData(
-						track,
-						track.metadata.primingPacket ?? null,
-						{ decoderConfig: track.metadata.decoderConfig },
-					);
+					this.getAudioTrackData(track, track.metadata.primingPacket ?? null, track.metadata.decoderConfig);
 				}
 			}
 		} finally {
@@ -615,16 +608,17 @@ export class HlsMuxer extends Muxer {
 		}
 	}
 
-	getVideoTrackData(track: OutputVideoTrack, packet: EncodedPacket | null, meta?: EncodedVideoChunkMetadata) {
+	getVideoTrackData(
+		track: OutputVideoTrack,
+		packet: EncodedPacket | null,
+		inputDecoderConfig: VideoDecoderConfig | EncodedPacket['decoderConfig'],
+	) {
 		let trackData = this.trackDatas.find(x => x.track === track) as HlsVideoTrackData;
 		if (trackData) {
 			return trackData;
 		}
 
-		validateVideoChunkMetadata(meta, track.source._codec);
-
-		assert(meta);
-		assert(meta?.decoderConfig);
+		const decoderConfig = validateVideoTrackDecoderConfig(inputDecoderConfig, track.source._codec);
 
 		const playlists = this.playlists.filter(x => x.tracks.includes(track));
 		assert(playlists.length === 1);
@@ -635,7 +629,7 @@ export class HlsMuxer extends Muxer {
 			playlist: playlists[0]!,
 			info: {
 				type: 'video',
-				decoderConfig: meta.decoderConfig,
+				decoderConfig,
 				primingPacket: packet,
 			},
 		};
@@ -644,16 +638,17 @@ export class HlsMuxer extends Muxer {
 		return trackData;
 	}
 
-	getAudioTrackData(track: OutputAudioTrack, packet: EncodedPacket | null, meta?: EncodedAudioChunkMetadata) {
+	getAudioTrackData(
+		track: OutputAudioTrack,
+		packet: EncodedPacket | null,
+		inputDecoderConfig: AudioDecoderConfig | EncodedPacket['decoderConfig'],
+	) {
 		let trackData = this.trackDatas.find(x => x.track === track) as HlsAudioTrackData;
 		if (trackData) {
 			return trackData;
 		}
 
-		validateAudioChunkMetadata(meta, track.source._codec);
-
-		assert(meta);
-		assert(meta?.decoderConfig);
+		const decoderConfig = validateAudioTrackDecoderConfig(inputDecoderConfig, track.source._codec);
 
 		const playlists = this.playlists.filter(x => x.tracks.includes(track));
 		assert(playlists.length === 1);
@@ -664,7 +659,7 @@ export class HlsMuxer extends Muxer {
 			playlist: playlists[0]!,
 			info: {
 				type: 'audio',
-				decoderConfig: meta.decoderConfig,
+				decoderConfig,
 				primingPacket: packet,
 			},
 		};
@@ -673,12 +668,8 @@ export class HlsMuxer extends Muxer {
 		return trackData;
 	}
 
-	async addEncodedVideoPacket(
-		track: OutputVideoTrack,
-		packet: EncodedPacket,
-		meta?: EncodedVideoChunkMetadata,
-	) {
-		const trackData = this.getVideoTrackData(track, packet, meta);
+	async addEncodedVideoPacket(track: OutputVideoTrack, packet: EncodedPacket) {
+		const trackData = this.getVideoTrackData(track, packet, packet.decoderConfig);
 		const playlist = trackData.playlist;
 
 		const release = await playlist.mutex.acquire();
@@ -703,12 +694,8 @@ export class HlsMuxer extends Muxer {
 		}
 	}
 
-	async addEncodedAudioPacket(
-		track: OutputAudioTrack,
-		packet: EncodedPacket,
-		meta?: EncodedAudioChunkMetadata,
-	) {
-		const trackData = this.getAudioTrackData(track, packet, meta);
+	async addEncodedAudioPacket(track: OutputAudioTrack, packet: EncodedPacket) {
+		const trackData = this.getAudioTrackData(track, packet, packet.decoderConfig);
 		const playlist = trackData.playlist;
 
 		const release = await playlist.mutex.acquire();
@@ -738,8 +725,6 @@ export class HlsMuxer extends Muxer {
 		track: OutputSubtitleTrack,
 		// eslint-disable-next-line @typescript-eslint/no-unused-vars
 		cue: SubtitleCue,
-		// eslint-disable-next-line @typescript-eslint/no-unused-vars
-		meta?: SubtitleMetadata,
 	) {
 		throw new Error('Unreachable.');
 	}
@@ -1202,32 +1187,40 @@ export class HlsMuxer extends Muxer {
 
 				if (videoTrack) {
 					assert(videoSource);
-					const meta = { decoderConfig: videoTrack.info.decoderConfig };
+					const decoderConfig: ExtendedVideoDecoderConfig = {
+						...videoTrack.info.decoderConfig,
+						type: 'video',
+					};
 
 					for (let i = 0; i < videoEndIndex; i++) {
 						const packet = videoTrack.packets[i]!;
 
 						const offsetPacket = packet.clone({
 							timestamp: this.toMediaTimestamp(packet.timestamp),
+							decoderConfig,
 						});
 
-						await videoSource.add(offsetPacket, meta);
+						await videoSource.add(offsetPacket);
 						maxEndTimestamp = Math.max(maxEndTimestamp, packet.timestamp + packet.duration);
 					}
 				}
 
 				if (audioTrack) {
 					assert(audioSource);
-					const meta = { decoderConfig: audioTrack.info.decoderConfig };
+					const decoderConfig: ExtendedAudioDecoderConfig = {
+						...audioTrack.info.decoderConfig,
+						type: 'audio',
+					};
 
 					for (let i = 0; i < audioEndIndex; i++) {
 						const packet = audioTrack.packets[i]!;
 
 						const offsetPacket = packet.clone({
 							timestamp: this.toMediaTimestamp(packet.timestamp),
+							decoderConfig,
 						});
 
-						await audioSource.add(offsetPacket, meta);
+						await audioSource.add(offsetPacket);
 						maxEndTimestamp = Math.max(maxEndTimestamp, packet.timestamp + packet.duration);
 					}
 				}

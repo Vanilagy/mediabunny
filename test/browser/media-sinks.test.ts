@@ -3,7 +3,8 @@ import { Input } from '../../src/input.js';
 import { BufferSource, UrlSource } from '../../src/source.js';
 import { ALL_FORMATS } from '../../src/input-format.js';
 import { assert, promiseWithResolvers } from '../../src/misc.js';
-import { AudioSampleSink, ColorAlphaMerger, EncodedPacketSink, VideoSampleSink } from '../../src/media-sink.js';
+import { AudioSampleSink, EncodedPacketSink, VideoSampleSink } from '../../src/media-sink.js';
+import { ColorAlphaMerger } from '../../src/decode.js';
 import { Output } from '../../src/output.js';
 import { MkvOutputFormat, MpegTsOutputFormat, WebMOutputFormat } from '../../src/output-format.js';
 import { BufferTarget } from '../../src/target.js';
@@ -471,7 +472,8 @@ const getAnamorphicBt601Sample = async (track: InputVideoTrack, keepAlpha: boole
 	const remuxedTrack = await remuxedInput.getPrimaryVideoTrack();
 	assert(remuxedTrack);
 
-	const sample = await new VideoSampleSink(remuxedTrack).getSample(0.5);
+	// Alpha decoding happens in software, so the opaque sample must too for the two to be comparable
+	const sample = await new VideoSampleSink(remuxedTrack, { hardwareAcceleration: 'prefer-software' }).getSample(0.5);
 	assert(sample);
 
 	return sample;

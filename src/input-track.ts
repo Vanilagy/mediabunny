@@ -16,6 +16,7 @@ import {
 } from './codec';
 import { determineAudioPacketType, determineVideoPacketType } from './codec-data';
 import { customAudioDecoders, customVideoDecoders } from './custom-coder';
+import { ExtendedAudioDecoderConfig, ExtendedVideoDecoderConfig } from './decode';
 import { Input } from './input';
 import { Logging } from './logging';
 import { EncodedPacketSink, PacketRetrievalOptions } from './media-sink';
@@ -140,7 +141,7 @@ export interface InputTrackBacking {
 	getDurationFromMetadata(options: DurationMetadataRequestOptions): Promise<number | null>;
 	getLiveRefreshInterval(): Promise<number | null>;
 	getHasOnlyKeyPackets?(): MaybePromise<boolean | null>;
-	getDecoderConfig(): Promise<VideoDecoderConfig | AudioDecoderConfig | null>;
+	getDecoderConfig(): Promise<ExtendedVideoDecoderConfig | ExtendedAudioDecoderConfig | null>;
 	getMetadataCodecParameterString?(): MaybePromise<string | null>;
 
 	getFirstPacket(options: PacketRetrievalOptions): Promise<EncodedPacket | null>;
@@ -629,7 +630,7 @@ export interface InputVideoTrackBacking extends InputTrackBacking {
 	getTransformationMatrix(): MaybePromise<TransformationMatrix>;
 	getColorSpace(): Promise<VideoColorSpaceInit>;
 	canBeTransparent(): Promise<boolean>;
-	getDecoderConfig(): Promise<VideoDecoderConfig | null>;
+	getDecoderConfig(): Promise<ExtendedVideoDecoderConfig | null>;
 }
 
 /**
@@ -877,7 +878,7 @@ export class InputVideoTrack extends InputTrack {
 	/**
 	 * Returns the [decoder configuration](https://www.w3.org/TR/webcodecs/#video-decoder-config) for decoding the
 	 * track's packets using a [`VideoDecoder`](https://developer.mozilla.org/en-US/docs/Web/API/VideoDecoder). Returns
-	 * null if the track's codec is unknown.
+	 * null if the track's codec is unknown. The returned object must not be mutated.
 	 */
 	async getDecoderConfig() {
 		return this._backing.getDecoderConfig();
@@ -1099,7 +1100,7 @@ export interface InputAudioTrackBacking extends InputTrackBacking {
 	getCodec(): MaybePromise<AudioCodec | null>;
 	getNumberOfChannels(): MaybePromise<number>;
 	getSampleRate(): MaybePromise<number>;
-	getDecoderConfig(): Promise<AudioDecoderConfig | null>;
+	getDecoderConfig(): Promise<ExtendedAudioDecoderConfig | null>;
 }
 
 /**
@@ -1169,7 +1170,7 @@ export class InputAudioTrack extends InputTrack {
 	/**
 	 * Returns the [decoder configuration](https://www.w3.org/TR/webcodecs/#audio-decoder-config) for decoding the
 	 * track's packets using an [`AudioDecoder`](https://developer.mozilla.org/en-US/docs/Web/API/AudioDecoder). Returns
-	 * null if the track's codec is unknown.
+	 * null if the track's codec is unknown. The returned object must not be mutated.
 	 */
 	async getDecoderConfig() {
 		return this._backing.getDecoderConfig();

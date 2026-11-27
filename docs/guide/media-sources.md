@@ -53,6 +53,7 @@ type VideoEncodingConfig = {
 	quality: Quality;
 	alpha?: 'discard' | 'keep';
 	latencyMode?: 'quality' | 'realtime';
+	frameRateHint?: number;
 	keyFrameInterval?: number;
 	fullCodecString?: string;
 	hardwareAcceleration?: 'no-preference' | 'prefer-hardware' | 'prefer-software';
@@ -89,6 +90,7 @@ type VideoEncodingConfig = {
 	- `'discard'` (default): Only the samples' color data is kept; the video is opaque.
 	- `'keep'`: The samples' alpha data is also encoded as side data. Make sure to pair this mode with a container format that supports transparency (such as WebM or Matroska).
 - `latencyMode`: The latency mode as specified by the WebCodecs API. Browsers default to `quality`. Media stream-driven video sources will automatically use the `realtime` setting.
+- `frameRateHint`: The expected frame rate in hertz, as a hint given to the encoder. When `transform.frameRate` is set, that frame rate is used instead.
 - `keyFrameInterval`: The maximum interval in seconds between two adjacent key frames. Defaults to 2 seconds. More frequent key frames improve seeking behavior but increase file size. When using multiple video tracks, this value should be set to the same value for all tracks.
 - `fullCodecString`: Allows you to optionally specify the full codec string used by the video encoder, as specified in the [Mediabunny Codec Registry](/codec-registry/overview). For example, you may set it to `'avc1.42001f'` when using AVC. Keep in mind that the codec string must still match the codec specified in `codec`. If you don't set this field, a codec string will be generated automatically.
 - `hardwareAcceleration`: A hint that configures the hardware acceleration method of this codec. This is best left on `'no-preference'`.
@@ -302,10 +304,15 @@ await packetSource.add(packet2);
 > [!IMPORTANT]
 > You must add the packets in decode order.
 
-You will need to provide additional metadata alongside your first call to `add` to give the `Output` more information about the shape and form of the video data. This metadata must be in the form of the WebCodecs API's `EncodedVideoChunkMetadata`. It might look like this:
+The first packet you add must carry a [decoder config](./packets-and-samples#creating-packets), which gives the `Output` more information about the shape and form of the video data. It might look like this:
 ```ts
-await packetSource.add(firstPacket, {
+const firstPacket = new EncodedPacket({
+	data,
+	type: 'key',
+	timestamp: 0,
+	duration: 1/30,
 	decoderConfig: {
+		type: 'video',
 		codec: 'vp09.00.31.08',
 		codedWidth: 1280,
 		codedHeight: 720,
@@ -315,12 +322,15 @@ await packetSource.add(firstPacket, {
 			matrix: 'smpte170m',
 			fullRange: false,
 		},
-		description: undefined,
 	},
 });
+
+await packetSource.add(firstPacket);
 ```
 
 `codec`, `codedWidth`, and `codedHeight` are required for all codecs, whereas `description` is required for some codecs. Additional fields, such as `colorSpace`, are optional. The [Mediabunny Codec Registry](/codec-registry/overview) specifies the formats of `codec` and `description` for each video codec, which you **must** adhere to.
+
+Packets read from another media file already carry their decoder config, so you can add them as they are.
 
 #### B-frames
 
@@ -465,19 +475,28 @@ const packetSource = new EncodedAudioPacketSource('aac');
 await packetSource.add(packet);
 ```
 
-You will need to provide additional metadata alongside your first call to `add` to give the `Output` more information about the shape and form of the audio data. This metadata must be in the form of the WebCodecs API's `EncodedAudioChunkMetadata`. It might look like this:
+The first packet you add must carry a [decoder config](./packets-and-samples#creating-packets), which gives the `Output` more information about the shape and form of the audio data. It might look like this:
 ```ts
-await packetSource.add(firstPacket, {
+const firstPacket = new EncodedPacket({
+	data,
+	type: 'key',
+	timestamp: 0,
+	duration: 1024 / 48000,
 	decoderConfig: {
+		type: 'audio',
 		codec: 'mp4a.40.2',
 		numberOfChannels: 2,
 		sampleRate: 48000,
 		description: new Uint8Array([17, 144]),
 	},
 });
+
+await packetSource.add(firstPacket);
 ```
 
 `codec`, `numberOfChannels`, and `sampleRate` are required for all codecs, whereas `description` is required for some codecs. The [Mediabunny Codec Registry](/codec-registry/overview) specifies the formats of `codec` and `description` for each audio codec, which you must adhere to.
+
+Packets read from another media file already carry their decoder config, so you can add them as they are.
 
 ## Subtitle sources
 

@@ -8,11 +8,10 @@
 
 import { buildAdtsHeaderTemplate, parseAacAudioSpecificConfig, writeAdtsFrameLength } from '../../shared/aac-misc';
 import { Bitstream } from '../../shared/bitstream';
-import { validateAudioChunkMetadata } from '../codec';
 import { Id3V2Writer } from '../id3';
 import { metadataTagsAreEmpty } from '../metadata';
 import { assert, toUint8Array } from '../misc';
-import { Muxer } from '../muxer';
+import { Muxer, validateAudioTrackDecoderConfig } from '../muxer';
 import { Output, OutputAudioTrack } from '../output';
 import { AdtsOutputFormat } from '../output-format';
 import { EncodedPacket } from '../packet';
@@ -54,21 +53,16 @@ export class AdtsMuxer extends Muxer {
 		throw new Error('ADTS does not support video.');
 	}
 
-	async addEncodedAudioPacket(
-		track: OutputAudioTrack,
-		packet: EncodedPacket,
-		meta?: EncodedAudioChunkMetadata,
-	) {
+	async addEncodedAudioPacket(track: OutputAudioTrack, packet: EncodedPacket) {
 		const release = await this.mutex.acquire();
 
 		try {
 			this.validateTimestamp(track, packet.timestamp, packet.type === 'key');
 
-			// First packet - determine input format from metadata
+			// First packet - determine input format from its decoder config
 			if (this.inputIsAdts === null) {
-				validateAudioChunkMetadata(meta, track.source._codec);
-
-				const description = meta?.decoderConfig?.description;
+				const description = validateAudioTrackDecoderConfig(packet.decoderConfig, track.source._codec)
+					.description;
 
 				if (description) {
 					const config = parseAacAudioSpecificConfig(toUint8Array(description));

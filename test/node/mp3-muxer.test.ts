@@ -249,7 +249,12 @@ const mux = async (frames: Uint8Array[]) => {
 	await output.start();
 
 	for (let i = 0; i < frames.length; i++) {
-		await source.add(new EncodedPacket(frames[i]!, 'key', i * FRAME_DURATION, FRAME_DURATION));
+		await source.add(new EncodedPacket({
+			data: frames[i]!,
+			type: 'key',
+			timestamp: i * FRAME_DURATION,
+			duration: FRAME_DURATION,
+		}));
 	}
 
 	await output.finalize();

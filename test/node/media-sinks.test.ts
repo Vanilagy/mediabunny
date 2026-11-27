@@ -198,7 +198,17 @@ const testDecoderClosed = async (
 		await expect(iterator.next()).rejects.toThrow(InputDisposedError);
 	} else if (cause === 'decoderError') {
 		decoder.onError(new Error('Decoding failed'));
-		await expect(iterator.next()).rejects.toThrow('Decoding failed');
+
+		await expect((async () => {
+			while (true) {
+				const result = await iterator.next();
+				if (result.done) {
+					break;
+				}
+
+				result.value?.close();
+			}
+		})()).rejects.toThrow('Decoding failed');
 	} else {
 		await expect(iterator.throw(new Error('Stopped'))).rejects.toThrow('Stopped');
 		expect(await iterator.next()).toEqual({ value: undefined, done: true });
@@ -374,9 +384,24 @@ test('PCM packets smaller than a frame', async () => {
 			sampleRate: 48000,
 		},
 	};
-	await source.add(new EncodedPacket(new Uint8Array(4 * 480), 'key', 0, 0.01), meta);
-	await source.add(new EncodedPacket(new Uint8Array(0), 'key', 0.01, 0));
-	await source.add(new EncodedPacket(new Uint8Array(4 * 480), 'key', 0.01, 0.01));
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(4 * 480),
+		type: 'key',
+		timestamp: 0,
+		duration: 0.01,
+	}), meta);
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(0),
+		type: 'key',
+		timestamp: 0.01,
+		duration: 0,
+	}));
+	await source.add(new EncodedPacket({
+		data: new Uint8Array(4 * 480),
+		type: 'key',
+		timestamp: 0.01,
+		duration: 0.01,
+	}));
 	await output.finalize();
 
 	using input = new Input({

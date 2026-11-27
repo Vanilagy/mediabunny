@@ -127,16 +127,16 @@ describe('Video', async () => {
 		const sampleTimestamps: number[] = [];
 
 		// @ts-expect-error Readonly
-		encoder.onPacket = (packet: EncodedPacket, meta: EncodedVideoChunkMetadata) => {
+		encoder.onPacket = (packet: EncodedPacket) => {
 			expect(packet.duration).toBe(1 / 30);
 			expect(packet.type).toBe(encodedPackets.length ? 'delta' : 'key');
 
 			if (encodedPackets.length === 0) {
-				expect(meta.decoderConfig).toBeDefined();
-				expect(meta.decoderConfig!.codec.startsWith('avc1.')).toBe(true);
-				expect(meta.decoderConfig!.codedWidth).toBe(1280);
-				expect(meta.decoderConfig!.codedHeight).toBe(720);
-				expect(meta.decoderConfig!.description).toBeDefined();
+				expect(packet.decoderConfig).not.toBeNull();
+				expect(packet.decoderConfig!.codec.startsWith('avc1.')).toBe(true);
+				expect(videoConfigOf(packet).codedWidth).toBe(1280);
+				expect(videoConfigOf(packet).codedHeight).toBe(720);
+				expect(packet.decoderConfig!.description).toBeDefined();
 			}
 
 			encodedPackets.push(packet);
@@ -289,9 +289,9 @@ describe('Video', async () => {
 		const packets: EncodedPacket[] = [];
 		let decoderConfig: VideoDecoderConfig | undefined;
 		// @ts-expect-error Readonly
-		encoder.onPacket = (packet: EncodedPacket, meta: EncodedVideoChunkMetadata) => {
+		encoder.onPacket = (packet: EncodedPacket) => {
 			packets.push(packet);
-			decoderConfig ??= meta.decoderConfig;
+			decoderConfig ??= videoConfigOf(packet);
 		};
 		await encoder.init();
 
@@ -337,7 +337,7 @@ describe('Video', async () => {
 	});
 
 	test('AVC encode and decode, length-prefixed', async () => {
-		await encodeDecodeTest('avc', {}, async (packet, meta, i) => {
+		await encodeDecodeTest('avc', {}, async (packet, i) => {
 			expect(packet.duration).toBe(1 / 30);
 			expect(packet.type).toBe(i ? 'delta' : 'key');
 			expect([...packet.data.slice(0, 4)]).not.toEqual([0, 0, 0, 1]);
@@ -353,10 +353,10 @@ describe('Video', async () => {
 			}
 
 			if (i === 0) {
-				expect(meta.decoderConfig).toBeDefined();
-				expect(meta.decoderConfig!.codec.startsWith('avc1.')).toBe(true);
-				expect(meta.decoderConfig!.description).toBeDefined();
-				expect(toUint8Array(meta.decoderConfig!.description!)[0]).toBe(1); // configurationVersion
+				expect(packet.decoderConfig).not.toBeNull();
+				expect(packet.decoderConfig!.codec.startsWith('avc1.')).toBe(true);
+				expect(packet.decoderConfig!.description).toBeDefined();
+				expect(toUint8Array(packet.decoderConfig!.description!)[0]).toBe(1); // configurationVersion
 			}
 		}, async (sample, i) => {
 			expect(sample.format).toBe('I420');
@@ -373,7 +373,7 @@ describe('Video', async () => {
 	});
 
 	test('AVC encode and decode, Annex B', async () => {
-		await encodeDecodeTest('avc', { avc: { format: 'annexb' } }, async (packet, meta, i) => {
+		await encodeDecodeTest('avc', { avc: { format: 'annexb' } }, async (packet, i) => {
 			expect(packet.duration).toBe(1 / 30);
 			expect(packet.type).toBe(i ? 'delta' : 'key');
 			expect([...packet.data.slice(0, 4)]).toEqual([0, 0, 0, 1]);
@@ -387,9 +387,9 @@ describe('Video', async () => {
 				expect(naluTypes).toContain(AvcNalUnitType.SPS);
 				expect(naluTypes).toContain(AvcNalUnitType.PPS);
 
-				expect(meta.decoderConfig).toBeDefined();
-				expect(meta.decoderConfig!.codec.startsWith('avc1.')).toBe(true);
-				expect(meta.decoderConfig!.description).toBeUndefined();
+				expect(packet.decoderConfig).not.toBeNull();
+				expect(packet.decoderConfig!.codec.startsWith('avc1.')).toBe(true);
+				expect(packet.decoderConfig!.description).toBeUndefined();
 			}
 		}, async (sample, i) => {
 			expect(sample.format).toBe('I420');
@@ -406,7 +406,7 @@ describe('Video', async () => {
 	});
 
 	test('HEVC encode and decode, length-prefixed', async () => {
-		await encodeDecodeTest('hevc', {}, async (packet, meta, i) => {
+		await encodeDecodeTest('hevc', {}, async (packet, i) => {
 			expect(packet.duration).toBe(1 / 30);
 			expect(packet.type).toBe(i ? 'delta' : 'key');
 			expect([...packet.data.slice(0, 4)]).not.toEqual([0, 0, 0, 1]);
@@ -422,10 +422,10 @@ describe('Video', async () => {
 			}
 
 			if (i === 0) {
-				expect(meta.decoderConfig).toBeDefined();
-				expect(meta.decoderConfig!.codec.startsWith('hvc1.')).toBe(true);
-				expect(meta.decoderConfig!.description).toBeDefined();
-				expect(toUint8Array(meta.decoderConfig!.description!)[0]).toBe(1); // configurationVersion
+				expect(packet.decoderConfig).not.toBeNull();
+				expect(packet.decoderConfig!.codec.startsWith('hvc1.')).toBe(true);
+				expect(packet.decoderConfig!.description).toBeDefined();
+				expect(toUint8Array(packet.decoderConfig!.description!)[0]).toBe(1); // configurationVersion
 			}
 		}, async (sample, i) => {
 			expect(sample.format).toBe('I420');
@@ -443,7 +443,7 @@ describe('Video', async () => {
 
 	test('HEVC encode and decode, Annex B', async () => {
 		// @ts-expect-error Fucky types
-		await encodeDecodeTest('hevc', { hevc: { format: 'annexb' } }, async (packet, meta, i) => {
+		await encodeDecodeTest('hevc', { hevc: { format: 'annexb' } }, async (packet, i) => {
 			expect(packet.duration).toBe(1 / 30);
 			expect(packet.type).toBe(i ? 'delta' : 'key');
 			expect([...packet.data.slice(0, 4)]).toEqual([0, 0, 0, 1]);
@@ -458,9 +458,9 @@ describe('Video', async () => {
 				expect(naluTypes).toContain(HevcNalUnitType.SPS_NUT);
 				expect(naluTypes).toContain(HevcNalUnitType.PPS_NUT);
 
-				expect(meta.decoderConfig).toBeDefined();
-				expect(meta.decoderConfig!.codec.startsWith('hvc1.')).toBe(true);
-				expect(meta.decoderConfig!.description).toBeUndefined();
+				expect(packet.decoderConfig).not.toBeNull();
+				expect(packet.decoderConfig!.codec.startsWith('hvc1.')).toBe(true);
+				expect(packet.decoderConfig!.description).toBeUndefined();
 			}
 		}, async (sample, i) => {
 			expect(sample.format).toBe('I420');
@@ -477,14 +477,14 @@ describe('Video', async () => {
 	});
 
 	test('VP8 encode and decode', async () => {
-		await encodeDecodeTest('vp8', {}, async (packet, meta, i) => {
+		await encodeDecodeTest('vp8', {}, async (packet, i) => {
 			expect(packet.duration).toBe(1 / 30);
 			expect(packet.type).toBe(i ? 'delta' : 'key');
 
 			if (i === 0) {
-				expect(meta.decoderConfig).toBeDefined();
-				expect(meta.decoderConfig!.codec).toBe('vp8');
-				expect(meta.decoderConfig!.description).toBeUndefined();
+				expect(packet.decoderConfig).not.toBeNull();
+				expect(packet.decoderConfig!.codec).toBe('vp8');
+				expect(packet.decoderConfig!.description).toBeUndefined();
 			}
 		}, async (sample, i) => {
 			expect(sample.format).toBe('I420');
@@ -501,16 +501,16 @@ describe('Video', async () => {
 	});
 
 	test('VP8 encode and decode, transparent', async () => {
-		await encodeDecodeTest('vp8', { alpha: 'keep' }, async (packet, meta, i) => {
+		await encodeDecodeTest('vp8', { alpha: 'keep' }, async (packet, i) => {
 			expect(packet.duration).toBe(1 / 30);
 			expect(packet.type).toBe(i ? 'delta' : 'key');
 			expect(packet.sideData.alpha).toBeDefined();
 			expect(packet.sideData.alpha!.byteLength).toBeGreaterThan(0);
 
 			if (i === 0) {
-				expect(meta.decoderConfig).toBeDefined();
-				expect(meta.decoderConfig!.codec).toBe('vp8');
-				expect(meta.decoderConfig!.description).toBeUndefined();
+				expect(packet.decoderConfig).not.toBeNull();
+				expect(packet.decoderConfig!.codec).toBe('vp8');
+				expect(packet.decoderConfig!.description).toBeUndefined();
 			}
 		}, async (sample, i) => {
 			// Unlike VP9, VP8 decodes without its alpha here, so only the encoded side is checked for it
@@ -527,15 +527,15 @@ describe('Video', async () => {
 	});
 
 	test('VP9 encode and decode, opaque', async () => {
-		await encodeDecodeTest('vp9', {}, async (packet, meta, i) => {
+		await encodeDecodeTest('vp9', {}, async (packet, i) => {
 			expect(packet.duration).toBe(1 / 30);
 			expect(packet.type).toBe(i ? 'delta' : 'key');
 			expect(packet.sideData.alpha).toBeUndefined();
 
 			if (i === 0) {
-				expect(meta.decoderConfig).toBeDefined();
-				expect(meta.decoderConfig!.codec.startsWith('vp09.')).toBe(true);
-				expect(meta.decoderConfig!.description).toBeUndefined();
+				expect(packet.decoderConfig).not.toBeNull();
+				expect(packet.decoderConfig!.codec.startsWith('vp09.')).toBe(true);
+				expect(packet.decoderConfig!.description).toBeUndefined();
 			}
 		}, async (sample, i) => {
 			expect(sample.format).toBe('I420');
@@ -552,16 +552,16 @@ describe('Video', async () => {
 	});
 
 	test('VP9 encode and decode, transparent', async () => {
-		await encodeDecodeTest('vp9', { alpha: 'keep' }, async (packet, meta, i) => {
+		await encodeDecodeTest('vp9', { alpha: 'keep' }, async (packet, i) => {
 			expect(packet.duration).toBe(1 / 30);
 			expect(packet.type).toBe(i ? 'delta' : 'key');
 			expect(packet.sideData.alpha).toBeDefined();
 			expect(packet.sideData.alpha!.byteLength).toBeGreaterThan(0);
 
 			if (i === 0) {
-				expect(meta.decoderConfig).toBeDefined();
-				expect(meta.decoderConfig!.codec.startsWith('vp09.')).toBe(true);
-				expect(meta.decoderConfig!.description).toBeUndefined();
+				expect(packet.decoderConfig).not.toBeNull();
+				expect(packet.decoderConfig!.codec.startsWith('vp09.')).toBe(true);
+				expect(packet.decoderConfig!.description).toBeUndefined();
 			}
 		}, async (sample, i) => {
 			expect(sample.format).toBe('I420A');
@@ -581,14 +581,14 @@ describe('Video', async () => {
 	});
 
 	test('AV1 encode and decode', async () => {
-		await encodeDecodeTest('av1', {}, async (packet, meta, i) => {
+		await encodeDecodeTest('av1', {}, async (packet, i) => {
 			expect(packet.duration).toBe(1 / 30);
 			expect(packet.type).toBe(i ? 'delta' : 'key');
 
 			if (i === 0) {
-				expect(meta.decoderConfig).toBeDefined();
-				expect(meta.decoderConfig!.codec.startsWith('av01.')).toBe(true);
-				expect(meta.decoderConfig!.description).toBeUndefined();
+				expect(packet.decoderConfig).not.toBeNull();
+				expect(packet.decoderConfig!.codec.startsWith('av01.')).toBe(true);
+				expect(packet.decoderConfig!.description).toBeUndefined();
 			}
 		}, async (sample, i) => {
 			expect(sample.format).toBe('I420');
@@ -657,17 +657,17 @@ describe('Video', async () => {
 		const sampleTimestamps: number[] = [];
 
 		// @ts-expect-error Readonly
-		encoder.onPacket = (packet: EncodedPacket, meta: EncodedVideoChunkMetadata) => {
+		encoder.onPacket = (packet: EncodedPacket) => {
 			expect(packet.duration).toBe(1 / 30);
 			expect(packet.type).toBe('key');
 			expect(String.fromCharCode(...packet.data.slice(4, 8))).toBe('icpf');
 
 			if (packets.length === 0) {
-				expect(meta.decoderConfig).toBeDefined();
-				expect(meta.decoderConfig!.codec).toBe('apch');
-				expect(meta.decoderConfig!.codedWidth).toBe(1280);
-				expect(meta.decoderConfig!.codedHeight).toBe(720);
-				expect(meta.decoderConfig!.description).toBeUndefined();
+				expect(packet.decoderConfig).not.toBeNull();
+				expect(packet.decoderConfig!.codec).toBe('apch');
+				expect(videoConfigOf(packet).codedWidth).toBe(1280);
+				expect(videoConfigOf(packet).codedHeight).toBe(720);
+				expect(packet.decoderConfig!.description).toBeUndefined();
 			}
 
 			packets.push(packet);
@@ -714,18 +714,18 @@ describe('Video', async () => {
 		const sampleTimestamps: number[] = [];
 
 		// @ts-expect-error Readonly
-		encoder.onPacket = (packet: EncodedPacket, meta: EncodedVideoChunkMetadata) => {
+		encoder.onPacket = (packet: EncodedPacket) => {
 			expect(packet.duration).toBe(1 / 30);
 			expect(packet.type).toBe('key');
 			expect(String.fromCharCode(...packet.data.slice(4, 8))).toBe('icpf');
 
 			if (packets.length === 0) {
-				expect(meta.decoderConfig).toBeDefined();
-				expect(PRORES_FOURCCS).toContain(meta.decoderConfig!.codec);
-				expect(meta.decoderConfig!.codec).toBe('apco');
-				expect(meta.decoderConfig!.codedWidth).toBe(1280);
-				expect(meta.decoderConfig!.codedHeight).toBe(720);
-				expect(meta.decoderConfig!.description).toBeUndefined();
+				expect(packet.decoderConfig).not.toBeNull();
+				expect(PRORES_FOURCCS).toContain(packet.decoderConfig!.codec);
+				expect(packet.decoderConfig!.codec).toBe('apco');
+				expect(videoConfigOf(packet).codedWidth).toBe(1280);
+				expect(videoConfigOf(packet).codedHeight).toBe(720);
+				expect(packet.decoderConfig!.description).toBeUndefined();
 			}
 
 			packets.push(packet);
@@ -823,13 +823,13 @@ describe('Video', async () => {
 	});
 
 	test('Non-square pixels encode and decode #1', async () => {
-		await encodeDecodeTest('avc', { displayWidth: 2 * 1280, displayHeight: 720 }, async (packet, meta, i) => {
+		await encodeDecodeTest('avc', { displayWidth: 2 * 1280, displayHeight: 720 }, async (packet, i) => {
 			if (i === 0) {
-				expect(meta.decoderConfig).toBeDefined();
-				expect(meta.decoderConfig!.codedWidth).toBe(1280);
-				expect(meta.decoderConfig!.codedHeight).toBe(720);
-				expect(meta.decoderConfig!.displayAspectWidth).toBe(2 * 1280);
-				expect(meta.decoderConfig!.displayAspectHeight).toBe(720);
+				expect(packet.decoderConfig).not.toBeNull();
+				expect(videoConfigOf(packet).codedWidth).toBe(1280);
+				expect(videoConfigOf(packet).codedHeight).toBe(720);
+				expect(videoConfigOf(packet).displayAspectWidth).toBe(2 * 1280);
+				expect(videoConfigOf(packet).displayAspectHeight).toBe(720);
 			}
 		}, async (sample) => {
 			expect(sample.codedWidth).toBe(1280);
@@ -840,13 +840,13 @@ describe('Video', async () => {
 	});
 
 	test('Non-square pixels encode and decode #2', async () => {
-		await encodeDecodeTest('avc', { displayWidth: 1280, displayHeight: 2 * 720 }, async (packet, meta, i) => {
+		await encodeDecodeTest('avc', { displayWidth: 1280, displayHeight: 2 * 720 }, async (packet, i) => {
 			if (i === 0) {
-				expect(meta.decoderConfig).toBeDefined();
-				expect(meta.decoderConfig!.codedWidth).toBe(1280);
-				expect(meta.decoderConfig!.codedHeight).toBe(720);
-				expect(meta.decoderConfig!.displayAspectWidth).toBe(1280);
-				expect(meta.decoderConfig!.displayAspectHeight).toBe(2 * 720);
+				expect(packet.decoderConfig).not.toBeNull();
+				expect(videoConfigOf(packet).codedWidth).toBe(1280);
+				expect(videoConfigOf(packet).codedHeight).toBe(720);
+				expect(videoConfigOf(packet).displayAspectWidth).toBe(1280);
+				expect(videoConfigOf(packet).displayAspectHeight).toBe(2 * 720);
 			}
 		}, async (sample) => {
 			expect(sample.codedWidth).toBe(1280);
@@ -859,7 +859,7 @@ describe('Video', async () => {
 	const encodeDecodeTest = async (
 		codec: VideoCodec,
 		extraConfig: Partial<VideoEncoderConfig>,
-		onPacket: (packet: EncodedPacket, meta: EncodedVideoChunkMetadata, i: number) => Promise<void>,
+		onPacket: (packet: EncodedPacket, i: number) => Promise<void>,
 		onSample: (sample: VideoSample, i: number) => Promise<void>,
 		transparent = false,
 	) => {
@@ -877,12 +877,10 @@ describe('Video', async () => {
 
 		const sampleTimestamps: number[] = [];
 		const packets: EncodedPacket[] = [];
-		const metas: EncodedVideoChunkMetadata[] = [];
 
 		// @ts-expect-error Readonly
-		encoder.onPacket = (packet: EncodedPacket, meta: EncodedVideoChunkMetadata) => {
+		encoder.onPacket = (packet: EncodedPacket) => {
 			packets.push(packet);
-			metas.push(meta);
 		};
 
 		await encoder.init();
@@ -916,14 +914,14 @@ describe('Video', async () => {
 		expect(sortedTimestamps).toEqual(sampleTimestamps);
 
 		for (let i = 0; i < packets.length; i++) {
-			await onPacket(packets[i]!, metas[i]!, i);
+			await onPacket(packets[i]!, i);
 		}
 
 		const decoder = new NodeAvVideoDecoder();
 		// @ts-expect-error Readonly
 		decoder.codec = codec;
 		// @ts-expect-error Readonly
-		decoder.config = metas[0]!.decoderConfig!;
+		decoder.config = videoConfigOf(packets[0]!);
 
 		const decodedSamples: VideoSample[] = [];
 
@@ -966,10 +964,12 @@ describe('Video', async () => {
 		const decoderConfigs: VideoDecoderConfig[] = [];
 
 		// @ts-expect-error Readonly
-		encoder.onPacket = (packet: EncodedPacket, meta?: EncodedVideoChunkMetadata) => {
+		encoder.onPacket = (packet: EncodedPacket) => {
 			packets.push(packet);
-			if (meta?.decoderConfig) {
-				decoderConfigs.push(meta.decoderConfig);
+
+			const decoderConfig = videoConfigOf(packet);
+			if (!decoderConfigs.includes(decoderConfig)) {
+				decoderConfigs.push(decoderConfig);
 			}
 		};
 
@@ -1451,12 +1451,10 @@ describe('Video', async () => {
 		} satisfies VideoEncoderConfig;
 
 		const packets: EncodedPacket[] = [];
-		const metas: EncodedVideoChunkMetadata[] = [];
 
 		// @ts-expect-error Readonly
-		encoder.onPacket = (packet: EncodedPacket, meta: EncodedVideoChunkMetadata) => {
+		encoder.onPacket = (packet: EncodedPacket) => {
 			packets.push(packet);
-			metas.push(meta);
 		};
 
 		await encoder.init();
@@ -1469,7 +1467,7 @@ describe('Video', async () => {
 		await encoder.flush();
 		await encoder.close();
 
-		return { packets, decoderConfig: metas[0]!.decoderConfig! };
+		return { packets, decoderConfig: videoConfigOf(packets[0]!) };
 	};
 
 	const decodePackets = async (decoderConfig: VideoDecoderConfig, packets: EncodedPacket[]) => {
@@ -1751,10 +1749,8 @@ describe('Video', async () => {
 		let decoderConfig: VideoDecoderConfig | null = null;
 
 		// @ts-expect-error Readonly
-		encoder.onPacket = (packet: EncodedPacket, meta: EncodedVideoChunkMetadata) => {
-			if (meta.decoderConfig) {
-				decoderConfig = meta.decoderConfig;
-			}
+		encoder.onPacket = (packet: EncodedPacket) => {
+			decoderConfig = videoConfigOf(packet);
 			pendingPackets.push(packet);
 		};
 
@@ -1852,9 +1848,9 @@ describe('Video', async () => {
 		const packets: EncodedPacket[] = [];
 		let decoderConfig: VideoDecoderConfig | undefined;
 		// @ts-expect-error Readonly
-		encoder.onPacket = (packet: EncodedPacket, meta: EncodedVideoChunkMetadata) => {
+		encoder.onPacket = (packet: EncodedPacket) => {
 			packets.push(packet);
-			decoderConfig ??= meta.decoderConfig;
+			decoderConfig ??= videoConfigOf(packet);
 		};
 		await encoder.init();
 
@@ -2389,18 +2385,18 @@ describe('Audio', async () => {
 		let packetCount = 0;
 
 		// @ts-expect-error Readonly
-		encoder.onPacket = (packet: EncodedPacket, meta: EncodedAudioChunkMetadata) => {
+		encoder.onPacket = (packet: EncodedPacket) => {
 			expect(packet.duration).toBe(1024 / 48000);
 			expect(packet.type).toBe('key');
 
 			if (packetCount === 0) {
 				expect(packet.timestamp).toBe(-1024 / 48000); // Due to priming delay!
 
-				expect(meta.decoderConfig).toBeDefined();
-				expect(meta.decoderConfig!.codec).toBe('mp4a.40.2');
-				expect(meta.decoderConfig!.numberOfChannels).toBe(2);
-				expect(meta.decoderConfig!.sampleRate).toBe(48000);
-				expect(meta.decoderConfig?.description).toBeDefined();
+				expect(packet.decoderConfig).not.toBeNull();
+				expect(packet.decoderConfig!.codec).toBe('mp4a.40.2');
+				expect(audioConfigOf(packet).numberOfChannels).toBe(2);
+				expect(audioConfigOf(packet).sampleRate).toBe(48000);
+				expect(packet.decoderConfig!.description).toBeDefined();
 			}
 
 			packetCount++;
@@ -2459,16 +2455,16 @@ describe('Audio', async () => {
 		await encodeDecodeTest('aac', {
 			// @ts-expect-error Fucky type
 			aac: { format: 'aac' },
-		}, async (packet, meta, i) => {
+		}, async (packet, i) => {
 			expect(packet.type).toBe('key');
 			expect(packet.duration).toBe(1024 / 48000);
 
 			if (i === 0) {
-				expect(meta.decoderConfig).toBeDefined();
-				expect(meta.decoderConfig!.codec).toBe('mp4a.40.2');
-				expect(meta.decoderConfig!.numberOfChannels).toBe(2);
-				expect(meta.decoderConfig!.sampleRate).toBe(48000);
-				expect(meta.decoderConfig!.description).toBeDefined();
+				expect(packet.decoderConfig).not.toBeNull();
+				expect(packet.decoderConfig!.codec).toBe('mp4a.40.2');
+				expect(audioConfigOf(packet).numberOfChannels).toBe(2);
+				expect(audioConfigOf(packet).sampleRate).toBe(48000);
+				expect(packet.decoderConfig!.description).toBeDefined();
 			}
 		}, async (sample) => {
 			expect(sample.duration).toBe(1024 / 48000);
@@ -2481,17 +2477,17 @@ describe('Audio', async () => {
 		await encodeDecodeTest('aac', {
 			// @ts-expect-error Fucky type
 			aac: { format: 'adts' },
-		}, async (packet, meta, i) => {
+		}, async (packet, i) => {
 			expect(packet.type).toBe('key');
 			expect(packet.duration).toBe(1024 / 48000);
 			expect(packet.data[0]).toBe(0xff);
 
 			if (i === 0) {
-				expect(meta.decoderConfig).toBeDefined();
-				expect(meta.decoderConfig!.codec).toBe('mp4a.40.2');
-				expect(meta.decoderConfig!.numberOfChannels).toBe(2);
-				expect(meta.decoderConfig!.sampleRate).toBe(48000);
-				expect(meta.decoderConfig!.description).toBeUndefined();
+				expect(packet.decoderConfig).not.toBeNull();
+				expect(packet.decoderConfig!.codec).toBe('mp4a.40.2');
+				expect(audioConfigOf(packet).numberOfChannels).toBe(2);
+				expect(audioConfigOf(packet).sampleRate).toBe(48000);
+				expect(packet.decoderConfig!.description).toBeUndefined();
 			}
 		}, async (sample) => {
 			expect(sample.duration).toBe(1024 / 48000);
@@ -2501,7 +2497,7 @@ describe('Audio', async () => {
 	});
 
 	test('Opus encode & decode', async () => {
-		await encodeDecodeTest('opus', {}, async (packet, meta, i, n) => {
+		await encodeDecodeTest('opus', {}, async (packet, i, n) => {
 			expect(packet.type).toBe('key');
 
 			if (i < n - 1) {
@@ -2509,12 +2505,12 @@ describe('Audio', async () => {
 			}
 
 			if (i === 0) {
-				expect(meta.decoderConfig).toBeDefined();
-				expect(meta.decoderConfig!.codec).toBe('opus');
-				expect(meta.decoderConfig!.numberOfChannels).toBe(2);
-				expect(meta.decoderConfig!.sampleRate).toBe(48000);
-				expect(meta.decoderConfig!.description).toBeDefined();
-				expect([...toUint8Array(meta.decoderConfig!.description!).slice(0, 8)]).toEqual([
+				expect(packet.decoderConfig).not.toBeNull();
+				expect(packet.decoderConfig!.codec).toBe('opus');
+				expect(audioConfigOf(packet).numberOfChannels).toBe(2);
+				expect(audioConfigOf(packet).sampleRate).toBe(48000);
+				expect(packet.decoderConfig!.description).toBeDefined();
+				expect([...toUint8Array(packet.decoderConfig!.description!).slice(0, 8)]).toEqual([
 					// OpusHead
 					0x4f, 0x70, 0x75, 0x73, 0x48, 0x65, 0x61, 0x64,
 				]);
@@ -2530,7 +2526,7 @@ describe('Audio', async () => {
 	});
 
 	test('MP3 encode & decode', async () => {
-		await encodeDecodeTest('mp3', {}, async (packet, meta, i, n) => {
+		await encodeDecodeTest('mp3', {}, async (packet, i, n) => {
 			expect(packet.type).toBe('key');
 
 			if (i < n - 1) {
@@ -2538,11 +2534,11 @@ describe('Audio', async () => {
 			}
 
 			if (i === 0) {
-				expect(meta.decoderConfig).toBeDefined();
-				expect(meta.decoderConfig!.codec).toBe('mp3');
-				expect(meta.decoderConfig!.numberOfChannels).toBe(2);
-				expect(meta.decoderConfig!.sampleRate).toBe(48000);
-				expect(meta.decoderConfig!.description).toBeUndefined();
+				expect(packet.decoderConfig).not.toBeNull();
+				expect(packet.decoderConfig!.codec).toBe('mp3');
+				expect(audioConfigOf(packet).numberOfChannels).toBe(2);
+				expect(audioConfigOf(packet).sampleRate).toBe(48000);
+				expect(packet.decoderConfig!.description).toBeUndefined();
 			}
 		}, async (sample) => {
 			expect(sample.numberOfChannels).toBe(2);
@@ -2552,16 +2548,16 @@ describe('Audio', async () => {
 	});
 
 	test('Vorbis encode & decode', async () => {
-		await encodeDecodeTest('vorbis', {}, async (packet, meta, i) => {
+		await encodeDecodeTest('vorbis', {}, async (packet, i) => {
 			expect(packet.type).toBe('key');
 
 			if (i === 0) {
-				expect(meta.decoderConfig).toBeDefined();
-				expect(meta.decoderConfig!.codec).toBe('vorbis');
-				expect(meta.decoderConfig!.numberOfChannels).toBe(2);
-				expect(meta.decoderConfig!.sampleRate).toBe(48000);
-				expect(meta.decoderConfig!.description).toBeDefined();
-				expect(toUint8Array(meta.decoderConfig!.description!)[0]).toBe(2); // "Xiph extradata format"
+				expect(packet.decoderConfig).not.toBeNull();
+				expect(packet.decoderConfig!.codec).toBe('vorbis');
+				expect(audioConfigOf(packet).numberOfChannels).toBe(2);
+				expect(audioConfigOf(packet).sampleRate).toBe(48000);
+				expect(packet.decoderConfig!.description).toBeDefined();
+				expect(toUint8Array(packet.decoderConfig!.description!)[0]).toBe(2); // "Xiph extradata format"
 			}
 		}, async (sample) => {
 			expect(sample.numberOfChannels).toBe(2);
@@ -2570,18 +2566,18 @@ describe('Audio', async () => {
 	});
 
 	test('FLAC encode & decode', async () => {
-		await encodeDecodeTest('flac', {}, async (packet, meta, i, n) => {
+		await encodeDecodeTest('flac', {}, async (packet, i, n) => {
 			expect(packet.type).toBe('key');
 			// The last frame only holds what's left of the 2 seconds
 			expect(packet.duration).toBe(i < n - 1 ? 0.096 : 0.08);
 
 			if (i === 0) {
-				expect(meta.decoderConfig).toBeDefined();
-				expect(meta.decoderConfig!.codec).toBe('flac');
-				expect(meta.decoderConfig!.numberOfChannels).toBe(2);
-				expect(meta.decoderConfig!.sampleRate).toBe(48000);
-				expect(meta.decoderConfig!.description).toBeDefined();
-				expect([...toUint8Array(meta.decoderConfig!.description!).slice(0, 4)]).toEqual([
+				expect(packet.decoderConfig).not.toBeNull();
+				expect(packet.decoderConfig!.codec).toBe('flac');
+				expect(audioConfigOf(packet).numberOfChannels).toBe(2);
+				expect(audioConfigOf(packet).sampleRate).toBe(48000);
+				expect(packet.decoderConfig!.description).toBeDefined();
+				expect([...toUint8Array(packet.decoderConfig!.description!).slice(0, 4)]).toEqual([
 					// fLaC
 					0x66, 0x4c, 0x61, 0x43,
 				]);
@@ -2594,16 +2590,16 @@ describe('Audio', async () => {
 	});
 
 	test('AC-3 encode & decode', async () => {
-		await encodeDecodeTest('ac3', {}, async (packet, meta, i) => {
+		await encodeDecodeTest('ac3', {}, async (packet, i) => {
 			expect(packet.type).toBe('key');
 			expect(packet.duration).toBe(0.032);
 
 			if (i === 0) {
-				expect(meta.decoderConfig).toBeDefined();
-				expect(meta.decoderConfig!.codec).toBe('ac-3');
-				expect(meta.decoderConfig!.numberOfChannels).toBe(2);
-				expect(meta.decoderConfig!.sampleRate).toBe(48000);
-				expect(meta.decoderConfig!.description).toBeUndefined();
+				expect(packet.decoderConfig).not.toBeNull();
+				expect(packet.decoderConfig!.codec).toBe('ac-3');
+				expect(audioConfigOf(packet).numberOfChannels).toBe(2);
+				expect(audioConfigOf(packet).sampleRate).toBe(48000);
+				expect(packet.decoderConfig!.description).toBeUndefined();
 			}
 		}, async (sample) => {
 			expect(sample.numberOfChannels).toBe(2);
@@ -2613,16 +2609,16 @@ describe('Audio', async () => {
 	});
 
 	test('E-AC-3 encode & decode', async () => {
-		await encodeDecodeTest('eac3', {}, async (packet, meta, i) => {
+		await encodeDecodeTest('eac3', {}, async (packet, i) => {
 			expect(packet.type).toBe('key');
 			expect(packet.duration).toBe(0.032);
 
 			if (i === 0) {
-				expect(meta.decoderConfig).toBeDefined();
-				expect(meta.decoderConfig!.codec).toBe('ec-3');
-				expect(meta.decoderConfig!.numberOfChannels).toBe(2);
-				expect(meta.decoderConfig!.sampleRate).toBe(48000);
-				expect(meta.decoderConfig!.description).toBeUndefined();
+				expect(packet.decoderConfig).not.toBeNull();
+				expect(packet.decoderConfig!.codec).toBe('ec-3');
+				expect(audioConfigOf(packet).numberOfChannels).toBe(2);
+				expect(audioConfigOf(packet).sampleRate).toBe(48000);
+				expect(packet.decoderConfig!.description).toBeUndefined();
 			}
 		}, async (sample) => {
 			expect(sample.numberOfChannels).toBe(2);
@@ -2632,16 +2628,16 @@ describe('Audio', async () => {
 	});
 
 	test('DTS encode & decode', async () => {
-		await encodeDecodeTest('dts', { bitrate: DTS_BITRATE }, async (packet, meta, i) => {
+		await encodeDecodeTest('dts', { bitrate: DTS_BITRATE }, async (packet, i) => {
 			expect(packet.type).toBe('key');
 			expect(packet.duration).toBeCloseTo(512 / 48000);
 
 			if (i === 0) {
-				expect(meta.decoderConfig).toBeDefined();
-				expect(meta.decoderConfig!.codec).toBe('dtsc');
-				expect(meta.decoderConfig!.numberOfChannels).toBe(2);
-				expect(meta.decoderConfig!.sampleRate).toBe(48000);
-				expect(meta.decoderConfig!.description).toBeUndefined();
+				expect(packet.decoderConfig).not.toBeNull();
+				expect(packet.decoderConfig!.codec).toBe('dtsc');
+				expect(audioConfigOf(packet).numberOfChannels).toBe(2);
+				expect(audioConfigOf(packet).sampleRate).toBe(48000);
+				expect(packet.decoderConfig!.description).toBeUndefined();
 			}
 		}, async (sample) => {
 			expect(sample.numberOfChannels).toBe(2);
@@ -2660,17 +2656,17 @@ describe('Audio', async () => {
 	});
 
 	test('TrueHD encode & decode', async () => {
-		await encodeDecodeTest('truehd', {}, async (packet, meta, i) => {
+		await encodeDecodeTest('truehd', {}, async (packet, i) => {
 			// libav's encoder writes a major sync every 16 access units
 			expect(packet.type).toBe(i % 16 === 0 ? 'key' : 'delta');
 			expect(packet.duration).toBeCloseTo(40 / 48000);
 
 			if (i === 0) {
-				expect(meta.decoderConfig).toBeDefined();
-				expect(meta.decoderConfig!.codec).toBe('mlpa');
-				expect(meta.decoderConfig!.numberOfChannels).toBe(2);
-				expect(meta.decoderConfig!.sampleRate).toBe(48000);
-				expect(meta.decoderConfig!.description).toBeUndefined();
+				expect(packet.decoderConfig).not.toBeNull();
+				expect(packet.decoderConfig!.codec).toBe('mlpa');
+				expect(audioConfigOf(packet).numberOfChannels).toBe(2);
+				expect(audioConfigOf(packet).sampleRate).toBe(48000);
+				expect(packet.decoderConfig!.description).toBeUndefined();
 			}
 		}, async (sample) => {
 			expect(sample.numberOfChannels).toBe(2);
@@ -2704,7 +2700,7 @@ describe('Audio', async () => {
 		const extraConfig = codec === 'dts' ? { bitrate: DTS_BITRATE } : {};
 		const primingDelay = (PRIMING_DELAYS[codec] ?? 0) / 48000;
 
-		await encodeDecodeTest(codec, extraConfig, async (packet, _meta, i) => {
+		await encodeDecodeTest(codec, extraConfig, async (packet, i) => {
 			if (i === 0) {
 				expect(packet.timestamp).toBe(startTimestamp - primingDelay);
 			} else if (testDuration) {
@@ -2728,7 +2724,7 @@ describe('Audio', async () => {
 	const encodeDecodeTest = async (
 		codec: AudioCodec,
 		extraConfig: Partial<AudioEncoderConfig>,
-		onPacket: (packet: EncodedPacket, meta: EncodedAudioChunkMetadata, i: number, n: number) => Promise<void>,
+		onPacket: (packet: EncodedPacket, i: number, n: number) => Promise<void>,
 		onSample: (sample: AudioSample, i: number, n: number) => Promise<void>,
 		startTimestamp = 0,
 	) => {
@@ -2748,12 +2744,10 @@ describe('Audio', async () => {
 		} satisfies AudioEncoderConfig;
 
 		const packets: EncodedPacket[] = [];
-		const metas: EncodedAudioChunkMetadata[] = [];
 
 		// @ts-expect-error Readonly
-		encoder.onPacket = (packet: EncodedPacket, meta: EncodedAudioChunkMetadata) => {
+		encoder.onPacket = (packet: EncodedPacket) => {
 			packets.push(packet);
-			metas.push(meta);
 		};
 
 		await encoder.init();
@@ -2771,14 +2765,14 @@ describe('Audio', async () => {
 		await encoder.flush();
 
 		for (let i = 0; i < packets.length; i++) {
-			await onPacket(packets[i]!, metas[i]!, i, packets.length);
+			await onPacket(packets[i]!, i, packets.length);
 		}
 
 		const decoder = new NodeAvAudioDecoder();
 		// @ts-expect-error Readonly
 		decoder.codec = codec;
 		// @ts-expect-error Readonly
-		decoder.config = metas[0]!.decoderConfig!;
+		decoder.config = audioConfigOf(packets[0]!);
 
 		const decodedSamples: AudioSample[] = [];
 
@@ -3170,9 +3164,9 @@ describe('Audio', async () => {
 		const packets: EncodedPacket[] = [];
 		let decoderConfig: AudioDecoderConfig | null = null;
 		// @ts-expect-error Readonly
-		encoder.onPacket = (packet: EncodedPacket, meta: EncodedAudioChunkMetadata) => {
+		encoder.onPacket = (packet: EncodedPacket) => {
 			packets.push(packet);
-			decoderConfig ??= meta.decoderConfig ?? null;
+			decoderConfig ??= audioConfigOf(packet);
 		};
 
 		await encoder.init();
@@ -3442,3 +3436,13 @@ test('Bundles import @mediabunny/prores instead of inlining it', () => {
 		expect(code).not.toContain('turbores');
 	}
 });
+
+const videoConfigOf = (packet: EncodedPacket) => {
+	assert(packet.decoderConfig?.type === 'video');
+	return packet.decoderConfig;
+};
+
+const audioConfigOf = (packet: EncodedPacket) => {
+	assert(packet.decoderConfig?.type === 'audio');
+	return packet.decoderConfig;
+};

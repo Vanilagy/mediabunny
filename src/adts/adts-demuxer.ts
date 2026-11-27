@@ -13,6 +13,7 @@ import {
 	readAdtsProgramConfigElement,
 } from '../../shared/aac-misc';
 import { AudioCodec } from '../codec';
+import { ExtendedAudioDecoderConfig } from '../decode';
 import { Demuxer } from '../demuxer';
 import {
 	ID3_V2_HEADER_SIZE,
@@ -58,7 +59,7 @@ export class AdtsDemuxer extends Demuxer {
 
 	metadataPromise: Promise<void> | null = null;
 	firstFrameHeader: AdtsFrameHeader | null = null;
-	numberOfChannels: number | null = null;
+	decoderConfig: ExtendedAudioDecoderConfig | null = null;
 	loadedSamples: Sample[] = [];
 	metadataTags: MetadataTags | null = null;
 
@@ -86,6 +87,7 @@ export class AdtsDemuxer extends Demuxer {
 			const header = this.firstFrameHeader;
 			assert(header);
 
+			let numberOfChannels: number;
 			if (header.channelConfiguration === 0) {
 				// The channel layout comes from the PCE at the start of the frame's raw data block
 				const headerSize = header.crcCheck === null ? MIN_ADTS_FRAME_HEADER_SIZE : MAX_ADTS_FRAME_HEADER_SIZE;
@@ -103,10 +105,20 @@ export class AdtsDemuxer extends Demuxer {
 					);
 				}
 
-				this.numberOfChannels = getAacProgramConfigElementChannelCount(result.programConfigElement);
+				numberOfChannels = getAacProgramConfigElementChannelCount(result.programConfigElement);
 			} else {
-				this.numberOfChannels = aacChannelMap[header.channelConfiguration]!;
+				numberOfChannels = aacChannelMap[header.channelConfiguration]!;
 			}
+
+			const sampleRate = aacFrequencyTable[header.samplingFrequencyIndex];
+			assert(sampleRate !== undefined);
+
+			this.decoderConfig = {
+				type: 'audio',
+				codec: `mp4a.40.${header.objectType}`,
+				numberOfChannels,
+				sampleRate,
+			};
 
 			// Create the single audio track
 			this.trackBackings = [new AdtsAudioTrackBacking(this)];
@@ -288,17 +300,13 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 	}
 
 	getNumberOfChannels() {
-		assert(this.demuxer.numberOfChannels !== null);
-		return this.demuxer.numberOfChannels;
+		assert(this.demuxer.decoderConfig);
+		return this.demuxer.decoderConfig.numberOfChannels;
 	}
 
 	getSampleRate() {
-		assert(this.demuxer.firstFrameHeader);
-
-		const sampleRate = aacFrequencyTable[this.demuxer.firstFrameHeader.samplingFrequencyIndex];
-		assert(sampleRate !== undefined);
-
-		return sampleRate;
+		assert(this.demuxer.decoderConfig);
+		return this.demuxer.decoderConfig.sampleRate;
 	}
 
 	getDisposition() {
@@ -307,14 +315,9 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 		};
 	}
 
-	async getDecoderConfig(): Promise<AudioDecoderConfig> {
-		assert(this.demuxer.firstFrameHeader);
-
-		return {
-			codec: `mp4a.40.${this.demuxer.firstFrameHeader.objectType}`,
-			numberOfChannels: this.getNumberOfChannels(),
-			sampleRate: this.getSampleRate(),
-		};
+	async getDecoderConfig() {
+		assert(this.demuxer.decoderConfig);
+		return this.demuxer.decoderConfig;
 	}
 
 	async getPacketAtIndex(sampleIndex: number, options: PacketRetrievalOptions) {
@@ -346,14 +349,15 @@ class AdtsAudioTrackBacking implements InputAudioTrackBacking {
 			data = readBytes(slice, rawSample.dataSize);
 		}
 
-		return new EncodedPacket(
+		return new EncodedPacket({
 			data,
-			'key',
-			rawSample.timestamp,
-			rawSample.duration,
-			sampleIndex,
-			rawSample.dataSize,
-		);
+			type: 'key',
+			timestamp: rawSample.timestamp,
+			duration: rawSample.duration,
+			sequenceNumber: sampleIndex,
+			byteLength: rawSample.dataSize,
+			decoderConfig: this.demuxer.decoderConfig!,
+		});
 	}
 
 	getFirstPacket(options: PacketRetrievalOptions) {

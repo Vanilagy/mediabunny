@@ -141,7 +141,12 @@ test('Unfinalized file with zero sizes', async () => {
 		output.addAudioTrack(source);
 		await output.start();
 
-		await source.add(new EncodedPacket(new Uint8Array(2000), 'key', 0, 1000 / 8000), {
+		await source.add(new EncodedPacket({
+			data: new Uint8Array(2000),
+			type: 'key',
+			timestamp: 0,
+			duration: 1000 / 8000,
+		}), {
 			decoderConfig: {
 				codec: 'pcm-s16',
 				numberOfChannels: 1,

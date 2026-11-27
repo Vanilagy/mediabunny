@@ -6,9 +6,9 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { Muxer } from '../muxer';
+import { Muxer, validateAudioTrackDecoderConfig } from '../muxer';
 import { Output, OutputAudioTrack } from '../output';
-import { parsePcmCodec, PcmAudioCodec, validateAudioChunkMetadata } from '../codec';
+import { parsePcmCodec, PcmAudioCodec } from '../codec';
 import { WaveFormat } from './wave-demuxer';
 import { RiffWriter } from './riff-writer';
 import { Writer } from '../writer';
@@ -58,8 +58,6 @@ export class WaveMuxer extends Muxer {
 			assert(track?.isAudioTrack());
 
 			if (track.metadata.decoderConfig) {
-				validateAudioChunkMetadata({ decoderConfig: track.metadata.decoderConfig }, track.source._codec);
-
 				this.writeHeader(track, track.metadata.decoderConfig);
 				this.sampleRate = track.metadata.decoderConfig.sampleRate;
 				this.headerWritten = true;
@@ -77,22 +75,15 @@ export class WaveMuxer extends Muxer {
 		throw new Error('WAVE does not support video.');
 	}
 
-	async addEncodedAudioPacket(
-		track: OutputAudioTrack,
-		packet: EncodedPacket,
-		meta?: EncodedAudioChunkMetadata,
-	) {
+	async addEncodedAudioPacket(track: OutputAudioTrack, packet: EncodedPacket) {
 		const release = await this.mutex.acquire();
 
 		try {
 			if (!this.headerWritten) {
-				validateAudioChunkMetadata(meta, track.source._codec);
+				const decoderConfig = validateAudioTrackDecoderConfig(packet.decoderConfig, track.source._codec);
 
-				assert(meta);
-				assert(meta.decoderConfig);
-
-				this.writeHeader(track, meta.decoderConfig);
-				this.sampleRate = meta.decoderConfig.sampleRate;
+				this.writeHeader(track, decoderConfig);
+				this.sampleRate = decoderConfig.sampleRate;
 				this.headerWritten = true;
 			}
 
